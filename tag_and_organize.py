@@ -116,6 +116,9 @@ def process_album_folder(root_path, files):
             title_clean = str(title).strip()
             title_clean = re.sub(r'^\d{1,2}[\.\s_\-]+', '', title_clean).strip()
 
+            # For main collection folder structure, keep album intact under -45
+            folder_artist = "-45"
+
             if ext == '.flac':
                 flac_audio = FLAC(filepath)
                 flac_audio['TITLE'] = [title_clean]
@@ -126,12 +129,12 @@ def process_album_folder(root_path, files):
                     embed_cover_art_flac(flac_audio, cover_image)
                 flac_audio.save()
 
-                dest_dir = os.path.join(FLAC_DIR, artist_clean, album_clean)
+                dest_dir = os.path.join(FLAC_DIR, folder_artist, album_clean)
                 os.makedirs(dest_dir, exist_ok=True)
                 dest_filename = f"{track_no} - {title_clean}.flac"
                 dest_path = os.path.join(dest_dir, dest_filename)
 
-                logging.info(f"Organizing FLAC: {artist_clean} / {album_clean} / {dest_filename}")
+                logging.info(f"Organizing FLAC: {folder_artist} / {album_clean} / {dest_filename}")
                 shutil.copy2(filepath, dest_path)
 
             elif ext == '.mp3':
@@ -145,12 +148,12 @@ def process_album_folder(root_path, files):
                     embed_cover_art_mp3(mp3_audio, cover_image)
                 mp3_audio.save()
 
-                dest_dir = os.path.join(MP3_DIR, artist_clean, album_clean)
+                dest_dir = os.path.join(MP3_DIR, folder_artist, album_clean)
                 os.makedirs(dest_dir, exist_ok=True)
                 dest_filename = f"{track_no} - {title_clean}.mp3"
                 dest_path = os.path.join(dest_dir, dest_filename)
 
-                logging.info(f"Organizing MP3: {artist_clean} / {album_clean} / {dest_filename}")
+                logging.info(f"Organizing MP3: {folder_artist} / {album_clean} / {dest_filename}")
                 shutil.copy2(filepath, dest_path)
 
         except Exception as e:
