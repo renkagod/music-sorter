@@ -9,8 +9,8 @@ TRACKLIST_PATH = os.path.join(BASE_DIR, 'tracklist.md')
 def normalize_text(text):
     if not text:
         return ""
-    # Strip release metadata tags like [C87], {DVAC-0004}, (2014)
-    s = re.sub(r'\[[^\]]*\]|\{[^\}]*\}|\(\d{4}\)', '', text)
+    # Strip release metadata tags in brackets [], braces {}, or parentheses ()
+    s = re.sub(r'\[[^\]]*\]|\{[^\}]*\}|\([^\)]*\)', '', text)
     # Remove unicode slashes (⁄), spaces, hyphens, punctuation
     s = re.sub(r'[\s\-_/\\,.\u2044\u2215\u3013\uFF5E]+', '', s)
     return s.lower().strip()
@@ -23,7 +23,6 @@ def check_coverage(artist_filter=None):
     with open(TRACKLIST_PATH, 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
-    # Parse tracklist.md: Artist -> Album -> List of tracks
     db = {}
     current_artist = None
     current_album = None
@@ -42,7 +41,6 @@ def check_coverage(artist_filter=None):
             if m:
                 db[current_artist][current_album].append(m.group(1).strip())
 
-    # Scan downloaded files
     scanned_files = []
     for sub in ['TO SORT', 'flac', 'mp3', 'review']:
         p = os.path.join(BASE_DIR, sub)
@@ -55,8 +53,6 @@ def check_coverage(artist_filter=None):
                     ext = os.path.splitext(f)[1].lower()
                     dur = 0.0
                     title = os.path.splitext(f)[0]
-                    artist = ""
-                    album = ""
                     try:
                         audio = mutagen.File(fp)
                         if audio and hasattr(audio, 'info') and hasattr(audio.info, 'length'):
@@ -64,10 +60,6 @@ def check_coverage(artist_filter=None):
                         if audio and audio.tags and hasattr(audio.tags, 'get'):
                             t_val = audio.tags.get('title', [title])
                             title = t_val[0] if isinstance(t_val, list) else t_val
-                            art_val = audio.tags.get('artist', [artist])
-                            artist = art_val[0] if isinstance(art_val, list) else art_val
-                            alb_val = audio.tags.get('album', [album])
-                            album = alb_val[0] if isinstance(alb_val, list) else alb_val
                     except: pass
 
                     scanned_files.append({
@@ -77,14 +69,12 @@ def check_coverage(artist_filter=None):
                         'ext': ext,
                         'dur': dur,
                         'title': str(title).strip(),
-                        'artist': str(artist).strip(),
-                        'album': str(album).strip(),
                         'norm_title': normalize_text(str(title)),
                         'norm_rel': normalize_text(rel)
                     })
 
     print("==================================================")
-    print("      TRACKLIST DATABASE COVERAGE REPORT         ")
+    print("      ACCURATE TRACKLIST COVERAGE REPORT          ")
     print("==================================================")
 
     for artist_name, albums in sorted(db.items()):
@@ -94,12 +84,9 @@ def check_coverage(artist_filter=None):
         print(f"\n👤 Artist: {artist_name}")
         print("=" * (len(artist_name) + 12))
 
-        norm_artist = normalize_text(artist_name)
-
         for album_name, db_tracks in sorted(albums.items()):
             norm_alb = normalize_text(album_name)
 
-            # Match files where normalized album name is in normalized relative path
             matched = [s for s in scanned_files if norm_alb in s['norm_rel']]
             
             flac_files = [f for f in matched if f['ext'] == '.flac']
@@ -118,10 +105,10 @@ def check_coverage(artist_filter=None):
             print(f"     Status: {status}")
             if matched:
                 print(f"     Downloaded files ({len(matched)} total):")
-                for m in matched[:10]:
+                for m in matched[:5]:
                     print(f"       - {m['filename']} [{m['ext'].upper()}] ({m['dur']}s)")
-                if len(matched) > 10:
-                    print(f"       ... and {len(matched) - 10} more files")
+                if len(matched) > 5:
+                    print(f"       ... and {len(matched) - 5} more files")
             else:
                 print("     (No files found locally for this album)")
 
