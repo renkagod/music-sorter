@@ -1,0 +1,8 @@
+# Ignore audio files and folders
+*.flac
+*.mp3
+*.wav
+*.m4a
+*.ogg
+/flac/
+/mp3/
