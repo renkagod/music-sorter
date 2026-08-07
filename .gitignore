@@ -6,3 +6,6 @@
 *.ogg
 /flac/
 /mp3/
+
+# Ignore ZIP backup archives
+*.zip

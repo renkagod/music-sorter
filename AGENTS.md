@@ -8,7 +8,9 @@
 
 ## Safety & Deletion Rules
 - ⚠️ **AUTOMATIC DELETION IS STRICTLY FORBIDDEN!** Never delete any user files automatically. If files need to be deleted, ask the user for explicit confirmation.
+- 📦 **PROTECTED ZIP ARCHIVES**: ZIP archives (`*.zip`) containing music backups in this directory are strictly protected and MUST NEVER be deleted under any circumstances!
 
 ## Script & Automation Requirements
 - All scripts working with music files or database sync must output **detailed step-by-step console logs**.
 - The main track list database is maintained in `tracklist.md`.
+- **Git Commit Rule**: Make a Git commit after any changes to workspace files.
