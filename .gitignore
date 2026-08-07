@@ -9,3 +9,7 @@
 
 # Ignore ZIP backup archives
 *.zip
+
+# Ignore Python cache
+__pycache__/
+*.pyc
