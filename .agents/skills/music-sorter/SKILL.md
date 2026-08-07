@@ -14,6 +14,15 @@ python process_collection.py
 
 ---
 
+## 🧠 AI Agent Edge Case Resolution & Tag Enrichment
+Static regex scripts cannot cover every edge case (e.g. BMS game releases, rare Comiket event tags, unlisted web tracks, alternate circle releases).
+When edge cases occur:
+1. **API & Web Lookup**: The AI Agent queries Discogs / MusicBrainz / VGMdb or web search to find the official release title defined by the artist.
+2. **Dynamic Mapping**: The AI Agent updates `DISCOGS_MAP` in `process_collection.py` and `tracklist.md` with canonical release metadata.
+3. **Cover Art Retrieval**: If cover art is missing, the AI Agent fetches authentic original album scans or high-res images from Discogs / VGMdb / MusicBrainz.
+
+---
+
 ## 📋 The 5-Stage Pipeline Architecture
 
 ```
@@ -31,7 +40,7 @@ python process_collection.py
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ STAGE 2: Tagging & Cover Art Enrichment                      │
-│  - Discogs / MusicBrainz canonical metadata matching        │
+│  - Discogs / MusicBrainz / VGMdb canonical metadata matching│
 │  - Exact 1-in-1 track titles (Japanese/special chars preserved)│
 │  - Embed cover art (local scan/file or fetch from trusted   │
 │    sources: MusicBrainz / Discogs / VGMdb)                  │
@@ -58,7 +67,7 @@ python process_collection.py
 │ STAGE 5: Git Commit & Clean Output Logs                     │
 │  - Output detailed step-by-step console logs                │
 │  - Make a Git commit documenting all changes                │
-└─────────────────────────────────────────────────────────────┘
+└───────────────────────────┘
 ```
 
 ---
