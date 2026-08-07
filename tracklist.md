@@ -60,7 +60,7 @@
 - [ ] **Strawberry Crisis !!!!!!** (3:41)
 ### 💿 CROWZFEST
 
-- [ ] **Adrenaline Shooting** (3:43)
+- [x] **Adrenaline Shooting** (3:43)
 ### 💿 Determinism&DestruKction
 
 - [ ] **妖々夢 ～ The Woman Who Sold the Moon** (5:19)
@@ -313,7 +313,7 @@
 
 - [ ] **Dueil angoisseus** (7:02)
 - [ ] **Le mort joyeux** (4:40)
-- [ ] **Laus tibi domine** (6:57)
+- [x] **Laus tibi domine** (6:57)
 - [ ] **Retour de flamme (Hooligan Black Metal)** (4:18)
 - [ ] **Spleen** (5:48)
 - [ ] **Phalènes et pestilence - salvatrice averse** (11:46)
@@ -348,7 +348,7 @@
 - [ ] **666 millions d’esclaves et de déchets** (7:10)
 - [ ] **Des médecins malades et des saints séquestrés** (5:15)
 - [ ] **Aristocrasse** (3:53)
-- [ ] **Domine** (5:37)
+- [x] **Domine** (5:37)
 ### 💿 Rats Des Villes VS Rats Des Champs
 
 - [ ] **Dans Ma Nuit / Le Rat De Ville Et Le Rat Des Champs** (10:00)
