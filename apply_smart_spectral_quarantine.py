@@ -33,33 +33,29 @@ def normalize_text(text):
     s = re.sub(r'[\s\-_/\\,.\u2044\u2215\u3013\uFF5E]+', '', s)
     return s.lower().strip()
 
-def compute_spectral_similarity(file1, file2, duration_sec=30):
+def compute_dtw_chroma_similarity(file1, file2, duration_sec=40):
     try:
         y1, sr1 = librosa.load(file1, sr=22050, duration=duration_sec)
         y2, sr2 = librosa.load(file2, sr=22050, duration=duration_sec)
-        mfcc1 = librosa.feature.mfcc(y=y1, sr=sr1, n_mfcc=20)
-        mfcc2 = librosa.feature.mfcc(y=y2, sr=sr2, n_mfcc=20)
-        min_len = min(mfcc1.shape[1], mfcc2.shape[1])
-        if min_len == 0: return 0.0
-        m1 = mfcc1[:, :min_len].flatten()
-        m2 = mfcc2[:, :min_len].flatten()
-        norm1 = np.linalg.norm(m1)
-        norm2 = np.linalg.norm(m2)
-        if norm1 == 0 or norm2 == 0: return 0.0
-        return float(np.dot(m1, m2) / (norm1 * norm2))
+        c1 = librosa.feature.chroma_cens(y=y1, sr=sr1)
+        c2 = librosa.feature.chroma_cens(y=y2, sr=sr2)
+        D, wp = librosa.sequence.dtw(c1, c2, metric='cosine')
+        dist = D[-1, -1] / len(wp)
+        return float(1.0 - dist)
     except Exception as e:
+        logging.debug(f"DTW calculation error: {e}")
         return 0.0
 
 def move_to_review(filepath, reason):
     rel = os.path.relpath(filepath, TOSORT_DIR)
     target_path = os.path.join(REVIEW_DIR, rel)
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
-    logging.info(f"[SPECTRAL QUARANTINE] Moving MP3 duplicate: {rel}")
+    logging.info(f"[DTW QUARANTINE] Moving redundant MP3 duplicate: {rel}")
     logging.info(f"  Reason: {reason}")
     shutil.move(filepath, target_path)
 
-def run_spectral_quarantine():
-    logging.info("Starting automated spectral quarantine analysis...")
+def run_dtw_quarantine():
+    logging.info("Starting DTW Chroma Acoustic Quarantine analysis...")
     audio_extensions = ('.flac', '.mp3')
     tracks = []
 
@@ -97,25 +93,23 @@ def run_spectral_quarantine():
             if not os.path.exists(t1['filepath']) or not os.path.exists(t2['filepath']):
                 continue
 
-            # Compare FLAC vs MP3 pair
             if (t1['ext'] == '.flac' and t2['ext'] == '.mp3') or (t1['ext'] == '.mp3' and t2['ext'] == '.flac'):
                 dur_diff = abs(t1['dur'] - t2['dur'])
                 n1, n2 = t1['norm_title'], t2['norm_title']
                 ratio = difflib.SequenceMatcher(None, n1, n2).ratio() if n1 and n2 else 0
 
-                if dur_diff <= 2.0 and (n1 == n2 or ratio > 0.75):
-                    sim = compute_spectral_similarity(t1['filepath'], t2['filepath'])
+                if dur_diff <= 3.0 and (n1 == n2 or ratio > 0.70):
+                    sim = compute_dtw_chroma_similarity(t1['filepath'], t2['filepath'])
                     flac_track = t1 if t1['ext'] == '.flac' else t2
                     mp3_track = t2 if t1['ext'] == '.flac' else t1
 
-                    if sim >= 0.96:
-                        # Confirmed identical audio recording! Move lower quality MP3 to review
-                        move_to_review(mp3_track['filepath'], f"Mathematical Spectral Match ({sim:.1%} similarity) with FLAC version '{flac_track['filename']}'")
+                    if sim >= 0.94:
+                        move_to_review(mp3_track['filepath'], f"DTW Chroma Acoustic Match ({sim:.1%} similarity) with FLAC '{flac_track['filename']}'")
                         moved_count += 1
                     else:
-                        logging.info(f"DISTINCT MIXES ({sim:.1%} similarity): Keeping both '{t1['filename']}' and '{t2['filename']}'")
+                        logging.info(f"DISTINCT AUDIO MIXES ({sim:.1%} similarity): Keeping both '{t1['filename']}' and '{t2['filename']}'")
 
-    logging.info(f"Spectral Quarantine Complete. Total redundant MP3s moved to review/: {moved_count}")
+    logging.info(f"DTW Quarantine Complete. Total redundant MP3 duplicates moved: {moved_count}")
 
 if __name__ == '__main__':
-    run_spectral_quarantine()
+    run_dtw_quarantine()
