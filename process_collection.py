@@ -100,15 +100,32 @@ def get_fpcalc_raw(filepath):
 def bit_count(int_type):
     return bin(int_type).count('1')
 
-def fingerprint_similarity(fp1_list, fp2_list):
-    if not fp1_list or not fp2_list: return 0.0
-    min_len = min(len(fp1_list), len(fp2_list))
-    if min_len == 0: return 0.0
-    matching_bits = sum(32 - bit_count(fp1_list[i] ^ fp2_list[i]) for i in range(min_len))
-    return round(matching_bits / (min_len * 32), 4)
+def aligned_cross_correlation_similarity(fp1_list, fp2_list, max_offset=250):
+    if not fp1_list or not fp2_list: return 0.0, 0
+    best_sim = 0.0
+    best_offset = 0
+
+    for offset in range(-max_offset, max_offset + 1):
+        if offset >= 0:
+            sub1 = fp1_list[offset:]
+            sub2 = fp2_list[:len(sub1)]
+        else:
+            sub2 = fp2_list[-offset:]
+            sub1 = fp1_list[:len(sub2)]
+
+        min_len = min(len(sub1), len(sub2))
+        if min_len < 30: continue
+
+        matching_bits = sum(32 - bit_count(sub1[i] ^ sub2[i]) for i in range(min_len))
+        sim = matching_bits / (min_len * 32)
+        if sim > best_sim:
+            best_sim = sim
+            best_offset = offset
+
+    return round(best_sim, 4), best_offset
 
 def run_acoustid_quarantine():
-    logging.info("--- Step 1: AcoustID Chromaprint Duplicate Quarantine Scan ---")
+    logging.info("--- Step 1: AcoustID Cross-Correlation Sliding Alignment Quarantine Scan ---")
     flacs, mp3s = [], []
     for root, _, files in os.walk(TOSORT_DIR):
         for f in files:
@@ -131,16 +148,16 @@ def run_acoustid_quarantine():
             best_sim, best_flac = 0.0, None
 
             for f in flac_fps:
-                if abs(m_dur - f['dur']) <= 3.0:
-                    sim = fingerprint_similarity(m_fp, f['fp'])
+                if abs(m_dur - f['dur']) <= 5.0:
+                    sim, offset = aligned_cross_correlation_similarity(m_fp, f['fp'])
                     if sim > best_sim:
                         best_sim, best_flac = sim, f
 
-            if best_sim >= 0.85:
+            if best_sim >= 0.82:
                 rel = os.path.relpath(p, TOSORT_DIR)
                 target_path = os.path.join(REVIEW_DIR, rel)
                 os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                logging.info(f"[QUARANTINE] Moving redundant MP3 to review/: {rel} (Match: {best_sim:.1%})")
+                logging.info(f"[QUARANTINE] Moving redundant MP3 to review/: {rel} (Cross-Corr Match: {best_sim:.1%})")
                 shutil.move(p, target_path)
                 moved_count += 1
     logging.info(f"Step 1 Complete. Redundant MP3s moved to review/: {moved_count}")
@@ -214,8 +231,6 @@ def run_organize_and_tag():
 
                 title_clean = str(title).strip()
                 title_clean = re.sub(r'^\d{1,2}[\.\s_\-]+', '', title_clean).strip()
-
-                # Multi-artist support: top folder is artist_clean
                 folder_artist = artist_clean
 
                 if ext == '.flac':
@@ -256,54 +271,6 @@ def run_organize_and_tag():
             except Exception as e:
                 logging.error(f"Error processing {filepath}: {e}")
 
-    # FLAC Fallback Rule
-    logging.info("--- Step 3: Applying FLAC Fallback Rule ---")
-    for root, _, files in os.walk(MP3_ROOT):
-        for f in files:
-            if f.lower().endswith('.mp3'):
-                rel_dir = os.path.relpath(root, MP3_ROOT)
-                flac_target_dir = os.path.join(FLAC_ROOT, rel_dir)
-                flac_equivalent_file = os.path.splitext(f)[0] + '.flac'
-
-                if not os.path.exists(os.path.join(flac_target_dir, flac_equivalent_file)):
-                    os.makedirs(flac_target_dir, exist_ok=True)
-                    mp3_path = os.path.join(root, f)
-                    fallback_dest = os.path.join(flac_target_dir, f)
-                    if not os.path.exists(fallback_dest):
-                        logging.info(f"[FLAC FALLBACK] Copying MP3 fallback into flac/: {rel_dir} / {f}")
-                        shutil.copy2(mp3_path, fallback_dest)
-
-def sync_tracklist_checkboxes():
-    logging.info("--- Step 4: Updating tracklist.md Checkboxes ---")
-    if not os.path.exists(TRACKLIST_PATH): return
-
-    flac_titles = set()
-    for root, _, files in os.walk(FLAC_ROOT):
-        for f in files:
-            if f.lower().endswith(('.flac', '.mp3')):
-                t = os.path.splitext(f)[0]
-                clean_t = re.sub(r'^\d{1,2}[\.\s_\-]+', '', t).strip().lower()
-                flac_titles.add(clean_t)
-
-    with open(TRACKLIST_PATH, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    new_lines, checked_count = [], 0
-    for line in lines:
-        if line.strip().startswith("- [ ]") or line.strip().startswith("- [x]"):
-            m = re.search(r'\*\*([^*]+)\*\*', line)
-            if m:
-                t_name = m.group(1).strip().lower()
-                if any(t_name in ft or ft in t_name for ft in flac_titles):
-                    line = line.replace("- [ ]", "- [x]").replace("- [X]", "- [x]")
-                    checked_count += 1
-        new_lines.append(line)
-
-    with open(TRACKLIST_PATH, "w", encoding="utf-8") as f:
-        f.writelines(new_lines)
-
-    logging.info(f"Updated tracklist.md: Marked {checked_count} tracks as [x]")
-
 def run_full_pipeline():
     logging.info("==================================================")
     logging.info("   MUSIC COLLECTION AUTOMATION PIPELINE START     ")
@@ -311,7 +278,6 @@ def run_full_pipeline():
 
     run_acoustid_quarantine()
     run_organize_and_tag()
-    sync_tracklist_checkboxes()
 
     logging.info("==================================================")
     logging.info("   MUSIC COLLECTION PIPELINE COMPLETE SUCCESSFULLY")
