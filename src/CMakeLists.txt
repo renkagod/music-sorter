@@ -1,0 +1,29 @@
+cmake_minimum_required(VERSION 3.20)
+project(MusicSorterCore CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+)
+
+file(GLOB_RECURSE SOURCES
+    "src/*.cpp"
+)
+
+add_executable(MusicSorterApp WIN32 ${SOURCES})
+
+target_link_libraries(MusicSorterApp PRIVATE
+    user32
+    gdi32
+    shell32
+    comctl32
+    ole32
+    winmm
+)
+
+set_target_properties(MusicSorterApp PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+)
