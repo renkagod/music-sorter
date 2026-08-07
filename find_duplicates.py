@@ -2,18 +2,13 @@ import os
 import sys
 import hashlib
 import logging
+import re
 import difflib
-from collections import defaultdict
 
 try:
     import mutagen
 except ImportError:
     mutagen = None
-
-try:
-    import acoustid
-except ImportError:
-    acoustid = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +18,15 @@ logging.basicConfig(
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def normalize_text(text):
+    if not text:
+        return ""
+    # Strip release metadata tags like [C87], {DVAC-0004}, (2014)
+    s = re.sub(r'\[[^\]]*\]|\{[^\}]*\}|\(\d{4}\)', '', text)
+    # Remove unicode slashes, punctuation, spaces
+    s = re.sub(r'[\s\-_/\\,.\u2044\u2215\u3013\uFF5E]+', '', s)
+    return s.lower().strip()
 
 def get_file_hash(filepath, block_size=65536):
     hasher = hashlib.md5()
@@ -68,19 +72,12 @@ def get_audio_info(filepath):
         "artist": str(artist).strip(),
         "title": str(title).strip(),
         "album": str(album).strip(),
+        "norm_title": normalize_text(str(title)),
+        "norm_album": normalize_text(str(album)),
         "duration": duration,
         "size": os.path.getsize(filepath),
         "ext": os.path.splitext(filename)[1].lower()
     }
-
-def fuzzy_title_match(t1, t2):
-    s1 = t1.lower()
-    s2 = t2.lower()
-    ratio = difflib.SequenceMatcher(None, s1, s2).ratio()
-    # Check substring inclusion or high similarity ratio
-    if ratio > 0.7 or (len(s1) > 4 and s1 in s2) or (len(s2) > 4 and s2 in s1):
-        return True, ratio
-    return False, ratio
 
 def scan_for_duplicates(search_dirs=None):
     if search_dirs is None:
@@ -91,7 +88,7 @@ def scan_for_duplicates(search_dirs=None):
         ]
 
     logging.info("==================================================")
-    logging.info("     MULTI-LEVEL DUPLICATE DETECTOR ACTIVE       ")
+    logging.info("    ROBUST MULTI-LEVEL DUPLICATE SCANNER          ")
     logging.info("==================================================")
 
     audio_extensions = ('.flac', '.mp3', '.m4a', '.wav', '.ogg')
@@ -102,7 +99,7 @@ def scan_for_duplicates(search_dirs=None):
 
     for d in search_dirs:
         if not os.path.exists(d):
-            logging.info(f"Directory '{os.path.relpath(d, BASE_DIR)}' does not exist yet. Skipping.")
+            logging.info(f"Directory '{os.path.relpath(d, BASE_DIR)}' does not exist. Skipping.")
             continue
 
         logging.info(f"Scanning directory: {os.path.relpath(d, BASE_DIR)}")
@@ -113,13 +110,11 @@ def scan_for_duplicates(search_dirs=None):
                     filepath = os.path.join(root, file)
                     rel_p = os.path.relpath(filepath, BASE_DIR)
 
-                    logging.info(f"  [#{total_scanned}] Scanning: {rel_p}")
+                    logging.info(f"  [#{total_scanned}] Analyzed: {rel_p}")
                     
-                    # 1. Byte hash
                     f_hash = get_file_hash(filepath)
                     hashes[f_hash].append(filepath)
 
-                    # 2. Audio info
                     info = get_audio_info(filepath)
                     tracks.append(info)
 
@@ -127,10 +122,10 @@ def scan_for_duplicates(search_dirs=None):
     logging.info(f"Scan complete. Total files analyzed: {total_scanned}")
     logging.info("==================================================")
 
-    # 1. Exact MD5 duplicates
+    # 1. Exact MD5
     exact_duplicates = {h: paths for h, paths in hashes.items() if len(paths) > 1}
     if exact_duplicates:
-        logging.warning(f"⚠️ LEVEL 1: EXACT FILE DUPLICATES (Identical MD5 Hash): {len(exact_duplicates)} groups")
+        logging.warning(f"⚠️ LEVEL 1: EXACT FILE DUPLICATES (MD5): {len(exact_duplicates)} groups")
         for h, paths in exact_duplicates.items():
             logging.warning(f"  [Hash {h[:8]}...]:")
             for p in paths:
@@ -138,39 +133,37 @@ def scan_for_duplicates(search_dirs=None):
     else:
         logging.info("Level 1 (Exact Hash): No duplicates found.")
 
-    # 2. Duration & Fuzzy Title / Localized Duplicate Detection
+    # 2. Robust Normalized Title + Duration Match
     possible_dups = []
     n = len(tracks)
     for i in range(n):
         for j in range(i + 1, n):
             t1 = tracks[i]
             t2 = tracks[j]
-            
-            # Same file path comparison skip
-            if t1['filepath'] == t2['filepath']:
-                continue
+            if t1['filepath'] == t2['filepath']: continue
 
             dur_diff = abs(t1['duration'] - t2['duration'])
-            match, ratio = fuzzy_title_match(t1['title'], t2['title'])
-            same_artist = (t1['artist'].lower() == t2['artist'].lower() and t1['artist'] != "Unknown Artist")
+            n1 = t1['norm_title']
+            n2 = t2['norm_title']
+            
+            ratio = difflib.SequenceMatcher(None, n1, n2).ratio() if n1 and n2 else 0
 
-            # Condition for duplicate suspicion:
-            # - Exact same duration (+/- 1.5s) AND (same artist OR fuzzy title match)
-            is_suspicious = False
+            # Match criteria: same normalized title OR (duration diff <= 1.0s and high title similarity)
+            is_dup = False
             reason = ""
 
-            if dur_diff <= 1.5 and (same_artist or match):
-                is_suspicious = True
-                reason = f"Duration match (~{dur_diff:.1f}s diff) + Title similarity ({ratio:.0%})"
-            elif match and ratio > 0.85:
-                is_suspicious = True
-                reason = f"High title similarity ({ratio:.0%})"
+            if n1 and n2 and n1 == n2 and dur_diff <= 2.0:
+                is_dup = True
+                reason = f"Identical title '{n1}' + Duration match ({dur_diff:.1f}s diff)"
+            elif dur_diff <= 1.0 and ratio > 0.7:
+                is_dup = True
+                reason = f"Duration match ({dur_diff:.1f}s diff) + Title similarity ({ratio:.0%})"
 
-            if is_suspicious:
+            if is_dup:
                 possible_dups.append((reason, t1, t2))
 
     if possible_dups:
-        logging.warning(f"⚠️ LEVEL 2: POTENTIAL AUDIO DUPLICATES (Different Bitrate / Translated Title / Formats): {len(possible_dups)} pairs")
+        logging.warning(f"⚠️ LEVEL 2: POTENTIAL DUPLICATES: {len(possible_dups)} pairs")
         for reason, t1, t2 in possible_dups:
             p1 = os.path.relpath(t1['filepath'], BASE_DIR)
             p2 = os.path.relpath(t2['filepath'], BASE_DIR)
@@ -178,12 +171,7 @@ def scan_for_duplicates(search_dirs=None):
             logging.warning(f"    File A: {p1} ({t1['ext'].upper()}, {t1['duration']}s)")
             logging.warning(f"    File B: {p2} ({t2['ext'].upper()}, {t2['duration']}s)")
     else:
-        logging.info("Level 2 (Duration + Fuzzy Title): No potential duplicates found.")
-
-    logging.info("--------------------------------------------------")
-    logging.info("SAFETY REMINDER: Automatic deletion is FORBIDDEN.")
-    logging.info("If duplicates were found above, please confirm with the user before deleting.")
-    logging.info("--------------------------------------------------")
+        logging.info("Level 2 (Normalized Title + Duration): No potential duplicates found.")
 
 if __name__ == '__main__':
     scan_for_duplicates()
