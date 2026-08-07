@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 import difflib
+from collections import defaultdict
 
 try:
     import mutagen
@@ -148,7 +149,6 @@ def scan_for_duplicates(search_dirs=None):
             
             ratio = difflib.SequenceMatcher(None, n1, n2).ratio() if n1 and n2 else 0
 
-            # Match criteria: same normalized title OR (duration diff <= 1.0s and high title similarity)
             is_dup = False
             reason = ""
 
