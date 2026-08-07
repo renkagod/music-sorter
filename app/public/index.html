@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MusicSorter Desktop - Minimalist A/B Player</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="brand">
+                <span class="logo-icon">🎧</span>
+                <h1>MusicSorter <span>Desktop</span></h1>
+            </div>
+            <div class="actions">
+                <button id="btn-scan" class="btn btn-primary">🔍 Сканировать TO SORT</button>
+            </div>
+        </header>
+
+        <!-- Status Bar -->
+        <div id="status-bar" class="status-bar">
+            <div class="status-info">
+                <span id="status-text">Статус: Готов к работе</span>
+                <span id="status-count">Кандидатов: 0</span>
+            </div>
+            <div class="progress-bar-bg">
+                <div id="progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Empty State -->
+            <div id="view-empty" class="view-panel">
+                <div class="empty-box">
+                    <div class="empty-icon">📁</div>
+                    <h2>Поместите музыкальные файлы в папку <code class="code-tag">TO SORT</code></h2>
+                    <p>Нажмите кнопку "Сканировать TO SORT" для поиска дубликатов и альтернативных миксов.</p>
+                </div>
+            </div>
+
+            <!-- A/B Comparison View -->
+            <div id="view-ab" class="view-panel hidden">
+                <div class="ab-card-grid">
+                    <!-- Track A -->
+                    <div class="track-card" id="card-a">
+                        <div class="track-badge">ТРЕК А</div>
+                        <div class="track-info">
+                            <h3 id="title-a">Название трека А</h3>
+                            <div class="track-meta">
+                                <span id="format-a" class="meta-tag">FLAC</span>
+                                <span id="dur-a" class="meta-tag">0:00</span>
+                            </div>
+                            <div id="path-a" class="track-path">flac/...</div>
+                        </div>
+                        <button id="btn-keep-a" class="btn btn-keep">⚪ Оставить Трек А (Б ➔ delete)</button>
+                    </div>
+
+                    <!-- Track B -->
+                    <div class="track-card" id="card-b">
+                        <div class="track-badge">ТРЕК Б</div>
+                        <div class="track-info">
+                            <h3 id="title-b">Название трека Б</h3>
+                            <div class="track-meta">
+                                <span id="format-b" class="meta-tag">MP3</span>
+                                <span id="dur-b" class="meta-tag">0:00</span>
+                            </div>
+                            <div id="path-b" class="track-path">mp3/...</div>
+                        </div>
+                        <button id="btn-keep-b" class="btn btn-keep">⚪ Оставить Трек Б (А ➔ delete)</button>
+                    </div>
+                </div>
+
+                <!-- Player Controls Bar -->
+                <div class="player-controls">
+                    <div class="similarity-info">
+                        Сходство: <strong id="sim-score">92.5%</strong> | Смещение фазы: <span id="sim-offset">8 кадров</span>
+                    </div>
+
+                    <!-- Synchronized Seek Bar -->
+                    <div class="seek-container">
+                        <span id="time-current">0:00</span>
+                        <input type="range" id="seek-slider" min="0" max="100" value="0" step="0.1">
+                        <span id="time-duration">0:00</span>
+                    </div>
+
+                    <!-- Hot Swap Switch Bar -->
+                    <div class="hotswap-container">
+                        <button id="btn-play-pause" class="btn btn-icon">▶ Проигрывать</button>
+                        <div class="toggle-group">
+                            <button id="toggle-a" class="btn-toggle active">Слушать А [1]</button>
+                            <button id="toggle-b" class="btn-toggle">Слушать Б [2]</button>
+                        </div>
+                        <span class="shortcut-tip">Горячая клавиша: <kbd>Tab</kbd> или <kbd>S</kbd></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Complete View -->
+            <div id="view-complete" class="view-panel hidden">
+                <div class="complete-box">
+                    <div class="complete-icon">✨</div>
+                    <h2>Все A/B кандидаты обработаны!</h2>
+                    <p>Отклоненные файлы перемещены в <code class="code-tag">d:\media\music\delete\</code></p>
+                </div>
+            </div>
+        </main>
+
+        <!-- Console Log Drawer -->
+        <footer class="app-log">
+            <details>
+                <summary>📜 Консольный журнал процесса</summary>
+                <pre id="log-output" class="log-pre">Готов к работе...</pre>
+            </details>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
