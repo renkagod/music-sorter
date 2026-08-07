@@ -2,17 +2,7 @@ import os
 import sys
 import shutil
 import logging
-import re
-import difflib
-from collections import defaultdict
-import numpy as np
-
-try:
-    import librosa
-    import mutagen
-except ImportError:
-    print("Error importing audio libraries.")
-    sys.exit(1)
+import subprocess
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,94 +12,76 @@ logging.basicConfig(
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FPCALC_BIN = os.path.join(BASE_DIR, 'fpcalc.exe')
 TOSORT_DIR = os.path.join(BASE_DIR, 'TO SORT')
 REVIEW_DIR = os.path.join(BASE_DIR, 'review')
 
 os.makedirs(REVIEW_DIR, exist_ok=True)
 
-def normalize_text(text):
-    if not text: return ""
-    s = re.sub(r'\[[^\]]*\]|\{[^\}]*\}|\(\d{4}\)', '', text)
-    s = re.sub(r'[\s\-_/\\,.\u2044\u2215\u3013\uFF5E]+', '', s)
-    return s.lower().strip()
-
-def compute_dtw_chroma_similarity(file1, file2, duration_sec=40):
+def get_fpcalc_raw(filepath):
+    if not os.path.exists(FPCALC_BIN): return None
     try:
-        y1, sr1 = librosa.load(file1, sr=22050, duration=duration_sec)
-        y2, sr2 = librosa.load(file2, sr=22050, duration=duration_sec)
-        c1 = librosa.feature.chroma_cens(y=y1, sr=sr1)
-        c2 = librosa.feature.chroma_cens(y=y2, sr=sr2)
-        D, wp = librosa.sequence.dtw(c1, c2, metric='cosine')
-        dist = D[-1, -1] / len(wp)
-        return float(1.0 - dist)
-    except Exception as e:
-        logging.debug(f"DTW calculation error: {e}")
-        return 0.0
+        res = subprocess.run([FPCALC_BIN, '-raw', filepath], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        dur, fp = 0, []
+        for line in res.stdout.splitlines():
+            if line.startswith('DURATION='): dur = float(line.split('=')[1])
+            elif line.startswith('FINGERPRINT='): fp = [int(x) for x in line.split('=')[1].split(',') if x]
+        return {'duration': dur, 'fingerprint': fp}
+    except: return None
+
+def bit_count(int_type):
+    return bin(int_type).count('1')
+
+def fingerprint_similarity(fp1_list, fp2_list):
+    if not fp1_list or not fp2_list: return 0.0
+    min_len = min(len(fp1_list), len(fp2_list))
+    if min_len == 0: return 0.0
+    matching_bits = sum(32 - bit_count(fp1_list[i] ^ fp2_list[i]) for i in range(min_len))
+    return round(matching_bits / (min_len * 32), 4)
 
 def move_to_review(filepath, reason):
     rel = os.path.relpath(filepath, TOSORT_DIR)
     target_path = os.path.join(REVIEW_DIR, rel)
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
-    logging.info(f"[DTW QUARANTINE] Moving redundant MP3 duplicate: {rel}")
+    logging.info(f"[FPCALC ACOUSTID QUARANTINE] Moving redundant MP3: {rel}")
     logging.info(f"  Reason: {reason}")
     shutil.move(filepath, target_path)
 
-def run_dtw_quarantine():
-    logging.info("Starting DTW Chroma Acoustic Quarantine analysis...")
-    audio_extensions = ('.flac', '.mp3')
-    tracks = []
+def run_fpcalc_quarantine():
+    logging.info("Starting fpcalc Chromaprint AcoustID quarantine scan...")
 
+    flacs, mp3s = [], []
     for root, _, files in os.walk(TOSORT_DIR):
         for f in files:
-            if f.lower().endswith(audio_extensions):
-                fp = os.path.join(root, f)
-                ext = os.path.splitext(f)[1].lower()
-                dur = 0.0
-                title = os.path.splitext(f)[0]
-                try:
-                    m = mutagen.File(fp)
-                    if m and hasattr(m, 'info') and hasattr(m.info, 'length'):
-                        dur = round(m.info.length, 1)
-                    if m and m.tags and hasattr(m.tags, 'get'):
-                        t_val = m.tags.get('title', [title])
-                        title = t_val[0] if isinstance(t_val, list) else t_val
-                except: pass
+            p = os.path.join(root, f)
+            if f.lower().endswith('.flac'): flacs.append(p)
+            elif f.lower().endswith('.mp3'): mp3s.append(p)
 
-                tracks.append({
-                    'filepath': fp,
-                    'filename': f,
-                    'ext': ext,
-                    'dur': dur,
-                    'title': str(title),
-                    'norm_title': normalize_text(str(title))
-                })
+    flac_fps = []
+    for p in flacs:
+        info = get_fpcalc_raw(p)
+        if info and info['fingerprint']:
+            flac_fps.append({'path': p, 'file': os.path.basename(p), 'dur': info['duration'], 'fp': info['fingerprint']})
 
-    n = len(tracks)
     moved_count = 0
+    for p in mp3s:
+        if not os.path.exists(p): continue
+        info = get_fpcalc_raw(p)
+        if info and info['fingerprint']:
+            m_dur, m_fp, m_file = info['duration'], info['fingerprint'], os.path.basename(p)
+            best_sim, best_flac = 0.0, None
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            t1, t2 = tracks[i], tracks[j]
-            if not os.path.exists(t1['filepath']) or not os.path.exists(t2['filepath']):
-                continue
+            for f in flac_fps:
+                if abs(m_dur - f['dur']) <= 3.0:
+                    sim = fingerprint_similarity(m_fp, f['fp'])
+                    if sim > best_sim:
+                        best_sim, best_flac = sim, f
 
-            if (t1['ext'] == '.flac' and t2['ext'] == '.mp3') or (t1['ext'] == '.mp3' and t2['ext'] == '.flac'):
-                dur_diff = abs(t1['dur'] - t2['dur'])
-                n1, n2 = t1['norm_title'], t2['norm_title']
-                ratio = difflib.SequenceMatcher(None, n1, n2).ratio() if n1 and n2 else 0
+            if best_sim >= 0.85:
+                move_to_review(p, f"Chromaprint AcoustID Match ({best_sim:.1%} similarity) with FLAC '{best_flac['file']}'")
+                moved_count += 1
 
-                if dur_diff <= 3.0 and (n1 == n2 or ratio > 0.70):
-                    sim = compute_dtw_chroma_similarity(t1['filepath'], t2['filepath'])
-                    flac_track = t1 if t1['ext'] == '.flac' else t2
-                    mp3_track = t2 if t1['ext'] == '.flac' else t1
-
-                    if sim >= 0.94:
-                        move_to_review(mp3_track['filepath'], f"DTW Chroma Acoustic Match ({sim:.1%} similarity) with FLAC '{flac_track['filename']}'")
-                        moved_count += 1
-                    else:
-                        logging.info(f"DISTINCT AUDIO MIXES ({sim:.1%} similarity): Keeping both '{t1['filename']}' and '{t2['filename']}'")
-
-    logging.info(f"DTW Quarantine Complete. Total redundant MP3 duplicates moved: {moved_count}")
+    logging.info(f"fpcalc AcoustID Quarantine Complete. Total redundant MP3s moved: {moved_count}")
 
 if __name__ == '__main__':
-    run_dtw_quarantine()
+    run_fpcalc_quarantine()
