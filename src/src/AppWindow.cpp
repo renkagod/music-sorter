@@ -343,14 +343,24 @@ void AppWindow::RunMessageLoop() {
         // Log Console Panel
         ImGui::BeginChild("LogConsole", ImVec2(0, 0), true);
         ImGui::TextDisabled("📜 ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
+        ImGui::SameLine();
+        if (ImGui::Button("📋 Копировать весь лог в буфер обмена")) {
+            auto logs = Logger::Instance().GetLogs();
+            std::string full_log;
+            for (const auto& log : logs) full_log += log + "\n";
+            ImGui::SetClipboardText(full_log.c_str());
+            LOG_INFO("Logs copied to clipboard.");
+        }
         ImGui::Separator();
+
         auto logs = Logger::Instance().GetLogs();
+        static std::string log_buffer;
+        log_buffer.clear();
         for (const auto& log : logs) {
-            ImGui::TextUnformatted(log.c_str());
+            log_buffer += log + "\n";
         }
-        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
-            ImGui::SetScrollHereY(1.0f);
-        }
+
+        ImGui::InputTextMultiline("##LogConsoleMultiLine", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
         ImGui::EndChild();
 
         ImGui::End();

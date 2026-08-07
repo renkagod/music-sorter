@@ -17,18 +17,6 @@ static int BitCount64(unsigned long long v) {
 #endif
 }
 
-std::string Utf8ToWideStr(const std::string& str) {
-    if (str.empty()) return "";
-    int count = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), NULL, 0);
-    std::wstring wstr(count, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), &wstr[0], count);
-    
-    int countA = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), (int)wstr.length(), NULL, 0, NULL, NULL);
-    std::string strA(countA, 0);
-    WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), (int)wstr.length(), &strA[0], countA, NULL, NULL);
-    return strA;
-}
-
 AudioFingerprint AcousticAnalyzer::ExtractFingerprint(const std::string& filepath) {
     AudioFingerprint res;
     res.path = filepath;
@@ -51,7 +39,6 @@ AudioFingerprint AcousticAnalyzer::ExtractFingerprint(const std::string& filepat
     std::vector<wchar_t> cmdBuf(wCmd.begin(), wCmd.end());
     cmdBuf.push_back(L'\0');
 
-    // CREATE_NO_WINDOW prevents ANY CMD popup windows!
     if (!CreateProcessW(NULL, cmdBuf.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         CloseHandle(hRead);
         CloseHandle(hWrite);
@@ -110,7 +97,7 @@ double AcousticAnalyzer::CalculateSlidingCrossCorrelation(
         size_t len2 = fp2.size() > start2 ? fp2.size() - start2 : 0;
         size_t min_len = (std::min)(len1, len2);
 
-        if (min_len < 30) continue;
+        if (min_len < 20) continue;
 
         unsigned long long matching_bits = 0;
         for (size_t i = 0; i < min_len; ++i) {
@@ -188,13 +175,18 @@ void AcousticAnalyzer::AnalyzeDirectory(
                 std::string rel1 = fs::relative(f1.path, baseDirectory).string();
                 std::string rel2 = fs::relative(f2.path, baseDirectory).string();
 
-                if (sim >= 0.95) {
-                    LOG_INFO("100% Exact Duplicate Match (" + std::to_string((int)(sim*100)) + "%): " + rel1 + " <==> " + rel2);
-                    if (ext1 == ".flac" && ext2 == ".mp3") outAutoDelete.push_back(f2.path);
-                    else if (ext2 == ".flac" && ext1 == ".mp3") outAutoDelete.push_back(f1.path);
-                    else outAutoDelete.push_back(f2.path);
+                if (sim >= 0.88) { // 88%+ threshold for exact wave duplicates (handles offset pre-gaps)
+                    std::string autoDelPath;
+                    if (ext1 == ".flac" && ext2 == ".mp3") autoDelPath = f2.path;
+                    else if (ext2 == ".flac" && ext1 == ".mp3") autoDelPath = f1.path;
+                    else if (f2.path.find("- Copy") != std::string::npos || f2.path.find(" (1)") != std::string::npos) autoDelPath = f2.path;
+                    else if (f1.path.find("- Copy") != std::string::npos || f1.path.find(" (1)") != std::string::npos) autoDelPath = f1.path;
+                    else autoDelPath = f2.path;
+
+                    LOG_INFO("[AUTO-DELETE MATCH " + std::to_string((int)(sim * 100)) + "%] Moving duplicate to delete/: " + fs::relative(autoDelPath, baseDirectory).string());
+                    outAutoDelete.push_back(autoDelPath);
                 } else if (sim >= 0.75) {
-                    LOG_INFO("A/B Candidate Sound Match (" + std::to_string((int)(sim*100)) + "%): " + rel1 + " <==> " + rel2);
+                    LOG_INFO("[A/B CANDIDATE MATCH " + std::to_string((int)(sim * 100)) + "%] " + rel1 + " <==> " + rel2);
                     ABCandidatePair pair;
                     pair.id = "pair_" + std::to_string(outCandidates.size() + 1);
                     pair.trackA_path = f1.path;
