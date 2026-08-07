@@ -1,0 +1,230 @@
+X Lossless Decoder version 20201123 (153.0)
+
+XLD extraction logfile from 2021-09-30 12:52:41 -0700
+
+D'va;;;;;;;;5 / 空木ノ花試作型
+
+Used drive : PIONEER DVD-RW  DVR-215D (revision 1.22)
+Media type : CD-Recordable
+
+Ripper mode             : XLD Secure Ripper
+Disable audio cache     : OK for the drive with a cache less than 1375KiB
+Make use of C2 pointers : NO
+Read offset correction  : 48
+Max retry count         : 100
+Gap status              : Analyzed, Appended (except HTOA)
+
+TOC of the extracted CD
+     Track |   Start  |  Length  | Start sector | End sector 
+    ---------------------------------------------------------
+        1  | 00:00:00 | 04:28:49 |         0    |    20148   
+        2  | 04:28:49 | 04:50:35 |     20149    |    41933   
+        3  | 09:19:09 | 04:28:67 |     41934    |    62100   
+        4  | 13:48:01 | 02:54:15 |     62101    |    75165   
+        5  | 16:42:16 | 02:04:63 |     75166    |    84528   
+        6  | 18:47:04 | 04:22:74 |     84529    |   104252   
+        7  | 23:10:03 | 02:21:56 |    104253    |   114883   
+        8  | 25:31:59 | 02:12:64 |    114884    |   124847   
+        9  | 27:44:48 | 03:17:23 |    124848    |   139645   
+       10  | 31:01:71 | 02:36:20 |    139646    |   151365   
+
+AccurateRip Summary (DiscID: 000e055c-006cd14e-7407e20a)
+    Track 01 : OK (v2, confidence 2/2)
+    Track 02 : OK (v2, confidence 2/2)
+    Track 03 : OK (v2, confidence 2/2)
+    Track 04 : OK (v2, confidence 2/2)
+    Track 05 : OK (v2, confidence 2/2)
+    Track 06 : OK (v2, confidence 2/2)
+    Track 07 : OK (v2, confidence 2/2)
+    Track 08 : OK (v2, confidence 2/2)
+    Track 09 : OK (v2, confidence 2/2)
+    Track 10 : OK (v2, confidence 2/2)
+        ->All tracks accurately ripped.
+
+All Tracks
+    Album gain               : -10.65 dB
+    Peak                     : 0.999969
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+Track 01
+    Filename : /Users/nhod/Desktop/Rips/D'va;;;;;;;;5 - 空木ノ花試作型 (2017) [FLAC]/01 - -45 - 煉獄煉獄また煉獄.flac
+    Pre-gap length : 00:02:00
+
+    Track gain               : -10.88 dB
+    Peak                     : 0.987610
+    CRC32 hash (test run)    : A54E0BFF
+    CRC32 hash               : A54E0BFF
+    CRC32 hash (skip zero)   : 9D6CBC7A
+    AccurateRip v1 signature : C15DEBD1
+    AccurateRip v2 signature : A6459814
+        ->Accurately ripped (v2, confidence 2/2)
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+Track 02
+    Filename : /Users/nhod/Desktop/Rips/D'va;;;;;;;;5 - 空木ノ花試作型 (2017) [FLAC]/02 - -45 - リリスの方舟.flac
+
+    Track gain               : -10.55 dB
+    Peak                     : 0.991486
+    CRC32 hash (test run)    : DD534890
+    CRC32 hash               : DD534890
+    CRC32 hash (skip zero)   : F2D3C6A0
+    AccurateRip v1 signature : 852A0ADF
+    AccurateRip v2 signature : 1CCAE85B
+        ->Accurately ripped (v2, confidence 2/2)
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+Track 03
+    Filename : /Users/nhod/Desktop/Rips/D'va;;;;;;;;5 - 空木ノ花試作型 (2017) [FLAC]/03 - -45 - 木の棒.flac
+
+    Track gain               : -9.97 dB
+    Peak                     : 0.999969
+    CRC32 hash (test run)    : 7A3370C9
+    CRC32 hash               : 7A3370C9
+    CRC32 hash (skip zero)   : 9089D307
+    AccurateRip v1 signature : 475361EF
+    AccurateRip v2 signature : 251F0446
+        ->Accurately ripped (v2, confidence 2/2)
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+Track 04
+    Filename : /Users/nhod/Desktop/Rips/D'va;;;;;;;;5 - 空木ノ花試作型 (2017) [FLAC]/04 - -45 - アラーニェ.flac
+
+    Track gain               : -9.80 dB
+    Peak                     : 0.999969
+    CRC32 hash (test run)    : E1112F9F
+    CRC32 hash               : E1112F9F
+    CRC32 hash (skip zero)   : D82FD4DB
+    AccurateRip v1 signature : 215141B6
+    AccurateRip v2 signature : 6B5D96BD
+        ->Accurately ripped (v2, confidence 2/2)
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+Track 05
+    Filename : /Users/nhod/Desktop/Rips/D'va;;;;;;;;5 - 空木ノ花試作型 (2017) [FLAC]/05 - -45 - アルプ.flac
+
+    Track gain               : -8.84 dB
+    Peak                     : 0.999969
+    CRC32 hash (test run)    : A3F851B5
+    CRC32 hash               : A3F851B5
+    CRC32 hash (skip zero)   : 35754E27
+    AccurateRip v1 signature : CB4DAEC4
+    AccurateRip v2 signature : A4BCCEEE
+        ->Accurately ripped (v2, confidence 2/2)
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+Track 06
+    Filename : /Users/nhod/Desktop/Rips/D'va;;;;;;;;5 - 空木ノ花試作型 (2017) [FLAC]/06 - -45 - Tractatus De Purgatorio Sancti Patricii.flac
+
+    Track gain               : -12.24 dB
+    Peak                     : 0.999390
+    CRC32 hash (test run)    : 15719260
+    CRC32 hash               : 15719260
+    CRC32 hash (skip zero)   : 1EDE1234
+    AccurateRip v1 signature : B2FF347C
+    AccurateRip v2 signature : ED50BA07
+        ->Accurately ripped (v2, confidence 2/2)
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+Track 07
+    Filename : /Users/nhod/Desktop/Rips/D'va;;;;;;;;5 - 空木ノ花試作型 (2017) [FLAC]/07 - -45 - ナインテイルズ.flac
+
+    Track gain               : -10.62 dB
+    Peak                     : 0.999969
+    CRC32 hash (test run)    : 9EF409A7
+    CRC32 hash               : 9EF409A7
+    CRC32 hash (skip zero)   : 1D1F6984
+    AccurateRip v1 signature : 7E9A6D7C
+    AccurateRip v2 signature : 06A4F964
+        ->Accurately ripped (v2, confidence 2/2)
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+Track 08
+    Filename : /Users/nhod/Desktop/Rips/D'va;;;;;;;;5 - 空木ノ花試作型 (2017) [FLAC]/08 - -45 - Old Suffruti.flac
+
+    Track gain               : -11.34 dB
+    Peak                     : 0.995422
+    CRC32 hash (test run)    : 8ACDA11D
+    CRC32 hash               : 8ACDA11D
+    CRC32 hash (skip zero)   : 7F06CA3E
+    AccurateRip v1 signature : A6B6CCDD
+    AccurateRip v2 signature : 524950AC
+        ->Accurately ripped (v2, confidence 2/2)
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+Track 09
+    Filename : /Users/nhod/Desktop/Rips/D'va;;;;;;;;5 - 空木ノ花試作型 (2017) [FLAC]/09 - -45 - イスマイル.flac
+
+    Track gain               : -9.52 dB
+    Peak                     : 0.999969
+    CRC32 hash (test run)    : 2F5BFFD9
+    CRC32 hash               : 2F5BFFD9
+    CRC32 hash (skip zero)   : 0D18AA89
+    AccurateRip v1 signature : C9D00892
+    AccurateRip v2 signature : 5436384E
+        ->Accurately ripped (v2, confidence 2/2)
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+Track 10
+    Filename : /Users/nhod/Desktop/Rips/D'va;;;;;;;;5 - 空木ノ花試作型 (2017) [FLAC]/10 - -45 - 紅華刑.flac
+
+    Track gain               : -10.31 dB
+    Peak                     : 0.990723
+    CRC32 hash (test run)    : C14A37F1
+    CRC32 hash               : C14A37F1
+    CRC32 hash (skip zero)   : 2DAD4FAE
+    AccurateRip v1 signature : 6976B3D1
+    AccurateRip v2 signature : DC4C1D83
+        ->Accurately ripped (v2, confidence 2/2)
+    Statistics
+        Read error                           : 0
+        Jitter error (maybe fixed)           : 0
+        Retry sector count                   : 0
+        Damaged sector count                 : 0
+
+No errors occurred
+
+End of status report
+
+-----BEGIN XLD SIGNATURE-----
+dQFF667G9TJ2LePS5LeY57PSAujolcnieQ5JEFB7vlLKnW77nfdnuJ5uxFOLs10fhA90MQEc59...W26z2yv074vhZTtCIuIqNYdjGm
+-----END XLD SIGNATURE-----
