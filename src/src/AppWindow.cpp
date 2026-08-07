@@ -335,7 +335,14 @@ void AppWindow::RunMessageLoop() {
         if (ch == 'b') ImGui::PopStyleColor(2);
 
         ImGui::SameLine();
-        ImGui::TextDisabled("Горячие клавиши: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
+        ImGui::SetNextItemWidth(150);
+        float masterVol = AudioEngine::Instance().GetMasterVolume();
+        if (ImGui::SliderFloat("##MasterVolSlider", &masterVol, 0.0f, 1.0f, "🔊 Vol: %.0f%%")) {
+            AudioEngine::Instance().SetMasterVolume(masterVol);
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
         ImGui::EndChild();
 
         ImGui::Spacing();

@@ -18,7 +18,7 @@ bool AudioEngine::Initialize() {
     }
 
     m_initialized = true;
-    LOG_INFO("Miniaudio engine initialized successfully.");
+    LOG_INFO("Miniaudio engine initialized successfully (Default Master Volume: 25%).");
     return true;
 }
 
@@ -42,7 +42,7 @@ bool AudioEngine::LoadTrackA(const std::string& path) {
     if (ma_sound_init_from_file(&m_engine, path.c_str(), 0, NULL, NULL, &m_soundA) == MA_SUCCESS) {
         m_soundALoaded = true;
         LOG_INFO("Loaded Track A: " + path);
-        ma_sound_set_volume(&m_soundA, (m_activeChannel == 'a') ? 1.0f : 0.0f);
+        ma_sound_set_volume(&m_soundA, (m_activeChannel == 'a') ? m_masterVolume : 0.0f);
         return true;
     }
 
@@ -59,7 +59,7 @@ bool AudioEngine::LoadTrackB(const std::string& path) {
     if (ma_sound_init_from_file(&m_engine, path.c_str(), 0, NULL, NULL, &m_soundB) == MA_SUCCESS) {
         m_soundBLoaded = true;
         LOG_INFO("Loaded Track B: " + path);
-        ma_sound_set_volume(&m_soundB, (m_activeChannel == 'b') ? 1.0f : 0.0f);
+        ma_sound_set_volume(&m_soundB, (m_activeChannel == 'b') ? m_masterVolume : 0.0f);
         return true;
     }
 
@@ -90,13 +90,25 @@ void AudioEngine::SetActiveChannel(char channel) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_activeChannel = channel;
     if (channel == 'a') {
-        if (m_soundALoaded) ma_sound_set_volume(&m_soundA, 1.0f);
+        if (m_soundALoaded) ma_sound_set_volume(&m_soundA, m_masterVolume);
         if (m_soundBLoaded) ma_sound_set_volume(&m_soundB, 0.0f);
         LOG_INFO("Hot-Swap: Switched active audio output to TRACK A");
     } else {
         if (m_soundALoaded) ma_sound_set_volume(&m_soundA, 0.0f);
-        if (m_soundBLoaded) ma_sound_set_volume(&m_soundB, 1.0f);
+        if (m_soundBLoaded) ma_sound_set_volume(&m_soundB, m_masterVolume);
         LOG_INFO("Hot-Swap: Switched active audio output to TRACK B");
+    }
+}
+
+void AudioEngine::SetMasterVolume(float volume) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_masterVolume = volume;
+    if (m_activeChannel == 'a') {
+        if (m_soundALoaded) ma_sound_set_volume(&m_soundA, m_masterVolume);
+        if (m_soundBLoaded) ma_sound_set_volume(&m_soundB, 0.0f);
+    } else {
+        if (m_soundALoaded) ma_sound_set_volume(&m_soundA, 0.0f);
+        if (m_soundBLoaded) ma_sound_set_volume(&m_soundB, m_masterVolume);
     }
 }
 

@@ -24,6 +24,9 @@ public:
     void SetActiveChannel(char channel); // 'a' or 'b'
     char GetActiveChannel() const { return m_activeChannel; }
 
+    void SetMasterVolume(float volume); // 0.0f to 1.0f
+    float GetMasterVolume() const { return m_masterVolume; }
+
     void SeekToPercentage(double percent);
     double GetCurrentPositionSeconds();
     double GetDurationSeconds();
@@ -40,5 +43,6 @@ private:
     bool m_soundBLoaded = false;
     bool m_isPlaying = false;
     char m_activeChannel = 'a';
+    float m_masterVolume = 0.25f; // Default 25% volume so user doesn't go deaf!
     mutable std::mutex m_mutex;
 };
