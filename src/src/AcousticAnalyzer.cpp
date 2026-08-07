@@ -17,23 +17,61 @@ static int BitCount64(unsigned long long v) {
 #endif
 }
 
+std::string Utf8ToWideStr(const std::string& str) {
+    if (str.empty()) return "";
+    int count = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), NULL, 0);
+    std::wstring wstr(count, 0);
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), &wstr[0], count);
+    
+    int countA = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), (int)wstr.length(), NULL, 0, NULL, NULL);
+    std::string strA(countA, 0);
+    WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), (int)wstr.length(), &strA[0], countA, NULL, NULL);
+    return strA;
+}
+
 AudioFingerprint AcousticAnalyzer::ExtractFingerprint(const std::string& filepath) {
     AudioFingerprint res;
     res.path = filepath;
 
-    std::string cmd = "\"" + m_fpcalcBin + "\" -raw \"" + filepath + "\"";
-    FILE* pipe = _popen(cmd.c_str(), "r");
-    if (!pipe) {
-        LOG_ERROR("Failed to run fpcalc for: " + filepath);
+    std::wstring wBin = std::wstring(m_fpcalcBin.begin(), m_fpcalcBin.end());
+    std::wstring wCmd = L"\"" + wBin + L"\" -raw \"" + std::wstring(filepath.begin(), filepath.end()) + L"\"";
+
+    HANDLE hRead, hWrite;
+    SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) return res;
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOW si = { sizeof(STARTUPINFOW) };
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.hStdOutput = hWrite;
+    si.hStdError = hWrite;
+    si.wShowWindow = SW_HIDE;
+
+    PROCESS_INFORMATION pi = { 0 };
+    std::vector<wchar_t> cmdBuf(wCmd.begin(), wCmd.end());
+    cmdBuf.push_back(L'\0');
+
+    // CREATE_NO_WINDOW prevents ANY CMD popup windows!
+    if (!CreateProcessW(NULL, cmdBuf.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        CloseHandle(hRead);
+        CloseHandle(hWrite);
         return res;
     }
 
-    char buffer[256];
+    CloseHandle(hWrite);
+
+    char buffer[4096];
+    DWORD bytesRead = 0;
     std::string output;
-    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+    while (ReadFile(hRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+        buffer[bytesRead] = '\0';
         output += buffer;
     }
-    _pclose(pipe);
+
+    CloseHandle(hRead);
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
 
     std::stringstream ss(output);
     std::string line;
@@ -150,13 +188,13 @@ void AcousticAnalyzer::AnalyzeDirectory(
                 std::string rel1 = fs::relative(f1.path, baseDirectory).string();
                 std::string rel2 = fs::relative(f2.path, baseDirectory).string();
 
-                LOG_INFO("Comparing: [" + std::to_string((int)(sim * 100)) + "%] " + rel1 + " <==> " + rel2);
-
                 if (sim >= 0.95) {
+                    LOG_INFO("100% Exact Duplicate Match (" + std::to_string((int)(sim*100)) + "%): " + rel1 + " <==> " + rel2);
                     if (ext1 == ".flac" && ext2 == ".mp3") outAutoDelete.push_back(f2.path);
                     else if (ext2 == ".flac" && ext1 == ".mp3") outAutoDelete.push_back(f1.path);
                     else outAutoDelete.push_back(f2.path);
                 } else if (sim >= 0.75) {
+                    LOG_INFO("A/B Candidate Sound Match (" + std::to_string((int)(sim*100)) + "%): " + rel1 + " <==> " + rel2);
                     ABCandidatePair pair;
                     pair.id = "pair_" + std::to_string(outCandidates.size() + 1);
                     pair.trackA_path = f1.path;

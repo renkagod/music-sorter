@@ -20,7 +20,7 @@ public:
 
     HWND GetHWND() const { return m_hWnd; }
 
-    void HandleScanProgress(int progress, const std::string& msg);
+    void HandleScanProgress(int progress, const std::wstring& msg);
     void HandleScanFinished();
 
 private:
@@ -33,7 +33,13 @@ private:
     HINSTANCE m_hInstance = NULL;
     HWND m_hWnd = NULL;
 
-    HWND m_hBtnScan = NULL;
+    // 4 Manual Step Buttons
+    HWND m_hBtnStep1 = NULL;
+    HWND m_hBtnStep2 = NULL;
+    HWND m_hBtnStep3 = NULL;
+    HWND m_hBtnStep4 = NULL;
+
+    // Player Controls
     HWND m_hBtnPlay = NULL;
     HWND m_hBtnToggleA = NULL;
     HWND m_hBtnToggleB = NULL;
@@ -42,10 +48,15 @@ private:
     HWND m_hSeekSlider = NULL;
     HWND m_hProgressBar = NULL;
     HWND m_hLblStatus = NULL;
-    HWND g_hLblCardA = NULL;
-    HWND g_hLblCardB = NULL;
-    HWND g_hLblSim = NULL;
+    HWND m_hLblCardA = NULL;
+    HWND m_hLblCardB = NULL;
+    HWND m_hLblSim = NULL;
     HWND m_hLogBox = NULL;
+
+    HFONT m_hFontMain = NULL;
+    HFONT m_hFontBold = NULL;
+    HFONT m_hFontTitle = NULL;
+    HFONT m_hFontMono = NULL;
 
     std::vector<ABCandidatePair> m_candidates;
     std::vector<std::string> m_autoDelete;
