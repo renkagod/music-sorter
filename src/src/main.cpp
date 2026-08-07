@@ -29,7 +29,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_ToSortDir = (fs::path(g_BaseDir) / "TO SORT").string();
     g_DeleteDir = (fs::path(g_BaseDir) / "delete").string();
 
-    LOG_INFO("=== Starting MusicSorter Native C++ Application ===");
+    LOG_INFO("=== Starting MusicSorter Native ImGui C++ Studio ===");
     LOG_INFO("Base Directory: " + g_BaseDir);
     LOG_INFO("TO SORT Directory: " + g_ToSortDir);
     LOG_INFO("fpcalc Binary: " + fpcalcBin);
@@ -42,12 +42,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
     if (!AppWindow::Instance().Initialize(hInstance, nCmdShow)) {
-        MessageBoxA(NULL, "Failed to initialize Win32 GUI AppWindow!", "MusicSorter Error", MB_ICONERROR);
+        MessageBoxA(NULL, "Failed to initialize ImGui DirectX 11 AppWindow!", "MusicSorter Error", MB_ICONERROR);
         return 1;
     }
 
     AppWindow::Instance().RunMessageLoop();
 
+    AppWindow::Instance().Cleanup();
     AudioEngine::Instance().Shutdown();
     LOG_INFO("=== MusicSorter Native C++ Application Exited Cleanly ===");
     return 0;

@@ -1,6 +1,6 @@
 #pragma once
 #include <windows.h>
-#include <commctrl.h>
+#include <d3d11.h>
 #include <string>
 #include <vector>
 #include "AcousticAnalyzer.hpp"
@@ -17,48 +17,33 @@ public:
 
     bool Initialize(HINSTANCE hInstance, int nCmdShow);
     void RunMessageLoop();
+    void Cleanup();
 
     HWND GetHWND() const { return m_hWnd; }
-
-    void HandleScanProgress(int progress, const std::wstring& msg);
     void HandleScanFinished();
 
 private:
     AppWindow() = default;
     ~AppWindow() = default;
 
+    bool CreateDeviceD3D(HWND hWnd);
+    void CleanupDeviceD3D();
+    void CreateRenderTarget();
+    void CleanupRenderTarget();
+
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    LRESULT HandleMessage(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     HINSTANCE m_hInstance = NULL;
     HWND m_hWnd = NULL;
 
-    // 4 Manual Step Buttons
-    HWND m_hBtnStep1 = NULL;
-    HWND m_hBtnStep2 = NULL;
-    HWND m_hBtnStep3 = NULL;
-    HWND m_hBtnStep4 = NULL;
-
-    // Player Controls
-    HWND m_hBtnPlay = NULL;
-    HWND m_hBtnToggleA = NULL;
-    HWND m_hBtnToggleB = NULL;
-    HWND m_hBtnKeepA = NULL;
-    HWND m_hBtnKeepB = NULL;
-    HWND m_hSeekSlider = NULL;
-    HWND m_hProgressBar = NULL;
-    HWND m_hLblStatus = NULL;
-    HWND m_hLblCardA = NULL;
-    HWND m_hLblCardB = NULL;
-    HWND m_hLblSim = NULL;
-    HWND m_hLogBox = NULL;
-
-    HFONT m_hFontMain = NULL;
-    HFONT m_hFontBold = NULL;
-    HFONT m_hFontTitle = NULL;
-    HFONT m_hFontMono = NULL;
+    // DirectX 11 Data
+    ID3D11Device* m_pd3dDevice = NULL;
+    ID3D11DeviceContext* m_pd3dDeviceContext = NULL;
+    IDXGISwapChain* m_pSwapChain = NULL;
+    ID3D11RenderTargetView* m_mainRenderTargetView = NULL;
 
     std::vector<ABCandidatePair> m_candidates;
     std::vector<std::string> m_autoDelete;
     size_t m_currentCandidateIndex = 0;
+    bool m_isScanning = false;
 };

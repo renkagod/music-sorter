@@ -7,10 +7,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui
 )
 
 file(GLOB_RECURSE SOURCES
     "src/*.cpp"
+    "third_party/imgui/*.cpp"
 )
 
 add_executable(MusicSorterApp WIN32 ${SOURCES})
@@ -22,6 +24,8 @@ target_link_libraries(MusicSorterApp PRIVATE
     comctl32
     ole32
     winmm
+    d3d11
+    d3dcompiler
 )
 
 set_target_properties(MusicSorterApp PROPERTIES

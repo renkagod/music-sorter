@@ -2,203 +2,244 @@
 #include "../include/AudioEngine.hpp"
 #include "../include/Logger.hpp"
 
+#include "../third_party/imgui/imgui.h"
+#include "../third_party/imgui/imgui_impl_win32.h"
+#include "../third_party/imgui/imgui_impl_dx11.h"
+
 #include <shellapi.h>
 #include <thread>
 #include <sstream>
+#include <filesystem>
 
-#define ID_BTN_STEP1      1001
-#define ID_BTN_STEP2      1002
-#define ID_BTN_STEP3      1003
-#define ID_BTN_STEP4      1004
-
-#define ID_BTN_PLAY       1005
-#define ID_BTN_TOGGLE_A   1006
-#define ID_BTN_TOGGLE_B   1007
-#define ID_BTN_KEEP_A     1008
-#define ID_BTN_KEEP_B     1009
-#define ID_SEEK_SLIDER    1010
-#define ID_TIMER_SEEK     2001
+namespace fs = std::filesystem;
 
 extern std::string g_BaseDir;
 extern std::string g_ToSortDir;
 extern std::string g_DeleteDir;
 
-std::wstring Utf8ToWide(const std::string& str) {
-    if (str.empty()) return L"";
-    int len = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), NULL, 0);
-    std::wstring wstr(len, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), &wstr[0], len);
-    return wstr;
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+bool AppWindow::CreateDeviceD3D(HWND hWnd) {
+    DXGI_SWAP_CHAIN_DESC sd;
+    ZeroMemory(&sd, sizeof(sd));
+    sd.BufferCount = 2;
+    sd.BufferDesc.Width = 0;
+    sd.BufferDesc.Height = 0;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferDesc.RefreshRate.Numerator = 60;
+    sd.BufferDesc.RefreshRate.Denominator = 1;
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = hWnd;
+    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Quality = 0;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+    UINT createDeviceFlags = 0;
+    D3D_FEATURE_LEVEL featureLevel;
+    const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
+    HRESULT res = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &m_pSwapChain, &m_pd3dDevice, &featureLevel, &m_pd3dDeviceContext);
+    if (res == DXGI_ERROR_UNSUPPORTED)
+        res = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_WARP, NULL, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &m_pSwapChain, &m_pd3dDevice, &featureLevel, &m_pd3dDeviceContext);
+    if (res != S_OK) return false;
+
+    CreateRenderTarget();
+    return true;
+}
+
+void AppWindow::CleanupDeviceD3D() {
+    CleanupRenderTarget();
+    if (m_pSwapChain) { m_pSwapChain->Release(); m_pSwapChain = NULL; }
+    if (m_pd3dDeviceContext) { m_pd3dDeviceContext->Release(); m_pd3dDeviceContext = NULL; }
+    if (m_pd3dDevice) { m_pd3dDevice->Release(); m_pd3dDevice = NULL; }
+}
+
+void AppWindow::CreateRenderTarget() {
+    ID3D11Texture2D* pBackBuffer;
+    m_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    m_pd3dDevice->CreateRenderTargetView(pBackBuffer, NULL, &m_mainRenderTargetView);
+    pBackBuffer->Release();
+}
+
+void AppWindow::CleanupRenderTarget() {
+    if (m_mainRenderTargetView) { m_mainRenderTargetView->Release(); m_mainRenderTargetView = NULL; }
 }
 
 bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     m_hInstance = hInstance;
 
-    INITCOMMONCONTROLSEX icex;
-    icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
-    icex.dwICC = ICC_PROGRESS_CLASS | ICC_BAR_CLASSES;
-    InitCommonControlsEx(&icex);
-
-    // Dark Monokai / Clean Dark Theme Fonts
-    m_hFontMain = CreateFontW(-13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    m_hFontBold = CreateFontW(-13, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    m_hFontTitle = CreateFontW(-15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    m_hFontMono = CreateFontW(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
-
     WNDCLASSEXW wcex = { sizeof(WNDCLASSEXW) };
-    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.style = CS_CLASSDC;
     wcex.lpfnWndProc = AppWindow::WndProc;
     wcex.hInstance = hInstance;
     wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wcex.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wcex.lpszClassName = L"MusicSorterUnicodeClass";
+    wcex.lpszClassName = L"MusicSorterImGuiClass";
 
-    if (!RegisterClassExW(&wcex)) {
-        LOG_ERROR("Failed to register Win32 Window Class!");
+    RegisterClassExW(&wcex);
+
+    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Desktop - Modern Monochrome C++ Studio", WS_OVERLAPPEDWINDOW, 100, 100, 1060, 740, NULL, NULL, hInstance, NULL);
+
+    if (!CreateDeviceD3D(m_hWnd)) {
+        CleanupDeviceD3D();
+        UnregisterClassW(wcex.lpszClassName, hInstance);
         return false;
     }
 
-    m_hWnd = CreateWindowExW(0, L"MusicSorterUnicodeClass", L"MusicSorter Desktop (C++20 MSVC - Multi-step Workflow)", WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME, CW_USEDEFAULT, CW_USEDEFAULT, 980, 720, NULL, NULL, hInstance, NULL);
-    if (!m_hWnd) return false;
-
     ShowWindow(m_hWnd, nCmdShow);
     UpdateWindow(m_hWnd);
+
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    // Load Font with Cyrillic Glyphs
+    ImFontConfig font_cfg;
+    font_cfg.FontDataOwnedByAtlas = false;
+    static const ImWchar ranges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin Supplement
+        0x0400, 0x052F, // Cyrillic + Cyrillic Supplement
+        0x2000, 0x206F, // General Punctuation
+        0x3000, 0x30FF, // CJK Symbols and Punctuation + Hiragana + Katakana
+        0x4E00, 0x9FFF, // CJK Unified Ideographs
+        0,
+    };
+    
+    if (fs::exists("C:\\Windows\\Fonts\\segoeui.ttf")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 16.0f, &font_cfg, ranges);
+    } else if (fs::exists("C:\\Windows\\Fonts\\arial.ttf")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\arial.ttf", 16.0f, &font_cfg, ranges);
+    }
+
+    // Apply Sleek Dark Monochrome Styling
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 6.0f;
+    style.FrameRounding = 4.0f;
+    style.PopupRounding = 4.0f;
+    style.ScrollbarRounding = 4.0f;
+    style.GrabRounding = 4.0f;
+    style.ItemSpacing = ImVec2(10, 8);
+    style.FramePadding = ImVec2(10, 6);
+
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg] = ImVec4(0.07f, 0.07f, 0.07f, 1.00f);
+    colors[ImGuiCol_Header] = ImVec4(0.16f, 0.16f, 0.16f, 1.00f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.24f, 0.24f, 0.24f, 1.00f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.30f, 0.30f, 0.30f, 1.00f);
+    colors[ImGuiCol_Button] = ImVec4(0.16f, 0.16f, 0.16f, 1.00f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.26f, 0.26f, 0.26f, 1.00f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.18f, 1.00f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.24f, 0.24f, 0.24f, 1.00f);
+
+    ImGui_ImplWin32_Init(m_hWnd);
+    ImGui_ImplDX11_Init(m_pd3dDevice, m_pd3dDeviceContext);
+
     return true;
 }
 
+void AppWindow::Cleanup() {
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+
+    CleanupDeviceD3D();
+    DestroyWindow(m_hWnd);
+    UnregisterClassW(L"MusicSorterImGuiClass", m_hInstance);
+}
+
 void AppWindow::RunMessageLoop() {
-    MSG msg;
-    while (GetMessageW(&msg, NULL, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-}
+    bool done = false;
+    while (!done) {
+        MSG msg;
+        while (PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+            if (msg.message == WM_QUIT) done = true;
+        }
+        if (done) break;
 
-LRESULT CALLBACK AppWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    return Instance().HandleMessage(hWnd, msg, wParam, lParam);
-}
+        // Handle Scan Finished Message
+        if (m_isScanning) {
+            // Processing GUI background scan
+        }
 
-LRESULT AppWindow::HandleMessage(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-    case WM_CREATE: {
-        // Step 1 - Step 4 Manual Workflow Buttons
-        m_hBtnStep1 = CreateWindowW(L"BUTTON", L"1. 🔍 Поиск дубликатов (AcoustID)", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 20, 16, 220, 36, hWnd, (HMENU)ID_BTN_STEP1, NULL, NULL);
-        m_hBtnStep2 = CreateWindowW(L"BUTTON", L"2. 🏷️ Тегирование & Обложки", WS_TABSTOP | WS_VISIBLE | WS_CHILD, 250, 16, 210, 36, hWnd, (HMENU)ID_BTN_STEP2, NULL, NULL);
-        m_hBtnStep3 = CreateWindowW(L"BUTTON", L"3. 📂 Зеркалирование FLAC/MP3", WS_TABSTOP | WS_VISIBLE | WS_CHILD, 470, 16, 220, 36, hWnd, (HMENU)ID_BTN_STEP3, NULL, NULL);
-        m_hBtnStep4 = CreateWindowW(L"BUTTON", L"4. 📝 Синхронизация Tracklist", WS_TABSTOP | WS_VISIBLE | WS_CHILD, 700, 16, 220, 36, hWnd, (HMENU)ID_BTN_STEP4, NULL, NULL);
+        // Start Dear ImGui Frame
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
 
-        // Track Cards
-        m_hLblCardA = CreateWindowW(L"STATIC", L"ТРЕК А: Ожидание выполнения шага 1...", WS_VISIBLE | WS_CHILD | SS_LEFT, 20, 68, 450, 90, hWnd, NULL, NULL, NULL);
-        m_hLblCardB = CreateWindowW(L"STATIC", L"ТРЕК Б: Ожидание выполнения шага 1...", WS_VISIBLE | WS_CHILD | SS_LEFT, 490, 68, 450, 90, hWnd, NULL, NULL, NULL);
+        // Main UI Window
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+        ImGui::Begin("MusicSorter Workspace", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
-        m_hBtnKeepA = CreateWindowW(L"BUTTON", L"⚪ Оставить Трек А (Б ➔ delete)", WS_TABSTOP | WS_VISIBLE | WS_CHILD, 20, 165, 450, 36, hWnd, (HMENU)ID_BTN_KEEP_A, NULL, NULL);
-        m_hBtnKeepB = CreateWindowW(L"BUTTON", L"⚪ Оставить Трек Б (А ➔ delete)", WS_TABSTOP | WS_VISIBLE | WS_CHILD, 490, 165, 450, 36, hWnd, (HMENU)ID_BTN_KEEP_B, NULL, NULL);
+        // Header Section
+        ImGui::TextDisabled("MUSIC SORTER DESKTOP (C++20 NATIVE STUDIO)");
+        ImGui::Separator();
+        ImGui::Spacing();
 
-        m_hLblSim = CreateWindowW(L"STATIC", L"Сходство: --- % | Смещение: --- кадров", WS_VISIBLE | WS_CHILD | SS_CENTER, 20, 215, 920, 20, hWnd, NULL, NULL, NULL);
+        // 4 Step-by-Step Workflow Stage Buttons
+        if (ImGui::Button("1. 🔍 Поиск дубликатов (AcoustID)", ImVec2(240, 36))) {
+            if (!m_isScanning) {
+                m_isScanning = true;
+                LOG_INFO("Step 1: Running parallel AcoustID duplicate scan...");
+                m_candidates.clear();
+                m_autoDelete.clear();
+                m_currentCandidateIndex = 0;
 
-        m_hSeekSlider = CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS, 20, 240, 920, 30, hWnd, (HMENU)ID_SEEK_SLIDER, NULL, NULL);
-        SendMessage(m_hSeekSlider, TBM_SETRANGE, TRUE, MAKELONG(0, 1000));
-
-        m_hBtnPlay = CreateWindowW(L"BUTTON", L"▶ Проигрывать", WS_TABSTOP | WS_VISIBLE | WS_CHILD, 20, 280, 140, 36, hWnd, (HMENU)ID_BTN_PLAY, NULL, NULL);
-        m_hBtnToggleA = CreateWindowW(L"BUTTON", L"🔊 ТРЕК А (АКТИВЕН)", WS_TABSTOP | WS_VISIBLE | WS_CHILD, 170, 280, 200, 36, hWnd, (HMENU)ID_BTN_TOGGLE_A, NULL, NULL);
-        m_hBtnToggleB = CreateWindowW(L"BUTTON", L"🔈 ТРЕК Б", WS_TABSTOP | WS_VISIBLE | WS_CHILD, 380, 280, 200, 36, hWnd, (HMENU)ID_BTN_TOGGLE_B, NULL, NULL);
-
-        m_hLblStatus = CreateWindowW(L"STATIC", L"Горячие клавиши: Tab/S (A/B Hot-Swap) | 1: Оставить A | 2: Оставить B", WS_VISIBLE | WS_CHILD | SS_LEFT, 590, 290, 350, 20, hWnd, NULL, NULL, NULL);
-
-        m_hProgressBar = CreateWindowW(PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 20, 325, 920, 8, hWnd, NULL, NULL, NULL);
-        SendMessage(m_hProgressBar, PBM_SETRANGE, 0, MAKELONG(0, 100));
-
-        m_hLogBox = CreateWindowW(L"EDIT", L"Готов к работе...", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY, 20, 345, 920, 310, hWnd, NULL, NULL, NULL);
-
-        // Apply fonts
-        SendMessage(m_hBtnStep1, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
-        SendMessage(m_hBtnStep2, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
-        SendMessage(m_hBtnStep3, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
-        SendMessage(m_hBtnStep4, WM_SETFONT, (WPARAM)m_hFontBold, TRUE);
-        SendMessage(m_hLogBox, WM_SETFONT, (WPARAM)m_hFontMono, TRUE);
-
-        Logger::Instance().SetCallback([hWnd](const std::string& msg) {
-            std::wstring* pWmsg = new std::wstring(Utf8ToWide(msg));
-            PostMessageW(hWnd, WM_SCAN_PROGRESS, 0, (LPARAM)pWmsg);
-        });
-
-        SetTimer(hWnd, ID_TIMER_SEEK, 100, NULL);
-        break;
-    }
-    case WM_SCAN_PROGRESS: {
-        std::wstring* pMsg = (std::wstring*)lParam;
-        if (pMsg) {
-            std::wstring curr;
-            int len = GetWindowTextLengthW(m_hLogBox);
-            if (len < 128000) {
-                std::vector<wchar_t> buf(len + 1);
-                GetWindowTextW(m_hLogBox, buf.data(), len + 1);
-                curr = std::wstring(buf.data());
+                std::thread([this]() {
+                    AcousticAnalyzer::Instance().AnalyzeDirectory(g_ToSortDir, g_BaseDir, m_candidates, m_autoDelete);
+                    m_isScanning = false;
+                    PostMessageW(m_hWnd, WM_SCAN_FINISHED, 0, 0);
+                }).detach();
             }
-            curr += *pMsg + L"\r\n";
-            SetWindowTextW(m_hLogBox, curr.c_str());
-            SendMessageW(m_hLogBox, EM_LINESCROLL, 0, 10000);
-            delete pMsg;
         }
-        break;
-    }
-    case WM_SCAN_FINISHED: {
-        HandleScanFinished();
-        break;
-    }
-    case WM_COMMAND: {
-        int wmId = LOWORD(wParam);
-        switch (wmId) {
-        case ID_BTN_STEP1: {
-            EnableWindow(m_hBtnStep1, FALSE);
-            m_candidates.clear();
-            m_autoDelete.clear();
-            m_currentCandidateIndex = 0;
-
-            std::thread([this, hWnd]() {
-                AcousticAnalyzer::Instance().AnalyzeDirectory(g_ToSortDir, g_BaseDir, m_candidates, m_autoDelete);
-                PostMessageW(hWnd, WM_SCAN_FINISHED, 0, 0);
+        ImGui::SameLine();
+        if (ImGui::Button("2. 🏷️ Тегирование & Обложки", ImVec2(230, 36))) {
+            LOG_INFO("Step 2: Tagging canonical metadata & embedding cover art...");
+            std::thread([]() {
+                _popen("python process_collection.py", "r");
+                LOG_INFO("Step 2 Complete: Metadata tagged & covers embedded.");
             }).detach();
-            break;
         }
-        case ID_BTN_STEP2: {
-            LOG_INFO("[STEP 2] Tagging metadata & embedding cover art...");
-            std::string pyCmd = "python process_collection.py";
-            _popen(pyCmd.c_str(), "r");
-            LOG_INFO("[STEP 2 COMPLETE] Metadata tagged & original CD covers embedded.");
-            break;
+        ImGui::SameLine();
+        if (ImGui::Button("3. 📂 Зеркалирование FLAC/MP3", ImVec2(240, 36))) {
+            LOG_INFO("Step 3: Mirroring FLAC and MP3 collections...");
+            std::thread([]() {
+                _popen("python sync_music.py", "r");
+                LOG_INFO("Step 3 Complete: Collections 100% mirrored.");
+            }).detach();
         }
-        case ID_BTN_STEP3: {
-            LOG_INFO("[STEP 3] Mirroring FLAC and MP3 directories...");
-            std::string pyCmd = "python sync_music.py";
-            _popen(pyCmd.c_str(), "r");
-            LOG_INFO("[STEP 3 COMPLETE] Directories mirrored 1-in-1.");
-            break;
+        ImGui::SameLine();
+        if (ImGui::Button("4. 📝 Синхронизация Tracklist", ImVec2(240, 36))) {
+            LOG_INFO("Step 4: Syncing tracklist.md checkboxes...");
+            std::thread([]() {
+                _popen("python populate_and_check_tracklist.py", "r");
+                LOG_INFO("Step 4 Complete: tracklist.md updated.");
+            }).detach();
         }
-        case ID_BTN_STEP4: {
-            LOG_INFO("[STEP 4] Syncing tracklist.md database checkboxes...");
-            std::string pyCmd = "python populate_and_check_tracklist.py";
-            _popen(pyCmd.c_str(), "r");
-            LOG_INFO("[STEP 4 COMPLETE] tracklist.md checkboxes marked [x].");
-            break;
-        }
-        case ID_BTN_PLAY:
-            AudioEngine::Instance().TogglePlay();
-            SetWindowTextW(m_hBtnPlay, AudioEngine::Instance().IsPlaying() ? L"⏸ Пауза" : L"▶ Проигрывать");
-            break;
-        case ID_BTN_TOGGLE_A:
-            AudioEngine::Instance().SetActiveChannel('a');
-            SetWindowTextW(m_hBtnToggleA, L"🔊 ТРЕК А (АКТИВЕН)");
-            SetWindowTextW(m_hBtnToggleB, L"🔈 ТРЕК Б");
-            break;
-        case ID_BTN_TOGGLE_B:
-            AudioEngine::Instance().SetActiveChannel('b');
-            SetWindowTextW(m_hBtnToggleA, L"🔈 ТРЕК А");
-            SetWindowTextW(m_hBtnToggleB, L"🔊 ТРЕК Б (АКТИВЕН)");
-            break;
-        case ID_BTN_KEEP_A: {
-            if (m_currentCandidateIndex < m_candidates.size()) {
-                auto pair = m_candidates[m_currentCandidateIndex];
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Dual A/B Comparison Cards Layout
+        float halfWidth = (ImGui::GetContentRegionAvail().x - 16.0f) * 0.5f;
+
+        // Card A (Left)
+        ImGui::BeginChild("CardA", ImVec2(halfWidth, 180), true);
+        ImGui::TextDisabled("ТРЕК А (Левый)");
+        if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+            auto& pair = m_candidates[m_currentCandidateIndex];
+            ImGui::TextUnformatted(fs::path(pair.trackA_path).filename().string().c_str());
+            ImGui::Text("%s | %.1fs", pair.extA.c_str(), pair.durA);
+            ImGui::TextDisabled("%s", pair.relA.c_str());
+            ImGui::Spacing();
+            if (ImGui::Button("⚪ ОСТАВИТЬ ТРЕК А (Б ➔ delete)", ImVec2(-1, 36))) {
                 fs::path rel = fs::relative(pair.trackB_path, g_BaseDir);
                 fs::path dst = fs::path(g_DeleteDir) / rel;
                 fs::create_directories(dst.parent_path());
@@ -208,21 +249,28 @@ LRESULT AppWindow::HandleMessage(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 
                 m_currentCandidateIndex++;
                 if (m_currentCandidateIndex < m_candidates.size()) {
-                    auto next_p = m_candidates[m_currentCandidateIndex];
-                    AudioEngine::Instance().LoadTrackA(next_p.trackA_path);
-                    AudioEngine::Instance().LoadTrackB(next_p.trackB_path);
-        SetWindowTextW(m_hLblCardA, Utf8ToWide("ТРЕК А: " + fs::path(next_p.trackA_path).filename().string() + "\n" + next_p.relA).c_str());
-        SetWindowTextW(m_hLblCardB, Utf8ToWide("ТРЕК Б: " + fs::path(next_p.trackB_path).filename().string() + "\n" + next_p.relB).c_str());
-    } else {
-        SetWindowTextW(m_hLblCardA, L"✨ Все кандидаты обработаны!");
-        SetWindowTextW(m_hLblCardB, L"Файлы перемещены в delete/");
-    }
+                    auto& next = m_candidates[m_currentCandidateIndex];
+                    AudioEngine::Instance().LoadTrackA(next.trackA_path);
+                    AudioEngine::Instance().LoadTrackB(next.trackB_path);
+                }
             }
-            break;
+        } else {
+            ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
         }
-        case ID_BTN_KEEP_B: {
-            if (m_currentCandidateIndex < m_candidates.size()) {
-                auto pair = m_candidates[m_currentCandidateIndex];
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+
+        // Card B (Right)
+        ImGui::BeginChild("CardB", ImVec2(halfWidth, 180), true);
+        ImGui::TextDisabled("ТРЕК Б (Правый)");
+        if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+            auto& pair = m_candidates[m_currentCandidateIndex];
+            ImGui::TextUnformatted(fs::path(pair.trackB_path).filename().string().c_str());
+            ImGui::Text("%s | %.1fs", pair.extB.c_str(), pair.durB);
+            ImGui::TextDisabled("%s", pair.relB.c_str());
+            ImGui::Spacing();
+            if (ImGui::Button("⚪ ОСТАВИТЬ ТРЕК Б (А ➔ delete)", ImVec2(-1, 36))) {
                 fs::path rel = fs::relative(pair.trackA_path, g_BaseDir);
                 fs::path dst = fs::path(g_DeleteDir) / rel;
                 fs::create_directories(dst.parent_path());
@@ -232,52 +280,127 @@ LRESULT AppWindow::HandleMessage(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 
                 m_currentCandidateIndex++;
                 if (m_currentCandidateIndex < m_candidates.size()) {
-                    auto next_p = m_candidates[m_currentCandidateIndex];
-                    AudioEngine::Instance().LoadTrackA(next_p.trackA_path);
-                    AudioEngine::Instance().LoadTrackB(next_p.trackB_path);
-        SetWindowTextW(m_hLblCardA, Utf8ToWide("ТРЕК А: " + fs::path(next_p.trackA_path).filename().string() + "\n" + next_p.relA).c_str());
-        SetWindowTextW(m_hLblCardB, Utf8ToWide("ТРЕК Б: " + fs::path(next_p.trackB_path).filename().string() + "\n" + next_p.relB).c_str());
-    } else {
-        SetWindowTextW(m_hLblCardA, L"✨ Все кандидаты обработаны!");
-        SetWindowTextW(m_hLblCardB, L"Файлы перемещены в delete/");
-    }
+                    auto& next = m_candidates[m_currentCandidateIndex];
+                    AudioEngine::Instance().LoadTrackA(next.trackA_path);
+                    AudioEngine::Instance().LoadTrackB(next.trackB_path);
+                }
             }
-            break;
+        } else {
+            ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
         }
+        ImGui::EndChild();
+
+        ImGui::Spacing();
+
+        // Audio Player Controls & Wave Similarity Section
+        ImGui::BeginChild("PlayerControls", ImVec2(0, 140), true);
+        if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+            auto& pair = m_candidates[m_currentCandidateIndex];
+            ImGui::Text("Сходство волн: %.1f%% | Смещение фазы: %d кадров", pair.similarity, pair.offset);
+        } else {
+            ImGui::TextDisabled("Сходство волн: --- % | Смещение фазы: --- кадров");
         }
-        break;
+
+        double cur = AudioEngine::Instance().GetCurrentPositionSeconds();
+        double dur = AudioEngine::Instance().GetDurationSeconds();
+        float seek_val = (dur > 0.0) ? (float)(cur / dur) : 0.0f;
+
+        if (ImGui::SliderFloat("##SeekSlider", &seek_val, 0.0f, 1.0f, "Position: %.1f sec")) {
+            AudioEngine::Instance().SeekToPercentage((double)seek_val * 100.0);
+        }
+
+        if (ImGui::Button(AudioEngine::Instance().IsPlaying() ? "⏸ ПАУЗА" : "▶ ПРОИГРЫВАТЬ", ImVec2(140, 36))) {
+            AudioEngine::Instance().TogglePlay();
+        }
+        ImGui::SameLine();
+
+        char ch = AudioEngine::Instance().GetActiveChannel();
+        if (ch == 'a') {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
+        }
+        if (ImGui::Button("🔊 ТРЕК А [1]", ImVec2(160, 36))) {
+            AudioEngine::Instance().SetActiveChannel('a');
+        }
+        if (ch == 'a') ImGui::PopStyleColor(2);
+
+        ImGui::SameLine();
+        if (ch == 'b') {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
+        }
+        if (ImGui::Button("🔈 ТРЕК Б [2]", ImVec2(160, 36))) {
+            AudioEngine::Instance().SetActiveChannel('b');
+        }
+        if (ch == 'b') ImGui::PopStyleColor(2);
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("Горячие клавиши: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
+        ImGui::EndChild();
+
+        ImGui::Spacing();
+
+        // Log Console Panel
+        ImGui::BeginChild("LogConsole", ImVec2(0, 0), true);
+        ImGui::TextDisabled("📜 ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
+        ImGui::Separator();
+        auto logs = Logger::Instance().GetLogs();
+        for (const auto& log : logs) {
+            ImGui::TextUnformatted(log.c_str());
+        }
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+            ImGui::SetScrollHereY(1.0f);
+        }
+        ImGui::EndChild();
+
+        ImGui::End();
+
+        // Rendering Frame
+        ImGui::Render();
+        const float clear_color_with_alpha[4] = { 0.07f, 0.07f, 0.07f, 1.00f };
+        m_pd3dDeviceContext->OMSetRenderTargets(1, &m_mainRenderTargetView, NULL);
+        m_pd3dDeviceContext->ClearRenderTargetView(m_mainRenderTargetView, clear_color_with_alpha);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+        m_pSwapChain->Present(1, 0); // Present with vsync 60 FPS
     }
-    case WM_TIMER: {
-        if (wParam == ID_TIMER_SEEK && AudioEngine::Instance().IsPlaying()) {
-            double dur = AudioEngine::Instance().GetDurationSeconds();
-            double cur = AudioEngine::Instance().GetCurrentPositionSeconds();
-            if (dur > 0.0) {
-                int pos = (int)((cur / dur) * 1000.0);
-                SendMessage(m_hSeekSlider, TBM_SETPOS, TRUE, pos);
-            }
+}
+
+LRESULT CALLBACK AppWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+        return true;
+
+    switch (msg) {
+    case WM_SCAN_FINISHED:
+        Instance().HandleScanFinished();
+        return 0;
+    case WM_SIZE:
+        if (Instance().m_pd3dDevice != NULL && wParam != SIZE_MINIMIZED) {
+            Instance().CleanupRenderTarget();
+            Instance().m_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
+            Instance().CreateRenderTarget();
         }
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
         break;
-    }
     case WM_DESTROY:
-        KillTimer(hWnd, ID_TIMER_SEEK);
         PostQuitMessage(0);
-        break;
-    default:
-        return DefWindowProcW(hWnd, msg, wParam, lParam);
+        return 0;
     }
-    return 0;
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
 void AppWindow::HandleScanFinished() {
-    EnableWindow(m_hBtnStep1, TRUE);
-    LOG_INFO("Scan process complete. Found " + std::to_string(m_candidates.size()) + " candidate pairs for A/B comparison.");
+    LOG_INFO("Scan process finished. Found " + std::to_string(m_candidates.size()) + " candidates for A/B comparison.");
 
-    for (const auto& p : m_autoDelete) {
+    for (const std::string& pathStr : m_autoDelete) {
+        fs::path p(pathStr);
         if (fs::exists(p)) {
-            fs::path rel = fs::relative(p, g_BaseDir);
+            fs::path rel = fs::relative(p, fs::path(g_BaseDir));
             fs::path dst = fs::path(g_DeleteDir) / rel;
             fs::create_directories(dst.parent_path());
-            LOG_INFO("[AUTO-DELETE] Moving exact MP3 duplicate to delete/: " + rel.string());
+            LOG_INFO("[AUTO-DELETE] Moving 100% exact MP3 duplicate to delete/: " + rel.string());
             if (fs::exists(dst)) fs::remove(dst);
             fs::rename(p, dst);
         }
@@ -285,15 +408,8 @@ void AppWindow::HandleScanFinished() {
 
     if (!m_candidates.empty()) {
         m_currentCandidateIndex = 0;
-        auto pair = m_candidates[0];
+        auto& pair = m_candidates[0];
         AudioEngine::Instance().LoadTrackA(pair.trackA_path);
         AudioEngine::Instance().LoadTrackB(pair.trackB_path);
-
-        SetWindowTextW(m_hLblCardA, Utf8ToWide("ТРЕК А: " + fs::path(pair.trackA_path).filename().string() + "\n" + pair.relA).c_str());
-        SetWindowTextW(m_hLblCardB, Utf8ToWide("ТРЕК Б: " + fs::path(pair.trackB_path).filename().string() + "\n" + pair.relB).c_str());
-        SetWindowTextW(m_hLblSim, Utf8ToWide("Сходство волн: " + std::to_string((int)pair.similarity) + "% | Смещение: " + std::to_string(pair.offset) + " кадров").c_str());
-    } else {
-        SetWindowTextW(m_hLblCardA, L"✨ Похожие кандидаты не найдены!");
-        SetWindowTextW(m_hLblCardB, L"Папка TO SORT полностью обработана.");
     }
 }
