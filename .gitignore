@@ -13,3 +13,6 @@
 # Ignore Python cache
 __pycache__/
 *.pyc
+
+# Ignore fpcalc executable
+fpcalc.exe
