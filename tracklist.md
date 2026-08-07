@@ -448,3 +448,31 @@
 ### 💿 Barrage Am Ring 1 B/side
 
 - [ ] **Beyond the boundary** (4:15)
+
+## 👤 T-Rify.D (Lune & -45)
+
+### 💿 Monokuro (モノクロ) (2007)
+
+### 💿 Ankoku Douwa (2008)
+
+### 💿 Kikeiju (畸茎樹) (2008)
+
+### 💿 Kakurika (2008)
+
+### 💿 Enri Edo (厭離穢土) (2009)
+
+### 💿 Kukuri (2009)
+
+### 💿 Midori (2010)
+
+### 💿 Iranai Ver 0.5 (2010)
+
+### 💿 Iranai (2011)
+
+### 💿 Haiiro (2011)
+
+### 💿 Carnival (2012)
+
+### 💿 Border (2012)
+
+### 💿 Wakuraba (2013)
