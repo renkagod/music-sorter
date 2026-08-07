@@ -10,9 +10,8 @@
 # Ignore ZIP backup archives
 *.zip
 
-# Ignore Python cache
+# Ignore Python cache and binary tools
 __pycache__/
 *.pyc
-
-# Ignore fpcalc executable
 fpcalc.exe
+chromaprint-*/
