@@ -17,12 +17,21 @@ static int BitCount64(unsigned long long v) {
 #endif
 }
 
+static std::wstring Utf8ToWideStr(const std::string& str) {
+    if (str.empty()) return L"";
+    int len = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), NULL, 0);
+    std::wstring wstr(len, 0);
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), &wstr[0], len);
+    return wstr;
+}
+
 AudioFingerprint AcousticAnalyzer::ExtractFingerprint(const std::string& filepath) {
     AudioFingerprint res;
     res.path = filepath;
 
-    std::wstring wBin = std::wstring(m_fpcalcBin.begin(), m_fpcalcBin.end());
-    std::wstring wCmd = L"\"" + wBin + L"\" -raw \"" + std::wstring(filepath.begin(), filepath.end()) + L"\"";
+    std::wstring wBin = Utf8ToWideStr(m_fpcalcBin);
+    std::wstring wFile = Utf8ToWideStr(filepath);
+    std::wstring wCmd = L"\"" + wBin + L"\" -raw \"" + wFile + L"\"";
 
     HANDLE hRead, hWrite;
     SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
@@ -75,6 +84,11 @@ AudioFingerprint AcousticAnalyzer::ExtractFingerprint(const std::string& filepat
             }
         }
     }
+
+    if (res.fpData.empty()) {
+        LOG_WARN("fpcalc failed to produce fingerprint for: " + fs::path(filepath).filename().string());
+    }
+
     return res;
 }
 
@@ -175,7 +189,7 @@ void AcousticAnalyzer::AnalyzeDirectory(
                 std::string rel1 = fs::relative(f1.path, baseDirectory).string();
                 std::string rel2 = fs::relative(f2.path, baseDirectory).string();
 
-                if (sim >= 0.88) { // 88%+ threshold for exact wave duplicates (handles offset pre-gaps)
+                if (sim >= 0.85) {
                     std::string autoDelPath;
                     if (ext1 == ".flac" && ext2 == ".mp3") autoDelPath = f2.path;
                     else if (ext2 == ".flac" && ext1 == ".mp3") autoDelPath = f1.path;
@@ -185,7 +199,7 @@ void AcousticAnalyzer::AnalyzeDirectory(
 
                     LOG_INFO("[AUTO-DELETE MATCH " + std::to_string((int)(sim * 100)) + "%] Moving duplicate to delete/: " + fs::relative(autoDelPath, baseDirectory).string());
                     outAutoDelete.push_back(autoDelPath);
-                } else if (sim >= 0.75) {
+                } else if (sim >= 0.70) {
                     LOG_INFO("[A/B CANDIDATE MATCH " + std::to_string((int)(sim * 100)) + "%] " + rel1 + " <==> " + rel2);
                     ABCandidatePair pair;
                     pair.id = "pair_" + std::to_string(outCandidates.size() + 1);
