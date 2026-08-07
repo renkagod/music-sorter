@@ -5,9 +5,12 @@
 ### 💿 45CD Project (2003)
 
 - [x] **45_A** (1:47) [MP3]
+- [x] **SLK_3535** (0:10) [MP3]
+- [x] **SOA_774** (0:47) [MP3]
+- [x] **SOA_ug_hositown** (0:52) [MP3]
 - [x] **akito_tuioku** (2:06) [MP3]
-- [x] **coda_zerowing** (0:14) [MP3]
 - [x] **c_-45_01** (2:10) [MP3]
+- [x] **coda_zerowing** (0:14) [MP3]
 - [x] **fether_glocken** (0:39) [MP3]
 - [x] **fether_house** (1:02) [MP3]
 - [x] **fether_rif** (2:16) [MP3]
@@ -28,15 +31,12 @@
 - [x] **siromaru_minimal** (2:27) [MP3]
 - [x] **siromaru_nanikore** (0:50) [MP3]
 - [x] **siromaru_overheat** (1:13) [MP3]
-- [x] **SLK_3535** (0:10) [MP3]
 - [x] **slk_postondo** (1:26) [MP3]
 - [x] **snow_benew** (1:40) [MP3]
 - [x] **snow_kimigayo** (0:59) [MP3]
 - [x] **snow_niigata** (0:27) [MP3]
-- [x] **SOA_774** (0:47) [MP3]
 - [x] **soa_mks** (1:54) [MP3]
 - [x] **soa_rottel** (0:15) [MP3]
-- [x] **SOA_ug_hositown** (0:52) [MP3]
 - [x] **sta_sofa_dollar15** (0:08) [MP3]
 - [x] **tr46_voice** (0:12) [MP3]
 - [x] **yamajet_59cnk** (2:34) [MP3]
@@ -145,12 +145,6 @@
 - [x] **しか見えない空** (4:08) [MP3]
 - [x] **メメント** (4:05) [MP3]
 - [x] **楽しかった事** (4:04) [MP3]
-- [x] **いらないこ** (4:52) [MP3]
-
-### 💿 Iranai Ver 0.5 (2010)
-
-- [x] **徐ら** (4:18) [MP3]
-- [x] **メメント** (4:05) [MP3]
 - [x] **いらないこ** (4:52) [MP3]
 
 ### 💿 Kakurika (2008)
