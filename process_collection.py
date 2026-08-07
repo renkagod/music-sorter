@@ -25,13 +25,13 @@ logging.basicConfig(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FPCALC_BIN = os.path.join(BASE_DIR, 'fpcalc.exe')
 TOSORT_DIR = os.path.join(BASE_DIR, 'TO SORT')
-FLAC_DIR = os.path.join(BASE_DIR, 'flac', "D'va;;;;;;;;5")
-MP3_DIR = os.path.join(BASE_DIR, 'mp3', "D'va;;;;;;;;5")
+FLAC_ROOT = os.path.join(BASE_DIR, 'flac')
+MP3_ROOT = os.path.join(BASE_DIR, 'mp3')
 REVIEW_DIR = os.path.join(BASE_DIR, 'review')
 TRACKLIST_PATH = os.path.join(BASE_DIR, 'tracklist.md')
 
-os.makedirs(FLAC_DIR, exist_ok=True)
-os.makedirs(MP3_DIR, exist_ok=True)
+os.makedirs(FLAC_ROOT, exist_ok=True)
+os.makedirs(MP3_ROOT, exist_ok=True)
 os.makedirs(REVIEW_DIR, exist_ok=True)
 
 DISCOGS_MAP = [
@@ -71,7 +71,7 @@ def normalize_key(name):
     s = re.sub(r'[\s\-_/\\,.\u2044\u2215\u3013\uFF5E]+', '', s)
     return s.lower().strip()
 
-def match_canonical_album(full_path):
+def match_canonical_album(full_path, default_album):
     parts = full_path.replace(TOSORT_DIR, '').split(os.sep)
     full_str = " ".join(parts)
     norm_full = normalize_key(full_str)
@@ -83,7 +83,8 @@ def match_canonical_album(full_path):
                 return canonical
 
     if 'archive' in norm_full: return 'Archives'
-    return 'Unsorted'
+    clean = re.sub(r'\[[^\]]*\]|\{[^\}]*\}|\([^\)]*\)', '', default_album).strip()
+    return clean if clean else 'Unknown Album'
 
 def get_fpcalc_raw(filepath):
     if not os.path.exists(FPCALC_BIN): return None
@@ -183,7 +184,8 @@ def run_organize_and_tag():
         audio_files = [f for f in files if f.lower().endswith(('.flac', '.mp3'))]
         if not audio_files: continue
 
-        canonical_album = match_canonical_album(root)
+        folder_name = os.path.basename(root)
+        canonical_album = match_canonical_album(root, folder_name)
         cover_image = find_cover_image(root)
         if not cover_image: cover_image = find_cover_image(os.path.dirname(root))
 
@@ -194,7 +196,7 @@ def run_organize_and_tag():
             try:
                 audio = mutagen.File(filepath)
                 title = os.path.splitext(f)[0]
-                artist = "-45"
+                artist = "D'va;;;;;;;;5"
                 track_no = "01"
 
                 num_m = re.match(r'^(\d{1,2})[\.\s_\-]', f)
@@ -207,10 +209,14 @@ def run_organize_and_tag():
                     artist = art_val[0] if isinstance(art_val, list) else art_val
 
                 artist_clean = str(artist).strip()
-                if not artist_clean or artist_clean == "Unknown Artist": artist_clean = "-45"
+                if not artist_clean or artist_clean.lower() in ['unknown artist', '-45', 'dva5']:
+                    artist_clean = "D'va;;;;;;;;5"
 
                 title_clean = str(title).strip()
                 title_clean = re.sub(r'^\d{1,2}[\.\s_\-]+', '', title_clean).strip()
+
+                # Multi-artist support: top folder is artist_clean
+                folder_artist = artist_clean
 
                 if ext == '.flac':
                     flac_audio = FLAC(filepath)
@@ -221,12 +227,12 @@ def run_organize_and_tag():
                     if cover_image: embed_cover_art_flac(flac_audio, cover_image)
                     flac_audio.save()
 
-                    dest_dir = os.path.join(FLAC_DIR, canonical_album)
+                    dest_dir = os.path.join(FLAC_ROOT, folder_artist, canonical_album)
                     os.makedirs(dest_dir, exist_ok=True)
                     dest_filename = f"{track_no} - {title_clean}.flac"
                     dest_path = os.path.join(dest_dir, dest_filename)
 
-                    logging.info(f"[FLAC] D'va;;;;;;;;5 / {canonical_album} / {dest_filename}")
+                    logging.info(f"[FLAC] {folder_artist} / {canonical_album} / {dest_filename}")
                     shutil.copy2(filepath, dest_path)
 
                 elif ext == '.mp3':
@@ -239,12 +245,12 @@ def run_organize_and_tag():
                     if cover_image: embed_cover_art_mp3(mp3_audio, cover_image)
                     mp3_audio.save()
 
-                    dest_dir = os.path.join(MP3_DIR, canonical_album)
+                    dest_dir = os.path.join(MP3_ROOT, folder_artist, canonical_album)
                     os.makedirs(dest_dir, exist_ok=True)
                     dest_filename = f"{track_no} - {title_clean}.mp3"
                     dest_path = os.path.join(dest_dir, dest_filename)
 
-                    logging.info(f"[MP3] D'va;;;;;;;;5 / {canonical_album} / {dest_filename}")
+                    logging.info(f"[MP3] {folder_artist} / {canonical_album} / {dest_filename}")
                     shutil.copy2(filepath, dest_path)
 
             except Exception as e:
@@ -252,11 +258,11 @@ def run_organize_and_tag():
 
     # FLAC Fallback Rule
     logging.info("--- Step 3: Applying FLAC Fallback Rule ---")
-    for root, _, files in os.walk(MP3_DIR):
+    for root, _, files in os.walk(MP3_ROOT):
         for f in files:
             if f.lower().endswith('.mp3'):
-                rel_dir = os.path.relpath(root, MP3_DIR)
-                flac_target_dir = os.path.join(FLAC_DIR, rel_dir)
+                rel_dir = os.path.relpath(root, MP3_ROOT)
+                flac_target_dir = os.path.join(FLAC_ROOT, rel_dir)
                 flac_equivalent_file = os.path.splitext(f)[0] + '.flac'
 
                 if not os.path.exists(os.path.join(flac_target_dir, flac_equivalent_file)):
@@ -272,7 +278,7 @@ def sync_tracklist_checkboxes():
     if not os.path.exists(TRACKLIST_PATH): return
 
     flac_titles = set()
-    for root, _, files in os.walk(FLAC_DIR):
+    for root, _, files in os.walk(FLAC_ROOT):
         for f in files:
             if f.lower().endswith(('.flac', '.mp3')):
                 t = os.path.splitext(f)[0]
