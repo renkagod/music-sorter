@@ -95,29 +95,39 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Full Japanese (CJK) + Cyrillic + Latin Glyph Ranges
-    static const ImWchar ranges[] = {
+    // 1. Primary Font: Segoe UI for crisp English, Russian, and Latin
+    ImFontConfig font_cfg_primary;
+    font_cfg_primary.FontDataOwnedByAtlas = false;
+    static const ImWchar ranges_latin_cyrillic[] = {
         0x0020, 0x00FF, // Basic Latin + Latin Supplement
         0x0400, 0x052F, // Cyrillic + Cyrillic Supplement
         0x2000, 0x206F, // General Punctuation
+        0,
+    };
+
+    if (fs::exists("C:\\Windows\\Fonts\\segoeui.ttf")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 16.0f, &font_cfg_primary, ranges_latin_cyrillic);
+    } else if (fs::exists("C:\\Windows\\Fonts\\arial.ttf")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\arial.ttf", 16.0f, &font_cfg_primary, ranges_latin_cyrillic);
+    }
+
+    // 2. Merged CJK Font: MS Gothic / YuGothM for Japanese Hiragana, Katakana, and Kanji
+    ImFontConfig font_cfg_cjk;
+    font_cfg_cjk.FontDataOwnedByAtlas = false;
+    font_cfg_cjk.MergeMode = true; // Merge Japanese glyphs seamlessly into Segoe UI primary font!
+
+    static const ImWchar ranges_cjk[] = {
         0x3000, 0x30FF, // CJK Symbols and Punctuation + Hiragana + Katakana
         0x31F0, 0x31FF, // Katakana Phonetic Extensions
         0x4E00, 0x9FAF, // CJK Unified Ideographs
         0xFF00, 0xFFEF, // Halfwidth and Fullwidth Forms
         0,
     };
-    
-    ImFontConfig font_cfg;
-    font_cfg.FontDataOwnedByAtlas = false;
-    
+
     if (fs::exists("C:\\Windows\\Fonts\\msgothic.ttc")) {
-        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msgothic.ttc", 16.0f, &font_cfg, ranges);
-    } else if (fs::exists("C:\\Windows\\Fonts\\YuGothR.ttc")) {
-        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\YuGothR.ttc", 16.0f, &font_cfg, ranges);
-    } else if (fs::exists("C:\\Windows\\Fonts\\simsun.ttc")) {
-        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\simsun.ttc", 16.0f, &font_cfg, ranges);
-    } else if (fs::exists("C:\\Windows\\Fonts\\segoeui.ttf")) {
-        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 16.0f, &font_cfg, ranges);
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msgothic.ttc", 16.0f, &font_cfg_cjk, ranges_cjk);
+    } else if (fs::exists("C:\\Windows\\Fonts\\YuGothM.ttc")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\YuGothM.ttc", 16.0f, &font_cfg_cjk, ranges_cjk);
     }
 
     // Apply Sleek Dark Monochrome Styling
@@ -238,7 +248,7 @@ void AppWindow::RunMessageLoop() {
         ImGui::Spacing();
 
         // 4 Step-by-Step Workflow Stage Buttons
-        if (ImGui::Button("1. 🔍 Поиск дубликатов (AcoustID)", ImVec2(240, 36))) {
+        if (ImGui::Button("1. [Поиск] Дубликаты (AcoustID)", ImVec2(240, 36))) {
             if (!m_isScanning) {
                 m_isScanning = true;
                 LOG_INFO("Step 1: Running parallel AcoustID duplicate scan...");
@@ -254,7 +264,7 @@ void AppWindow::RunMessageLoop() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("2. 🏷️ Тегирование & Обложки", ImVec2(230, 36))) {
+        if (ImGui::Button("2. [Теги] Метаданные & Обложки", ImVec2(230, 36))) {
             LOG_INFO("Step 2: Tagging canonical metadata & embedding cover art...");
             std::thread([]() {
                 _popen("python process_collection.py", "r");
@@ -262,7 +272,7 @@ void AppWindow::RunMessageLoop() {
             }).detach();
         }
         ImGui::SameLine();
-        if (ImGui::Button("3. 📂 Зеркалирование FLAC/MP3", ImVec2(240, 36))) {
+        if (ImGui::Button("3. [Сортировка] Папки FLAC/MP3", ImVec2(240, 36))) {
             LOG_INFO("Step 3: Mirroring FLAC and MP3 collections...");
             std::thread([]() {
                 _popen("python sync_music.py", "r");
@@ -270,7 +280,7 @@ void AppWindow::RunMessageLoop() {
             }).detach();
         }
         ImGui::SameLine();
-        if (ImGui::Button("4. 📝 Синхронизация Tracklist", ImVec2(240, 36))) {
+        if (ImGui::Button("4. [Реестр] Обновление Tracklist", ImVec2(240, 36))) {
             LOG_INFO("Step 4: Syncing tracklist.md checkboxes...");
             std::thread([]() {
                 _popen("python populate_and_check_tracklist.py", "r");
@@ -294,7 +304,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::Text("%s | %.1fs", pair.extA.c_str(), pair.durA);
             ImGui::TextDisabled("%s", pair.relA.c_str());
             ImGui::Spacing();
-            if (ImGui::Button("⚪ ОСТАВИТЬ ТРЕК А (Б ➔ delete)", ImVec2(-1, 36))) {
+            if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК А (Б -> delete)", ImVec2(-1, 36))) {
                 MakeDecisionA();
             }
         } else {
@@ -313,7 +323,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::Text("%s | %.1fs", pair.extB.c_str(), pair.durB);
             ImGui::TextDisabled("%s", pair.relB.c_str());
             ImGui::Spacing();
-            if (ImGui::Button("⚪ ОСТАВИТЬ ТРЕК Б (А ➔ delete)", ImVec2(-1, 36))) {
+            if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК Б (А -> delete)", ImVec2(-1, 36))) {
                 MakeDecisionB();
             }
         } else {
@@ -340,7 +350,7 @@ void AppWindow::RunMessageLoop() {
             AudioEngine::Instance().SeekToPercentage((double)seek_val * 100.0);
         }
 
-        if (ImGui::Button(AudioEngine::Instance().IsPlaying() ? "⏸ ПАУЗА" : "▶ ПРОИГРЫВАТЬ", ImVec2(140, 36))) {
+        if (ImGui::Button(AudioEngine::Instance().IsPlaying() ? "[||] ПАУЗА" : "[>] ПРОИГРЫВАТЬ", ImVec2(140, 36))) {
             AudioEngine::Instance().TogglePlay();
         }
         ImGui::SameLine();
@@ -350,7 +360,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
         }
-        if (ImGui::Button("🔊 ТРЕК А [1]", ImVec2(160, 36))) {
+        if (ImGui::Button("ТРЕК А [1]", ImVec2(140, 36))) {
             AudioEngine::Instance().SetActiveChannel('a');
         }
         if (ch == 'a') ImGui::PopStyleColor(2);
@@ -360,7 +370,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
         }
-        if (ImGui::Button("🔈 ТРЕК Б [2]", ImVec2(160, 36))) {
+        if (ImGui::Button("ТРЕК Б [2]", ImVec2(140, 36))) {
             AudioEngine::Instance().SetActiveChannel('b');
         }
         if (ch == 'b') ImGui::PopStyleColor(2);
@@ -368,7 +378,7 @@ void AppWindow::RunMessageLoop() {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(160);
         float masterVolPercent = AudioEngine::Instance().GetMasterVolume() * 100.0f;
-        if (ImGui::SliderFloat("##MasterVolSlider", &masterVolPercent, 0.0f, 100.0f, "🔊 Vol: %.0f%%")) {
+        if (ImGui::SliderFloat("##MasterVolSlider", &masterVolPercent, 0.0f, 100.0f, "Vol: %.0f%%")) {
             AudioEngine::Instance().SetMasterVolume(masterVolPercent / 100.0f);
         }
 
@@ -380,9 +390,9 @@ void AppWindow::RunMessageLoop() {
 
         // Log Console Panel
         ImGui::BeginChild("LogConsole", ImVec2(0, 0), true);
-        ImGui::TextDisabled("📜 ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
+        ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
         ImGui::SameLine();
-        if (ImGui::Button("📋 Копировать весь лог в буфер обмена")) {
+        if (ImGui::Button("Копировать весь лог в буфер обмена")) {
             auto logs = Logger::Instance().GetLogs();
             std::string full_log;
             for (const auto& log : logs) full_log += log + "\n";
