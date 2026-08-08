@@ -78,7 +78,7 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 
     RegisterClassExW(&wcex);
 
-    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Desktop - Modern Monochrome C++ Studio", WS_OVERLAPPEDWINDOW, 100, 100, 1060, 740, NULL, NULL, hInstance, NULL);
+    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Desktop - Modern Monochrome C++ Studio", WS_OVERLAPPEDWINDOW, 100, 100, 1080, 760, NULL, NULL, hInstance, NULL);
 
     if (!CreateDeviceD3D(m_hWnd)) {
         CleanupDeviceD3D();
@@ -95,22 +95,29 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Load Font with Cyrillic Glyphs
-    ImFontConfig font_cfg;
-    font_cfg.FontDataOwnedByAtlas = false;
+    // Full Japanese (CJK) + Cyrillic + Latin Glyph Ranges
     static const ImWchar ranges[] = {
         0x0020, 0x00FF, // Basic Latin + Latin Supplement
         0x0400, 0x052F, // Cyrillic + Cyrillic Supplement
         0x2000, 0x206F, // General Punctuation
         0x3000, 0x30FF, // CJK Symbols and Punctuation + Hiragana + Katakana
-        0x4E00, 0x9FFF, // CJK Unified Ideographs
+        0x31F0, 0x31FF, // Katakana Phonetic Extensions
+        0x4E00, 0x9FAF, // CJK Unified Ideographs
+        0xFF00, 0xFFEF, // Halfwidth and Fullwidth Forms
         0,
     };
     
-    if (fs::exists("C:\\Windows\\Fonts\\segoeui.ttf")) {
+    ImFontConfig font_cfg;
+    font_cfg.FontDataOwnedByAtlas = false;
+    
+    if (fs::exists("C:\\Windows\\Fonts\\msgothic.ttc")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msgothic.ttc", 16.0f, &font_cfg, ranges);
+    } else if (fs::exists("C:\\Windows\\Fonts\\YuGothR.ttc")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\YuGothR.ttc", 16.0f, &font_cfg, ranges);
+    } else if (fs::exists("C:\\Windows\\Fonts\\simsun.ttc")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\simsun.ttc", 16.0f, &font_cfg, ranges);
+    } else if (fs::exists("C:\\Windows\\Fonts\\segoeui.ttf")) {
         io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 16.0f, &font_cfg, ranges);
-    } else if (fs::exists("C:\\Windows\\Fonts\\arial.ttf")) {
-        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\arial.ttf", 16.0f, &font_cfg, ranges);
     }
 
     // Apply Sleek Dark Monochrome Styling
@@ -162,15 +169,63 @@ void AppWindow::RunMessageLoop() {
         }
         if (done) break;
 
-        // Handle Scan Finished Message
-        if (m_isScanning) {
-            // Processing GUI background scan
-        }
-
         // Start Dear ImGui Frame
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
+
+        // Global Keyboard Hotkeys Handlers
+        if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+            AudioEngine::Instance().TogglePlay();
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false) || ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+            AudioEngine::Instance().SetActiveChannel(AudioEngine::Instance().GetActiveChannel() == 'a' ? 'b' : 'a');
+        }
+
+        auto MakeDecisionA = [this]() {
+            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+                auto& pair = m_candidates[m_currentCandidateIndex];
+                fs::path rel = fs::relative(pair.trackB_path, g_BaseDir);
+                fs::path dst = fs::path(g_DeleteDir) / rel;
+                fs::create_directories(dst.parent_path());
+                LOG_INFO("[DECISION] Keeping Track A. Moving rejected Track B to delete/: " + rel.string());
+                if (fs::exists(dst)) fs::remove(dst);
+                fs::rename(pair.trackB_path, dst);
+
+                m_currentCandidateIndex++;
+                if (m_currentCandidateIndex < m_candidates.size()) {
+                    auto& next = m_candidates[m_currentCandidateIndex];
+                    AudioEngine::Instance().LoadTrackA(next.trackA_path);
+                    AudioEngine::Instance().LoadTrackB(next.trackB_path);
+                }
+            }
+        };
+
+        auto MakeDecisionB = [this]() {
+            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+                auto& pair = m_candidates[m_currentCandidateIndex];
+                fs::path rel = fs::relative(pair.trackA_path, g_BaseDir);
+                fs::path dst = fs::path(g_DeleteDir) / rel;
+                fs::create_directories(dst.parent_path());
+                LOG_INFO("[DECISION] Keeping Track B. Moving rejected Track A to delete/: " + rel.string());
+                if (fs::exists(dst)) fs::remove(dst);
+                fs::rename(pair.trackA_path, dst);
+
+                m_currentCandidateIndex++;
+                if (m_currentCandidateIndex < m_candidates.size()) {
+                    auto& next = m_candidates[m_currentCandidateIndex];
+                    AudioEngine::Instance().LoadTrackA(next.trackA_path);
+                    AudioEngine::Instance().LoadTrackB(next.trackB_path);
+                }
+            }
+        };
+
+        if (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_A, false)) {
+            MakeDecisionA();
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_B, false)) {
+            MakeDecisionB();
+        }
 
         // Main UI Window
         ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -240,19 +295,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::TextDisabled("%s", pair.relA.c_str());
             ImGui::Spacing();
             if (ImGui::Button("⚪ ОСТАВИТЬ ТРЕК А (Б ➔ delete)", ImVec2(-1, 36))) {
-                fs::path rel = fs::relative(pair.trackB_path, g_BaseDir);
-                fs::path dst = fs::path(g_DeleteDir) / rel;
-                fs::create_directories(dst.parent_path());
-                LOG_INFO("[DECISION] Moving rejected Track B to delete/: " + rel.string());
-                if (fs::exists(dst)) fs::remove(dst);
-                fs::rename(pair.trackB_path, dst);
-
-                m_currentCandidateIndex++;
-                if (m_currentCandidateIndex < m_candidates.size()) {
-                    auto& next = m_candidates[m_currentCandidateIndex];
-                    AudioEngine::Instance().LoadTrackA(next.trackA_path);
-                    AudioEngine::Instance().LoadTrackB(next.trackB_path);
-                }
+                MakeDecisionA();
             }
         } else {
             ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
@@ -271,19 +314,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::TextDisabled("%s", pair.relB.c_str());
             ImGui::Spacing();
             if (ImGui::Button("⚪ ОСТАВИТЬ ТРЕК Б (А ➔ delete)", ImVec2(-1, 36))) {
-                fs::path rel = fs::relative(pair.trackA_path, g_BaseDir);
-                fs::path dst = fs::path(g_DeleteDir) / rel;
-                fs::create_directories(dst.parent_path());
-                LOG_INFO("[DECISION] Moving rejected Track A to delete/: " + rel.string());
-                if (fs::exists(dst)) fs::remove(dst);
-                fs::rename(pair.trackA_path, dst);
-
-                m_currentCandidateIndex++;
-                if (m_currentCandidateIndex < m_candidates.size()) {
-                    auto& next = m_candidates[m_currentCandidateIndex];
-                    AudioEngine::Instance().LoadTrackA(next.trackA_path);
-                    AudioEngine::Instance().LoadTrackB(next.trackB_path);
-                }
+                MakeDecisionB();
             }
         } else {
             ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
@@ -335,10 +366,10 @@ void AppWindow::RunMessageLoop() {
         if (ch == 'b') ImGui::PopStyleColor(2);
 
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(150);
-        float masterVol = AudioEngine::Instance().GetMasterVolume();
-        if (ImGui::SliderFloat("##MasterVolSlider", &masterVol, 0.0f, 1.0f, "🔊 Vol: %.0f%%")) {
-            AudioEngine::Instance().SetMasterVolume(masterVol);
+        ImGui::SetNextItemWidth(160);
+        float masterVolPercent = AudioEngine::Instance().GetMasterVolume() * 100.0f;
+        if (ImGui::SliderFloat("##MasterVolSlider", &masterVolPercent, 0.0f, 100.0f, "🔊 Vol: %.0f%%")) {
+            AudioEngine::Instance().SetMasterVolume(masterVolPercent / 100.0f);
         }
 
         ImGui::SameLine();
