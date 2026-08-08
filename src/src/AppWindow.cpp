@@ -93,7 +93,8 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // Disable built-in Tab button navigation so Tab is exclusively used for A/B Hot-Swapping!
+    io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
 
     // 1. Primary Font: Segoe UI for crisp English, Russian, and Latin
     ImFontConfig font_cfg_primary;
@@ -346,7 +347,15 @@ void AppWindow::RunMessageLoop() {
         double dur = AudioEngine::Instance().GetDurationSeconds();
         float seek_val = (dur > 0.0) ? (float)(cur / dur) : 0.0f;
 
-        if (ImGui::SliderFloat("##SeekSlider", &seek_val, 0.0f, 1.0f, "Position: %.1f sec")) {
+        int cur_m = (int)cur / 60;
+        int cur_s = (int)cur % 60;
+        int dur_m = (int)dur / 60;
+        int dur_s = (int)dur % 60;
+
+        char time_buf[64];
+        snprintf(time_buf, sizeof(time_buf), "Position: %02d:%02d / %02d:%02d", cur_m, cur_s, dur_m, dur_s);
+
+        if (ImGui::SliderFloat("##SeekSlider", &seek_val, 0.0f, 1.0f, time_buf)) {
             AudioEngine::Instance().SeekToPercentage((double)seek_val * 100.0);
         }
 
