@@ -380,9 +380,12 @@ static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::strin
 
     // APIC Frame for Cover Art
     if (!coverBytes.empty()) {
-        std::vector<unsigned char> apicPayload;
-        apicPayload.push_back(0x03); // UTF-8
         std::string mime = "image/jpeg";
+        if (coverBytes.size() >= 4 && coverBytes[0] == 0x89 && coverBytes[1] == 'P' && coverBytes[2] == 'N' && coverBytes[3] == 'G') {
+            mime = "image/png";
+        }
+        std::vector<unsigned char> apicPayload;
+        apicPayload.push_back(0x00); // 0x00 = ISO-8859-1 / ASCII encoding for MIME & description
         apicPayload.insert(apicPayload.end(), mime.begin(), mime.end());
         apicPayload.push_back(0x00); // Null term mime
         apicPayload.push_back(0x03); // Picture type 3 = Cover Front
