@@ -26,7 +26,7 @@ struct TagReviewItem {
     char titleBuf[256] = {0};
     char trackNoBuf[32] = {0};
     char yearBuf[32] = {0};
-    char lyricsBuf[1024] = {0};
+    char lyricsBuf[2048] = {0};
 
     bool isMusicBrainzMatched = false;
     bool isFetchCompleted = false;
