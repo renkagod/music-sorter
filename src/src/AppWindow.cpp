@@ -1145,10 +1145,9 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Columns(2, "MainTagInspectorColumnsSideBySideCovers", false);
 
                 // ==================== COLUMN 0 (LEFT HALF OF WINDOW) ====================
-                ImGui::TextDisabled("Исходные теги в файле");
-
                 // Sub-group 1: Original Tags Input Fields (Far Left)
                 ImGui::BeginGroup();
+                ImGui::TextDisabled("Исходные теги в файле");
                 ImGui::PushItemWidth(240);
 
                 char origArtist[256], origAlbum[256], origTitle[256], origTrack[32], origYear[32];
@@ -1197,8 +1196,6 @@ void AppWindow::RunMessageLoop() {
                 // ==================== COLUMN 1 (RIGHT HALF OF WINDOW) ====================
                 ImGui::NextColumn();
 
-                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
-
                 // Sub-group 3: ONLINE COVER ART (Right Center - SITS DIRECTLY NEXT TO LOCAL COVER ART!)
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("CoverArtArchive:");
@@ -1225,6 +1222,7 @@ void AppWindow::RunMessageLoop() {
 
                 // Sub-group 4: Proposed New Tags Input Fields (Far Right)
                 ImGui::BeginGroup();
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
                 ImGui::PushItemWidth(240);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
                 ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
@@ -1251,13 +1249,7 @@ void AppWindow::RunMessageLoop() {
 
                 ImGui::Spacing();
 
-                // Crystal Clear Write Action Summary Line
-                std::string chosenCoverStr = (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) ? "CoverArtArchive (" + std::to_string(item.onlineWidth) + "x" + std::to_string(item.onlineHeight) + " px)" : (item.localTexture ? "Локальная обложка (" + std::to_string(item.localWidth) + "x" + std::to_string(item.localHeight) + " px)" : "Без обложки");
-                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Будет записано:");
-                ImGui::SameLine();
-                ImGui::Text("%s - %s (%s) [%s] | Обложка: %s", item.artistBuf, item.titleBuf, item.albumBuf, item.yearBuf, chosenCoverStr.c_str());
-
-                if (ImGui::Button("[V] Принять и записать новые теги", ImVec2(320, 34))) {
+                if (ImGui::Button("Принять", ImVec2(160, 34))) {
                     std::string newArtist(item.artistBuf);
                     std::string newAlbum(item.albumBuf);
                     std::string newTitle(item.titleBuf);
@@ -1298,7 +1290,7 @@ void AppWindow::RunMessageLoop() {
                     m_currentTagIndex++;
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("[X] Оставить без изменений (Пропустить)", ImVec2(290, 34))) {
+                if (ImGui::Button("Пропустить", ImVec2(160, 34))) {
                     LOG_INFO("[SKIPPED] Skipped track: " + item.originalFilename);
                     m_currentTagIndex++;
                 }
