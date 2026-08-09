@@ -1370,9 +1370,12 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Separator();
 
                 // Main 2-Column Split: Left Half = Original Tags + Local Cover | Right Half = Online Cover + Proposed New Tags
+                float columnTopY = ImGui::GetCursorPosY();
                 ImGui::Columns(2, "MainTagInspectorColumnsSideBySideCovers", false);
 
                 // ==================== COLUMN 0 (LEFT HALF OF WINDOW) ====================
+                ImGui::SetCursorPosY(columnTopY);
+
                 // Sub-group 1: Original Tags Input Fields (Far Left)
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("Исходные теги в файле");
@@ -1399,8 +1402,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::PopItemWidth();
                 ImGui::EndGroup();
 
-                ImGui::SameLine();
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
+                ImGui::SameLine(0, 15.0f);
 
                 // Sub-group 2: LOCAL COVER ART (Left Center)
                 ImGui::BeginGroup();
@@ -1423,6 +1425,7 @@ void AppWindow::RunMessageLoop() {
 
                 // ==================== COLUMN 1 (RIGHT HALF OF WINDOW) ====================
                 ImGui::NextColumn();
+                ImGui::SetCursorPosY(columnTopY);
 
                 // Sub-group 3: ONLINE COVER ART (Right Center - SITS DIRECTLY NEXT TO LOCAL COVER ART!)
                 ImGui::BeginGroup();
@@ -1445,8 +1448,7 @@ void AppWindow::RunMessageLoop() {
                 }
                 ImGui::EndGroup();
 
-                ImGui::SameLine();
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
+                ImGui::SameLine(0, 15.0f);
 
                 // Sub-group 4: Proposed New Tags Input Fields (Far Right)
                 ImGui::BeginGroup();
