@@ -1407,6 +1407,7 @@ void AppWindow::RunMessageLoop() {
                 // Sub-group 2: LOCAL COVER ART (Left Center)
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("Локальная обложка:");
+                float coverImageY = ImGui::GetCursorPosY();
                 if (item.localTexture) {
                     if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(260, 260))) {
                         item.selectedCoverChoice = 0;
@@ -1430,6 +1431,7 @@ void AppWindow::RunMessageLoop() {
                 // Sub-group 3: ONLINE COVER ART (Right Center - SITS DIRECTLY NEXT TO LOCAL COVER ART!)
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("CoverArtArchive:");
+                ImGui::SetCursorPosY(coverImageY);
                 if (item.onlineTexture) {
                     if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(260, 260))) {
                         item.selectedCoverChoice = 1;
