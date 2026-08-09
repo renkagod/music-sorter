@@ -710,8 +710,8 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 
     RegisterClassExW(&wcex);
 
-    // Initial Window Size adjusted to 940x950 to perfectly fit 3-column layout and end right after CoverArtArchive!
-    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Studio", WS_OVERLAPPEDWINDOW, 40, 20, 940, 950, NULL, NULL, hInstance, NULL);
+    // Initial Window Size adjusted to 900x950 to perfectly fit 3-column layout with 60px padding so right corners are never clipped!
+    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Studio", WS_OVERLAPPEDWINDOW, 40, 20, 900, 950, NULL, NULL, hInstance, NULL);
 
     if (!CreateDeviceD3D(m_hWnd)) {
         CleanupDeviceD3D();
@@ -1372,9 +1372,9 @@ void AppWindow::RunMessageLoop() {
                 // Main 3-Column Layout: Left Column (Col 0) = Stacked Original & Proposed Tags | Middle (Col 1) = Local Cover | Right (Col 2) = Online Cover
                 float inspectorTopY = ImGui::GetCursorPosY();
                 ImGui::Columns(3, "Main3InspectorColumnsFixedTop", false);
-                ImGui::SetColumnWidth(0, 340.0f);
-                ImGui::SetColumnWidth(1, 280.0f);
-                ImGui::SetColumnWidth(2, 280.0f);
+                ImGui::SetColumnWidth(0, 320.0f);
+                ImGui::SetColumnWidth(1, 260.0f);
+                ImGui::SetColumnWidth(2, 260.0f);
 
                 // ==================== COLUMN 0 (LEFT: BOTH TAG BLOCKS STACKED) ====================
                 ImGui::SetCursorPosY(inspectorTopY);
@@ -1382,7 +1382,7 @@ void AppWindow::RunMessageLoop() {
 
                 // 1. ВЕРХНИЙ БЛОК: ИСХОДНЫЕ ТЕГИ
                 ImGui::TextDisabled("Исходные теги в файле");
-                ImGui::PushItemWidth(190);
+                ImGui::PushItemWidth(180);
 
                 char origArtist[256], origAlbum[256], origTitle[256], origTrack[32], origYear[32];
                 strncpy_s(origArtist, item.embeddedArtist.c_str(), sizeof(origArtist) - 1);
@@ -1396,10 +1396,10 @@ void AppWindow::RunMessageLoop() {
                 ImGui::InputText("Название##Orig", origTitle, sizeof(origTitle), ImGuiInputTextFlags_ReadOnly);
                 ImGui::PopItemWidth();
 
-                ImGui::PushItemWidth(65);
+                ImGui::PushItemWidth(60);
                 ImGui::InputText("№##Orig", origTrack, sizeof(origTrack), ImGuiInputTextFlags_ReadOnly);
                 ImGui::SameLine();
-                ImGui::PushItemWidth(95);
+                ImGui::PushItemWidth(90);
                 ImGui::InputText("Год/Дата##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
@@ -1408,31 +1408,33 @@ void AppWindow::RunMessageLoop() {
 
                 // 2. НИЖНИЙ БЛОК: ПРЕДЛАГАЕМЫЕ ТЕГИ
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
-                ImGui::PushItemWidth(190);
+                ImGui::PushItemWidth(180);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
                 ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
                 ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
                 ImGui::PopItemWidth();
 
-                ImGui::PushItemWidth(65);
+                ImGui::PushItemWidth(60);
                 ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
                 ImGui::SameLine();
-                ImGui::PushItemWidth(95);
+                ImGui::PushItemWidth(90);
                 ImGui::InputText("Год/Дата##New", item.yearBuf, sizeof(item.yearBuf));
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
 
                 ImGui::EndGroup();
 
-                // ==================== COLUMN 1 (MIDDLE: LOCAL COVER ART - FORCED TO absolute TOP Y!) ====================
+                // ==================== COLUMN 1 (MIDDLE: LOCAL COVER ART) ====================
                 ImGui::NextColumn();
                 ImGui::SetCursorPosY(inspectorTopY);
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("Локальная обложка:");
                 if (item.localTexture) {
-                    if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(260, 260))) {
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+                    if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(245, 245))) {
                         item.selectedCoverChoice = 0;
                     }
+                    ImGui::PopStyleVar();
                     ImGui::Text(item.selectedCoverChoice == 0 ? "[X] Локальный скан" : "   Локальный скан");
                     ImGui::TextDisabled("%dx%d px | %zu KB", item.localWidth, item.localHeight, item.localCoverBytes.size() / 1024);
                     if (item.localScore >= item.onlineScore) {
@@ -1445,15 +1447,17 @@ void AppWindow::RunMessageLoop() {
                 }
                 ImGui::EndGroup();
 
-                // ==================== COLUMN 2 (RIGHT: ONLINE COVER ART - FORCED TO absolute TOP Y!) ====================
+                // ==================== COLUMN 2 (RIGHT: ONLINE COVER ART) ====================
                 ImGui::NextColumn();
                 ImGui::SetCursorPosY(inspectorTopY);
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("CoverArtArchive:");
                 if (item.onlineTexture) {
-                    if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(260, 260))) {
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+                    if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(245, 245))) {
                         item.selectedCoverChoice = 1;
                     }
+                    ImGui::PopStyleVar();
                     ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
                     ImGui::TextDisabled("%dx%d px | %zu KB", item.onlineWidth, item.onlineHeight, item.onlineCoverBytes.size() / 1024);
                     if (item.onlineScore > item.localScore) {
