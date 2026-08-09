@@ -143,9 +143,11 @@ static double CalculatePerceptualSharpness(const unsigned char* data, size_t siz
     return variance;
 }
 
-// Robust HTTP GET with Smart Exponential Backoff Retries & HTTP 429 Rate Limit Handling
+// Robust HTTP GET with Ultra-Detailed Step-by-Step Logging & Rate Limit Backoff
 std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries = 3) {
     std::vector<unsigned char> result;
+    std::string narrowUrl(url.begin(), url.end());
+
     for (int attempt = 0; attempt < maxRetries; ++attempt) {
         HINTERNET hNet = InternetOpenW(L"MusicSorterApp/2.0 (contact@musicsorter.org)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (hNet) {
@@ -161,10 +163,10 @@ std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries 
                 HttpQueryInfoW(hFile, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, NULL);
 
                 if (statusCode == 429 || statusCode == 503) {
-                    LOG_INFO("[RATE LIMIT 429/503] MusicBrainz API busy. Backing off for " + std::to_string(500 * (attempt + 1)) + "ms...");
+                    LOG_INFO("[HTTP " + std::to_string(statusCode) + " RATE LIMIT] Backing off " + std::to_string(400 * (attempt + 1)) + "ms for URL: " + narrowUrl);
                     InternetCloseHandle(hFile);
                     InternetCloseHandle(hNet);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500 * (attempt + 1)));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(400 * (attempt + 1)));
                     continue;
                 }
 
@@ -174,11 +176,18 @@ std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries 
                     result.insert(result.end(), buffer, buffer + bytesRead);
                 }
                 InternetCloseHandle(hFile);
+                
+                if (statusCode != 200 && statusCode != 0) {
+                    LOG_INFO("[HTTP RESP " + std::to_string(statusCode) + "] Received " + std::to_string(result.size()) + " bytes from " + narrowUrl);
+                }
+            } else {
+                DWORD err = GetLastError();
+                LOG_INFO("[HTTP ERROR " + std::to_string(err) + "] Failed to open URL (Attempt " + std::to_string(attempt + 1) + "/" + std::to_string(maxRetries) + "): " + narrowUrl);
             }
             InternetCloseHandle(hNet);
         }
         if (!result.empty()) return result;
-        std::this_thread::sleep_for(std::chrono::milliseconds(300 * (attempt + 1)));
+        std::this_thread::sleep_for(std::chrono::milliseconds(250 * (attempt + 1)));
     }
     return result;
 }
@@ -690,6 +699,8 @@ void AppWindow::RunMessageLoop() {
                         }
                     }
 
+                    LOG_INFO("[LOCAL INITIALIZATION] Scanned " + std::to_string(files.size()) + " audio files in TO SORT/");
+
                     // FAST LOCAL INITIALIZATION (0.01 seconds!)
                     m_tagItems.resize(files.size());
                     for (size_t i = 0; i < files.size(); ++i) {
@@ -753,7 +764,7 @@ void AppWindow::RunMessageLoop() {
                     // Post immediate notification to show local UI instantly!
                     PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
 
-                    // STRICT UI-SEQUENTIAL PROCESSING (Track #1 FIRST, then #2, #3...) + ALBUM CACHING!
+                    // ULTRA-DETAILED STEP-BY-STEP MUSICBRAINZ RESOLVER
                     std::unordered_map<std::string, AlbumMetadataCache> albumCache;
 
                     for (size_t i = 0; i < files.size(); ++i) {
@@ -778,16 +789,18 @@ void AppWindow::RunMessageLoop() {
                             }
                             item.isFetchCompleted = true;
                             m_fetchedCount++;
+                            LOG_INFO("[ALBUM CACHE HIT] Track #" + std::to_string(i + 1) + " resolved instantly via album cache: " + albumClean);
                             continue;
                         }
 
                         size_t currentNum = ++m_fetchedCount;
-                        LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] [UI ORDER PRIORITY #" + std::to_string(i + 1) + "] Querying: " + artistClean + " - " + albumClean);
+                        LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] [UI ORDER PRIORITY #" + std::to_string(i + 1) + "] Querying: " + artistClean + " - " + albumClean + " (File: " + item.originalFilename + ")");
 
-                        // 1. AcoustID Lookup
+                        // 1. AcoustID Fingerprint Lookup
                         std::this_thread::sleep_for(std::chrono::milliseconds(200));
                         auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(files[i]);
                         if (!fpInfo.fpData.empty()) {
+                            LOG_INFO("[ACOUSTID FINGERPRINT] Extracted " + std::to_string(fpInfo.fpData.size()) + " frames, duration " + std::to_string(fpInfo.duration) + "s for " + item.originalFilename);
                             std::wstringstream wss;
                             wss << L"https://api.acoustid.org/v2/lookup?client=8Xa1nV0f&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << L"&fingerprint=";
                             for (size_t k = 0; k < fpInfo.fpData.size(); ++k) {
@@ -804,17 +817,19 @@ void AppWindow::RunMessageLoop() {
                                     if (endPos != std::string::npos) {
                                         releaseGroupMbId = acoustRes.substr(idPos, endPos - idPos);
                                         isMatched = true;
+                                        LOG_INFO("[ACOUSTID MATCHED] ReleaseGroup MBID: " + releaseGroupMbId);
                                     }
                                 }
                             }
                         }
 
-                        // 2. Multi-Tier MusicBrainz Search Strategy with Backoff & Retries
+                        // 2. Multi-Tier MusicBrainz Search Strategy with Detailed Tier Logging
                         if (releaseGroupMbId.empty() && !albumClean.empty()) {
                             // Tier A: Strict Release Group Search
                             if (!artistClean.empty() && artistClean != "Unknown Artist") {
                                 std::string mbQuery = "artist:\"" + artistClean + "\" AND release:\"" + albumClean + "\"";
                                 std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
+                                LOG_INFO("[MUSICBRAINZ TIER A] Querying: " + mbQuery);
                                 std::string mbRes = HttpGetString(Utf8ToWide(mbUrl));
 
                                 size_t rgPos = mbRes.find("\"release-groups\":");
@@ -826,6 +841,7 @@ void AppWindow::RunMessageLoop() {
                                         if (endPos != std::string::npos) {
                                             releaseGroupMbId = mbRes.substr(idPos, endPos - idPos);
                                             isMatched = true;
+                                            LOG_INFO("[MUSICBRAINZ TIER A SUCCESS] MBID: " + releaseGroupMbId);
                                         }
                                     }
                                     size_t datePos = mbRes.find("\"first-release-date\":\"", rgPos);
@@ -834,6 +850,7 @@ void AppWindow::RunMessageLoop() {
                                         size_t dendPos = mbRes.find("\"", datePos);
                                         if (dendPos != std::string::npos) {
                                             firstReleaseDate = mbRes.substr(datePos, dendPos - datePos);
+                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found date: " + firstReleaseDate);
                                         }
                                     }
                                 }
@@ -842,6 +859,7 @@ void AppWindow::RunMessageLoop() {
                             // Tier B: Album Title Alone Search (100% matches Doujin albums!)
                             if (releaseGroupMbId.empty()) {
                                 std::string mbAlbumUrl = "https://musicbrainz.org/ws/2/release-group?query=release:\"" + UrlEncode(albumClean) + "\"&fmt=json";
+                                LOG_INFO("[MUSICBRAINZ TIER B FALLBACK] Querying release:\"" + albumClean + "\"");
                                 std::string mbAlbumRes = HttpGetString(Utf8ToWide(mbAlbumUrl));
                                 size_t argPos = mbAlbumRes.find("\"release-groups\":");
                                 if (argPos != std::string::npos) {
@@ -852,6 +870,7 @@ void AppWindow::RunMessageLoop() {
                                         if (aendPos != std::string::npos) {
                                             releaseGroupMbId = mbAlbumRes.substr(aidPos, aendPos - aidPos);
                                             isMatched = true;
+                                            LOG_INFO("[MUSICBRAINZ TIER B SUCCESS] MBID: " + releaseGroupMbId);
                                         }
                                     }
                                     size_t datePos = mbAlbumRes.find("\"first-release-date\":\"", argPos);
@@ -860,6 +879,7 @@ void AppWindow::RunMessageLoop() {
                                         size_t dendPos = mbAlbumRes.find("\"", datePos);
                                         if (dendPos != std::string::npos) {
                                             firstReleaseDate = mbAlbumRes.substr(datePos, dendPos - datePos);
+                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found date: " + firstReleaseDate);
                                         }
                                     }
                                 }
@@ -869,6 +889,7 @@ void AppWindow::RunMessageLoop() {
                             if (releaseGroupMbId.empty()) {
                                 std::string mbLooseQuery = artistClean + " " + albumClean;
                                 std::string mbLooseUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbLooseQuery) + "&fmt=json";
+                                LOG_INFO("[MUSICBRAINZ TIER C LOOSE] Querying: " + mbLooseQuery);
                                 std::string mbLooseRes = HttpGetString(Utf8ToWide(mbLooseUrl));
                                 size_t lrgPos = mbLooseRes.find("\"release-groups\":");
                                 if (lrgPos != std::string::npos) {
@@ -879,6 +900,7 @@ void AppWindow::RunMessageLoop() {
                                         if (lendPos != std::string::npos) {
                                             releaseGroupMbId = mbLooseRes.substr(lidPos, lendPos - lidPos);
                                             isMatched = true;
+                                            LOG_INFO("[MUSICBRAINZ TIER C SUCCESS] MBID: " + releaseGroupMbId);
                                         }
                                     }
                                     size_t datePos = mbLooseRes.find("\"first-release-date\":\"", lrgPos);
@@ -887,6 +909,7 @@ void AppWindow::RunMessageLoop() {
                                         size_t dendPos = mbLooseRes.find("\"", datePos);
                                         if (dendPos != std::string::npos) {
                                             firstReleaseDate = mbLooseRes.substr(datePos, dendPos - datePos);
+                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found date: " + firstReleaseDate);
                                         }
                                     }
                                 }
@@ -900,6 +923,8 @@ void AppWindow::RunMessageLoop() {
                             coverData = HttpGetBytes(caaUrl);
                             if (!coverData.empty()) {
                                 LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art for " + albumClean);
+                            } else {
+                                LOG_INFO("[COVER ART MISSING] CoverArtArchive image not available for MBID: " + releaseGroupMbId);
                             }
                         } else {
                             LOG_INFO("[NICHE TRACK] MusicBrainz record not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
@@ -910,7 +935,9 @@ void AppWindow::RunMessageLoop() {
                         if (!lrcLyrics.empty()) {
                             item.hasLyrics = true;
                             strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
-                            LOG_INFO("[LRC LYRICS FETCHED] Found synced lyrics for " + artistClean + " - " + titleClean);
+                            LOG_INFO("[LRC LYRICS FETCHED] Found synced lyrics (" + std::to_string(lrcLyrics.size()) + " chars) for " + artistClean + " - " + titleClean);
+                        } else {
+                            LOG_INFO("[LRC LYRICS NOT FOUND] No synced lyrics available for " + artistClean + " - " + titleClean);
                         }
 
                         if (!firstReleaseDate.empty()) {
@@ -1244,17 +1271,17 @@ void AppWindow::RunMessageLoop() {
             ImGui::PushID((int)i);
 
             ImVec4 textColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
-            if (logLine.find("[MUSICBRAINZ MATCHED]") != std::string::npos) {
+            if (logLine.find("[MUSICBRAINZ MATCHED]") != std::string::npos || logLine.find("[ACOUSTID MATCHED]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER A SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER B SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER C SUCCESS]") != std::string::npos) {
                 textColor = ImVec4(0.2f, 1.0f, 0.4f, 1.0f);
             } else if (logLine.find("[COVER ART DOWNLOADED]") != std::string::npos) {
                 textColor = ImVec4(1.0f, 0.4f, 0.8f, 1.0f);
-            } else if (logLine.find("[MUSICBRAINZ FETCH") != std::string::npos) {
+            } else if (logLine.find("[MUSICBRAINZ FETCH") != std::string::npos || logLine.find("[MUSICBRAINZ TIER") != std::string::npos || logLine.find("[ACOUSTID FINGERPRINT]") != std::string::npos) {
                 textColor = ImVec4(0.9f, 0.8f, 0.2f, 1.0f);
-            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos || logLine.find("[RATE LIMIT") != std::string::npos) {
+            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos || logLine.find("[HTTP 429") != std::string::npos || logLine.find("[HTTP ERROR") != std::string::npos || logLine.find("[COVER ART MISSING]") != std::string::npos) {
                 textColor = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
             } else if (logLine.find("[LRC LYRICS FETCHED]") != std::string::npos) {
                 textColor = ImVec4(0.3f, 0.8f, 1.0f, 1.0f);
-            } else if (logLine.find("[TAGS APPLIED]") != std::string::npos || logLine.find("[CLIPBOARD]") != std::string::npos) {
+            } else if (logLine.find("[TAGS APPLIED]") != std::string::npos || logLine.find("[CLIPBOARD]") != std::string::npos || logLine.find("[ALBUM CACHE HIT]") != std::string::npos) {
                 textColor = ImVec4(0.4f, 0.9f, 1.0f, 1.0f);
             }
 
