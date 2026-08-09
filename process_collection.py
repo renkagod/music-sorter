@@ -4,12 +4,15 @@ import shutil
 import logging
 import subprocess
 import re
+import json
+import urllib.parse
+import urllib.request
 from PIL import Image
 
 try:
     import mutagen
     from mutagen.flac import FLAC, Picture
-    from mutagen.id3 import ID3, APIC, TIT2, TPE1, TALB, TRCK
+    from mutagen.id3 import ID3, APIC, TIT2, TPE1, TALB, TRCK, TDRC
     from mutagen.mp3 import MP3
 except ImportError:
     print("Mutagen is required.")
@@ -30,139 +33,74 @@ MP3_ROOT = os.path.join(BASE_DIR, 'mp3')
 REVIEW_DIR = os.path.join(BASE_DIR, 'review')
 TRACKLIST_PATH = os.path.join(BASE_DIR, 'tracklist.md')
 
+ACOUSTID_API_KEY = "8Xa1nV0f"
+
 os.makedirs(FLAC_ROOT, exist_ok=True)
 os.makedirs(MP3_ROOT, exist_ok=True)
 os.makedirs(REVIEW_DIR, exist_ok=True)
 
-DISCOGS_MAP = [
-    ('45CD Project (2003)', ['45cd project', '45cd']),
-    ('紅花翁草 (2004)', ['紅花翁草', 'anemone']),
-    ('Candybug (2005)', ['candybug']),
-    ('クロユリ (2006)', ['クロユリ']),
-    ('ざくろ (2007)', ['ざくろ']),
-    ('アムリタ (2009)', ['アムリタ']),
-    ('タイタニア (2010)', ['タイタニア']),
-    ('Sun Fleur 1-2 (2012)', ['sun fleur 1', 'sun fleur 1/2', 'sun fleur 1／2']),
-    ('AAAAAA (2013)', ['aaaaaa']),
-    ('Sun Fleur (2014)', ['sun fleur']),
-    ('マリスコール (2014)', ['マリスコール']),
-    ('メイリリィ (2015)', ['メイリリィ']),
-    ('BlackLotus (2015)', ['blacklotus']),
-    ('空木ノ花試作型 (2017)', ['空木ノ花試作型']),
-    ('空木ノ花 (2017)', ['空木ノ花']),
-    ('モノクロ (2007)', ['monokuro', 'モノクロ']),
-    ('Ankoku Douwa (2008)', ['ankoku douwa']),
-    ('畸茎樹 (2008)', ['kikeiju', '畸茎樹']),
-    ('Kakurika (2008)', ['kakurika']),
-    ('厭離穢土 (2009)', ['enri edo', '厭離穢土']),
-    ('Kukuri (2009)', ['kukuri']),
-    ('Midori (2010)', ['midori']),
-    ('Iranai Ver 0.5 (2010)', ['iranai ver 0.5', 'iranai 0.5']),
-    ('Iranai (2011)', ['iranai']),
-    ('Haiiro (2011)', ['haiiro']),
-    ('Carnival (2012)', ['carnival']),
-    ('Border (2012)', ['border']),
-    ('Wakuraba (2013)', ['wakuraba']),
-]
-
-def normalize_key(name):
-    if not name: return ""
-    s = re.sub(r'\[[^\]]*\]|\{[^\}]*\}|\([^\)]*\)', '', name)
-    s = re.sub(r'[\s\-_/\\,.\u2044\u2215\u3013\uFF5E]+', '', s)
-    return s.lower().strip()
-
-def match_canonical_album(full_path, default_album):
-    parts = full_path.replace(TOSORT_DIR, '').split(os.sep)
-    full_str = " ".join(parts)
-    norm_full = normalize_key(full_str)
-
-    for canonical, keys in DISCOGS_MAP:
-        for k in keys:
-            norm_k = normalize_key(k)
-            if norm_k in norm_full:
-                return canonical
-
-    if 'archive' in norm_full: return 'Archives'
-    clean = re.sub(r'\[[^\]]*\]|\{[^\}]*\}|\([^\)]*\)', '', default_album).strip()
-    return clean if clean else 'Unknown Album'
-
-def get_fpcalc_raw(filepath):
+def get_fpcalc_info(filepath):
     if not os.path.exists(FPCALC_BIN): return None
     try:
         res = subprocess.run([FPCALC_BIN, '-raw', filepath], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-        dur, fp = 0, []
+        dur, fp = 0, ""
         for line in res.stdout.splitlines():
             if line.startswith('DURATION='): dur = float(line.split('=')[1])
-            elif line.startswith('FINGERPRINT='): fp = [int(x) for x in line.split('=')[1].split(',') if x]
+            elif line.startswith('FINGERPRINT='): fp = line.split('=')[1]
         return {'duration': dur, 'fingerprint': fp}
     except: return None
 
-def bit_count(int_type):
-    return bin(int_type).count('1')
+def fetch_online_metadata(filepath):
+    info = get_fpcalc_info(filepath)
+    if not info or not info['fingerprint']: return None
+    
+    dur = int(info['duration'])
+    fp = info['fingerprint']
+    url = f"https://api.acoustid.org/v2/lookup?client={ACOUSTID_API_KEY}&meta=recordings+releasegroups+compress&duration={dur}&fingerprint={fp}"
+    
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'MusicSorter/2.0'})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            if data.get('status') == 'ok' and data.get('results'):
+                for result in data['results']:
+                    if result.get('score', 0) >= 0.75 and result.get('recordings'):
+                        rec = result['recordings'][0]
+                        title = rec.get('title')
+                        artists = [a.get('name') for a in rec.get('artists', []) if a.get('name')]
+                        artist = ", ".join(artists) if artists else None
+                        
+                        album, release_id, year = None, None, None
+                        if rec.get('releasegroups'):
+                            rg = rec['releasegroups'][0]
+                            album = rg.get('title')
+                            release_id = rg.get('id')
+                            if rg.get('first-release-date'):
+                                year = rg['first-release-date'][:4]
+                                
+                        return {
+                            'title': title,
+                            'artist': artist,
+                            'album': album,
+                            'year': year,
+                            'release_id': release_id,
+                            'score': result.get('score')
+                        }
+    except Exception as e:
+        logging.debug(f"Online lookup failed for {filepath}: {e}")
+    return None
 
-def aligned_cross_correlation_similarity(fp1_list, fp2_list, max_offset=250):
-    if not fp1_list or not fp2_list: return 0.0, 0
-    best_sim = 0.0
-    best_offset = 0
+def fetch_online_cover_art(release_id):
+    if not release_id: return None
+    url = f"https://coverartarchive.org/release-group/{release_id}/front-500"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'MusicSorter/2.0'})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            return resp.read()
+    except Exception:
+        return None
 
-    for offset in range(-max_offset, max_offset + 1):
-        if offset >= 0:
-            sub1 = fp1_list[offset:]
-            sub2 = fp2_list[:len(sub1)]
-        else:
-            sub2 = fp2_list[-offset:]
-            sub1 = fp1_list[:len(sub2)]
-
-        min_len = min(len(sub1), len(sub2))
-        if min_len < 30: continue
-
-        matching_bits = sum(32 - bit_count(sub1[i] ^ sub2[i]) for i in range(min_len))
-        sim = matching_bits / (min_len * 32)
-        if sim > best_sim:
-            best_sim = sim
-            best_offset = offset
-
-    return round(best_sim, 4), best_offset
-
-def run_acoustid_quarantine():
-    logging.info("--- Step 1: AcoustID Cross-Correlation Sliding Alignment Quarantine Scan ---")
-    flacs, mp3s = [], []
-    for root, _, files in os.walk(TOSORT_DIR):
-        for f in files:
-            p = os.path.join(root, f)
-            if f.lower().endswith('.flac'): flacs.append(p)
-            elif f.lower().endswith('.mp3'): mp3s.append(p)
-
-    flac_fps = []
-    for p in flacs:
-        info = get_fpcalc_raw(p)
-        if info and info['fingerprint']:
-            flac_fps.append({'path': p, 'file': os.path.basename(p), 'dur': info['duration'], 'fp': info['fingerprint']})
-
-    moved_count = 0
-    for p in mp3s:
-        if not os.path.exists(p): continue
-        info = get_fpcalc_raw(p)
-        if info and info['fingerprint']:
-            m_dur, m_fp, m_file = info['duration'], info['fingerprint'], os.path.basename(p)
-            best_sim, best_flac = 0.0, None
-
-            for f in flac_fps:
-                if abs(m_dur - f['dur']) <= 5.0:
-                    sim, offset = aligned_cross_correlation_similarity(m_fp, f['fp'])
-                    if sim > best_sim:
-                        best_sim, best_flac = sim, f
-
-            if best_sim >= 0.82:
-                rel = os.path.relpath(p, TOSORT_DIR)
-                target_path = os.path.join(REVIEW_DIR, rel)
-                os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                logging.info(f"[QUARANTINE] Moving redundant MP3 to review/: {rel} (Cross-Corr Match: {best_sim:.1%})")
-                shutil.move(p, target_path)
-                moved_count += 1
-    logging.info(f"Step 1 Complete. Redundant MP3s moved to review/: {moved_count}")
-
-def find_cover_image(folder_path):
+def find_local_cover_image(folder_path):
     candidates = ['cover.jpg', 'cover.png', 'cover.jpeg', 'folder.jpg', 'folder.png', 'folder.jpeg', 'cover.JPG']
     for root, _, files in os.walk(folder_path):
         for file in files:
@@ -170,84 +108,105 @@ def find_cover_image(folder_path):
                 return os.path.join(root, file)
     return None
 
-def embed_cover_art_flac(audio, image_path):
-    if not image_path or not os.path.exists(image_path): return
+def embed_cover_art_flac_data(audio, img_data, mime_type="image/jpeg"):
+    if not img_data: return
     try:
         picture = Picture()
-        with open(image_path, 'rb') as f: picture.data = f.read()
-        im = Image.open(image_path)
+        picture.data = img_data
         picture.type = 3
-        picture.mime = f"image/{im.format.lower()}" if im.format else "image/jpeg"
-        picture.width, picture.height = im.width, im.height
+        picture.mime = mime_type
         picture.depth = 24
         audio.clear_pictures()
         audio.add_picture(picture)
     except Exception: pass
 
-def embed_cover_art_mp3(audio, image_path):
-    if not image_path or not os.path.exists(image_path): return
+def embed_cover_art_mp3_data(audio, img_data, mime_type="image/jpeg"):
+    if not img_data: return
     try:
         if audio.tags is None: audio.add_tags()
-        im = Image.open(image_path)
-        mime = f"image/{im.format.lower()}" if im.format else "image/jpeg"
-        with open(image_path, 'rb') as f:
-            audio.tags.add(APIC(encoding=3, mime=mime, type=3, desc='Cover', data=f.read()))
+        audio.tags.add(APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=img_data))
     except Exception: pass
 
-def run_organize_and_tag():
-    logging.info("--- Step 2: Tagging Metadata, Embedding Cover Art & Standardizing ---")
+def process_and_tag_collection():
+    logging.info("--- Step 2: Multi-Artist Tagging, MusicBrainz & Cover Art Archive ---")
 
     for root, dirs, files in os.walk(TOSORT_DIR):
         audio_files = [f for f in files if f.lower().endswith(('.flac', '.mp3'))]
         if not audio_files: continue
 
-        folder_name = os.path.basename(root)
-        canonical_album = match_canonical_album(root, folder_name)
-        cover_image = find_cover_image(root)
-        if not cover_image: cover_image = find_cover_image(os.path.dirname(root))
+        local_cover = find_local_cover_image(root)
+        if not local_cover: local_cover = find_local_cover_image(os.path.dirname(root))
 
         for f in audio_files:
             filepath = os.path.join(root, f)
             ext = os.path.splitext(f)[1].lower()
 
             try:
+                # 1. Try Online MusicBrainz Lookup
+                online_meta = fetch_online_metadata(filepath)
+                online_cover_data = None
+                if online_meta and online_meta.get('release_id'):
+                    online_cover_data = fetch_online_cover_art(online_meta['release_id'])
+
+                # 2. Extract Existing Tags or Parse Filename
                 audio = mutagen.File(filepath)
-                title = os.path.splitext(f)[0]
-                artist = "D'va;;;;;;;;5"
+                filename_clean = os.path.splitext(f)[0]
                 track_no = "01"
 
-                num_m = re.match(r'^(\d{1,2})[\.\s_\-]', f)
-                if num_m: track_no = num_m.group(1).zfill(2)
+                num_m = re.match(r'^(\d{1,2})[\.\s_\-]+(.+)$', filename_clean)
+                if num_m:
+                    track_no = num_m.group(1).zfill(2)
+                    filename_clean = num_m.group(2).strip()
+
+                title = filename_clean
+                artist = os.path.basename(os.path.dirname(root)) if os.path.basename(os.path.dirname(root)).lower() != 'to sort' else "Unknown Artist"
+                album = os.path.basename(root) if os.path.basename(root).lower() != 'to sort' else "Unknown Album"
 
                 if audio and audio.tags and hasattr(audio.tags, 'get'):
                     t_val = audio.tags.get('title', [title])
                     title = t_val[0] if isinstance(t_val, list) else t_val
                     art_val = audio.tags.get('artist', [artist])
                     artist = art_val[0] if isinstance(art_val, list) else art_val
+                    alb_val = audio.tags.get('album', [album])
+                    album = alb_val[0] if isinstance(alb_val, list) else alb_val
 
-                artist_clean = str(artist).strip()
-                if not artist_clean or artist_clean.lower() in ['unknown artist', '-45', 'dva5']:
-                    artist_clean = "D'va;;;;;;;;5"
+                # If MusicBrainz produced high confidence metadata, use it!
+                if online_meta:
+                    if online_meta.get('title'): title = online_meta['title']
+                    if online_meta.get('artist'): artist = online_meta['artist']
+                    if online_meta.get('album'): album = online_meta['album']
 
-                title_clean = str(title).strip()
-                title_clean = re.sub(r'^\d{1,2}[\.\s_\-]+', '', title_clean).strip()
-                folder_artist = artist_clean
+                artist_clean = str(artist).strip() if str(artist).strip() else "Unknown Artist"
+                album_clean = str(album).strip() if str(album).strip() else "Unknown Album"
+                title_clean = str(title).strip() if str(title).strip() else filename_clean
 
+                if online_meta:
+                    logging.info(f"[MUSICBRAINZ MATCH] {artist_clean} - {title_clean} ({album_clean})")
+                else:
+                    logging.info(f"[NICHE/LOCAL TRACK] {artist_clean} - {title_clean} ({album_clean})")
+
+                # Prepare Cover Art Data (Online HQ > Local Scan)
+                img_data = online_cover_data
+                mime_type = "image/jpeg"
+
+                if not img_data and local_cover and os.path.exists(local_cover):
+                    with open(local_cover, 'rb') as c_file:
+                        img_data = c_file.read()
+                        if local_cover.lower().endswith('.png'): mime_type = "image/png"
+
+                # Write Tags & Embed Cover Art
                 if ext == '.flac':
                     flac_audio = FLAC(filepath)
                     flac_audio['TITLE'] = [title_clean]
                     flac_audio['ARTIST'] = [artist_clean]
-                    flac_audio['ALBUM'] = [canonical_album]
+                    flac_audio['ALBUM'] = [album_clean]
                     flac_audio['TRACKNUMBER'] = [track_no]
-                    if cover_image: embed_cover_art_flac(flac_audio, cover_image)
+                    if img_data: embed_cover_art_flac_data(flac_audio, img_data, mime_type)
                     flac_audio.save()
 
-                    dest_dir = os.path.join(FLAC_ROOT, folder_artist, canonical_album)
+                    dest_dir = os.path.join(FLAC_ROOT, artist_clean, album_clean)
                     os.makedirs(dest_dir, exist_ok=True)
-                    dest_filename = f"{track_no} - {title_clean}.flac"
-                    dest_path = os.path.join(dest_dir, dest_filename)
-
-                    logging.info(f"[FLAC] {folder_artist} / {canonical_album} / {dest_filename}")
+                    dest_path = os.path.join(dest_dir, f"{track_no} - {title_clean}.flac")
                     shutil.copy2(filepath, dest_path)
 
                 elif ext == '.mp3':
@@ -255,33 +214,18 @@ def run_organize_and_tag():
                     if mp3_audio.tags is None: mp3_audio.add_tags()
                     mp3_audio.tags['TIT2'] = TIT2(encoding=3, text=title_clean)
                     mp3_audio.tags['TPE1'] = TPE1(encoding=3, text=artist_clean)
-                    mp3_audio.tags['TALB'] = TALB(encoding=3, text=canonical_album)
+                    mp3_audio.tags['TALB'] = TALB(encoding=3, text=album_clean)
                     mp3_audio.tags['TRCK'] = TRCK(encoding=3, text=track_no)
-                    if cover_image: embed_cover_art_mp3(mp3_audio, cover_image)
+                    if img_data: embed_cover_art_mp3_data(mp3_audio, img_data, mime_type)
                     mp3_audio.save()
 
-                    dest_dir = os.path.join(MP3_ROOT, folder_artist, canonical_album)
+                    dest_dir = os.path.join(MP3_ROOT, artist_clean, album_clean)
                     os.makedirs(dest_dir, exist_ok=True)
-                    dest_filename = f"{track_no} - {title_clean}.mp3"
-                    dest_path = os.path.join(dest_dir, dest_filename)
-
-                    logging.info(f"[MP3] {folder_artist} / {canonical_album} / {dest_filename}")
+                    dest_path = os.path.join(dest_dir, f"{track_no} - {title_clean}.mp3")
                     shutil.copy2(filepath, dest_path)
 
             except Exception as e:
                 logging.error(f"Error processing {filepath}: {e}")
 
-def run_full_pipeline():
-    logging.info("==================================================")
-    logging.info("   MUSIC COLLECTION AUTOMATION PIPELINE START     ")
-    logging.info("==================================================")
-
-    run_acoustid_quarantine()
-    run_organize_and_tag()
-
-    logging.info("==================================================")
-    logging.info("   MUSIC COLLECTION PIPELINE COMPLETE SUCCESSFULLY")
-    logging.info("==================================================")
-
 if __name__ == '__main__':
-    run_full_pipeline()
+    process_and_tag_collection()
