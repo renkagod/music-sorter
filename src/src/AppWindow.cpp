@@ -76,9 +76,16 @@ static std::string CleanMetadataString(const std::string& str) {
         if (c == ']' || c == ')' || c == '}') { if (bLevel > 0) bLevel--; continue; }
         if (bLevel == 0) res.push_back(c);
     }
-    size_t first = res.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) return str;
-    size_t last = res.find_last_not_of(" \t\r\n");
+
+    // Clean semicolons ;;;;5 and trailing noise from old metadata
+    size_t semiPos = res.find(';');
+    if (semiPos != std::string::npos) {
+        res = res.substr(0, semiPos);
+    }
+
+    size_t first = res.find_first_not_of(" \t\r\n;-_*#");
+    if (first == std::string::npos) return "";
+    size_t last = res.find_last_not_of(" \t\r\n;-_*#");
     return res.substr(first, (last - first + 1));
 }
 
@@ -1347,8 +1354,7 @@ void AppWindow::RunMessageLoop() {
                                 if (k > 0) postStream << ",";
                                 postStream << fpInfo.fpData[k];
                             }
-                            
-                            std::string acoustRes = AcoustIdHttpPost(postStream.str());
+                                   std::string acoustRes = AcoustIdHttpPost(postStream.str());
                             size_t rgPos = acoustRes.find("\"releasegroups\":");
                             if (rgPos != std::string::npos) {
                                 size_t idPos = acoustRes.find("\"id\":\"", rgPos);
@@ -1356,9 +1362,12 @@ void AppWindow::RunMessageLoop() {
                                     idPos += 6;
                                     size_t endPos = acoustRes.find("\"", idPos);
                                     if (endPos != std::string::npos) {
-                                        releaseGroupMbId = acoustRes.substr(idPos, endPos - idPos);
-                                        isMatched = true;
-                                        LOG_INFO("[ACOUSTID MATCHED] ReleaseGroup MBID: " + releaseGroupMbId);
+                                        std::string candMbId = acoustRes.substr(idPos, endPos - idPos);
+                                        if (candMbId.length() == 36) {
+                                            releaseGroupMbId = candMbId;
+                                            isMatched = true;
+                                            LOG_INFO("[ACOUSTID MATCHED] ReleaseGroup MBID: " + releaseGroupMbId);
+                                        }
                                     }
                                 }
                             }
@@ -1380,9 +1389,12 @@ void AppWindow::RunMessageLoop() {
                                         idPos += 6;
                                         size_t endPos = mbRes.find("\"", idPos);
                                         if (endPos != std::string::npos) {
-                                            releaseGroupMbId = mbRes.substr(idPos, endPos - idPos);
-                                            isMatched = true;
-                                            LOG_INFO("[MUSICBRAINZ TIER A SUCCESS] MBID: " + releaseGroupMbId);
+                                            std::string candMbId = mbRes.substr(idPos, endPos - idPos);
+                                            if (candMbId.length() == 36) {
+                                                releaseGroupMbId = candMbId;
+                                                isMatched = true;
+                                                LOG_INFO("[MUSICBRAINZ TIER A SUCCESS] MBID: " + releaseGroupMbId);
+                                            }
                                         }
                                     }
                                     size_t datePos = mbRes.find("\"first-release-date\":\"", rgPos);
@@ -1407,11 +1419,14 @@ void AppWindow::RunMessageLoop() {
                                     size_t aidPos = mbAlbumRes.find("\"id\":\"", argPos);
                                     if (aidPos != std::string::npos) {
                                         aidPos += 6;
-                                        size_t aendPos = mbAlbumRes.find("\"", argPos);
+                                        size_t aendPos = mbAlbumRes.find("\"", aidPos);
                                         if (aendPos != std::string::npos) {
-                                            releaseGroupMbId = mbAlbumRes.substr(aidPos, aendPos - aidPos);
-                                            isMatched = true;
-                                            LOG_INFO("[MUSICBRAINZ TIER B SUCCESS] MBID: " + releaseGroupMbId);
+                                            std::string candMbId = mbAlbumRes.substr(aidPos, aendPos - aidPos);
+                                            if (candMbId.length() == 36) {
+                                                releaseGroupMbId = candMbId;
+                                                isMatched = true;
+                                                LOG_INFO("[MUSICBRAINZ TIER B SUCCESS] MBID: " + releaseGroupMbId);
+                                            }
                                         }
                                     }
                                     size_t datePos = mbAlbumRes.find("\"first-release-date\":\"", argPos);
@@ -1439,9 +1454,12 @@ void AppWindow::RunMessageLoop() {
                                         lidPos += 6;
                                         size_t lendPos = mbLooseRes.find("\"", lidPos);
                                         if (lendPos != std::string::npos) {
-                                            releaseGroupMbId = mbLooseRes.substr(lidPos, lendPos - lidPos);
-                                            isMatched = true;
-                                            LOG_INFO("[MUSICBRAINZ TIER C SUCCESS] MBID: " + releaseGroupMbId);
+                                            std::string candMbId = mbLooseRes.substr(lidPos, lendPos - lidPos);
+                                            if (candMbId.length() == 36) {
+                                                releaseGroupMbId = candMbId;
+                                                isMatched = true;
+                                                LOG_INFO("[MUSICBRAINZ TIER C SUCCESS] MBID: " + releaseGroupMbId);
+                                            }
                                         }
                                     }
                                     size_t datePos = mbLooseRes.find("\"first-release-date\":\"", lrgPos);
