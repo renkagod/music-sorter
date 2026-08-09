@@ -1369,14 +1369,13 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
                 ImGui::Separator();
 
-                // Main 2-Column Split: Left Half = Original Tags + Local Cover | Right Half = Online Cover + Proposed New Tags
-                float columnTopY = ImGui::GetCursorPosY();
-                ImGui::Columns(2, "MainTagInspectorColumnsSideBySideCovers", false);
+                // Main 4-Column Layout: Original Tags (Col 0) | Local Cover (Col 1) | Online Cover (Col 2) | Proposed Tags (Col 3)
+                ImGui::Columns(4, "MainTagInspector4Columns", false);
+                ImGui::SetColumnWidth(0, 340.0f);
+                ImGui::SetColumnWidth(1, 290.0f);
+                ImGui::SetColumnWidth(2, 290.0f);
 
-                // ==================== COLUMN 0 (LEFT HALF OF WINDOW) ====================
-                // Sub-group 1: Original Tags Input Fields (Far Left)
-                ImGui::BeginGroup();
-                ImGui::SetCursorPosY(columnTopY);
+                // ==================== COLUMN 0 (ORIGINAL TAGS) ====================
                 ImGui::TextDisabled("Исходные теги в файле");
                 ImGui::PushItemWidth(240);
 
@@ -1399,13 +1398,9 @@ void AppWindow::RunMessageLoop() {
                 ImGui::InputText("Год/Дата##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
-                ImGui::EndGroup();
 
-                ImGui::SameLine(0, 15.0f);
-
-                // Sub-group 2: LOCAL COVER ART (Left Center)
-                ImGui::BeginGroup();
-                ImGui::SetCursorPosY(columnTopY);
+                // ==================== COLUMN 1 (LOCAL COVER ART) ====================
+                ImGui::NextColumn();
                 ImGui::TextDisabled("Локальная обложка:");
                 if (item.localTexture) {
                     if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(260, 260))) {
@@ -1421,14 +1416,9 @@ void AppWindow::RunMessageLoop() {
                 } else {
                     ImGui::TextDisabled("[Обложка отсутствует]");
                 }
-                ImGui::EndGroup();
 
-                // ==================== COLUMN 1 (RIGHT HALF OF WINDOW) ====================
+                // ==================== COLUMN 2 (ONLINE COVER ART) ====================
                 ImGui::NextColumn();
-
-                // Sub-group 3: ONLINE COVER ART (Right Center - SITS DIRECTLY NEXT TO LOCAL COVER ART!)
-                ImGui::BeginGroup();
-                ImGui::SetCursorPosY(columnTopY);
                 ImGui::TextDisabled("CoverArtArchive:");
                 if (item.onlineTexture) {
                     if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(260, 260))) {
@@ -1438,7 +1428,7 @@ void AppWindow::RunMessageLoop() {
                     ImGui::TextDisabled("%dx%d px | %zu KB", item.onlineWidth, item.onlineHeight, item.onlineCoverBytes.size() / 1024);
                     if (item.onlineScore > item.localScore) {
                         ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
-                    } else if (item.onlineWidth >= 1000 && item.onlineScore < item.localScore / 3) {
+                    } else if (item.onlineWidth >= 1000 && item.onlineScore < item.onlineScore / 3) {
                         ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ");
                     }
                 } else if (m_isTagScanning && !item.isFetchCompleted) {
@@ -1446,13 +1436,9 @@ void AppWindow::RunMessageLoop() {
                 } else {
                     ImGui::TextDisabled("[Обложка отсутствует]");
                 }
-                ImGui::EndGroup();
 
-                ImGui::SameLine(0, 15.0f);
-
-                // Sub-group 4: Proposed New Tags Input Fields (Far Right)
-                ImGui::BeginGroup();
-                ImGui::SetCursorPosY(columnTopY);
+                // ==================== COLUMN 3 (PROPOSED NEW TAGS) ====================
+                ImGui::NextColumn();
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
                 ImGui::PushItemWidth(240);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
@@ -1467,7 +1453,6 @@ void AppWindow::RunMessageLoop() {
                 ImGui::InputText("Год/Дата##New", item.yearBuf, sizeof(item.yearBuf));
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
-                ImGui::EndGroup();
 
                 ImGui::Columns(1); // Reset main split
                 ImGui::Separator();
