@@ -425,6 +425,16 @@ void AppWindow::RunMessageLoop() {
         }
         if (done) break;
 
+        // Dynamic Texture Creation for newly completed background online cover downloads
+        for (auto& item : m_tagItems) {
+            if (item.isFetchCompleted && !item.onlineCoverBytes.empty() && item.onlineTexture == NULL) {
+                item.onlineTexture = CreateTextureFromMemory(m_pd3dDevice, item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), &item.onlineWidth, &item.onlineHeight);
+                if (item.onlineTexture) {
+                    item.selectedCoverChoice = 1; // Auto-select online cover once loaded
+                }
+            }
+        }
+
         // Start Dear ImGui Frame
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
@@ -516,6 +526,7 @@ void AppWindow::RunMessageLoop() {
                 LOG_INFO("Step 2: Instant local scan + parallel 16-thread MusicBrainz lookup...");
                 m_tagItems.clear();
                 m_currentTagIndex = 0;
+                m_fetchedCount = 0;
 
                 std::thread([this]() {
                     std::vector<std::string> files;
@@ -584,7 +595,7 @@ void AppWindow::RunMessageLoop() {
                     // Post immediate notification to show local UI instantly!
                     PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
 
-                    // HIGH-SPEED 16-THREAD PARALLEL MUSICBRAINZ LOOKUP
+                    // HIGH-SPEED 16-THREAD PARALLEL MUSICBRAINZ LOOKUP WITH REAL-TIME LOGGING
                     const size_t numThreads = 16;
                     std::vector<std::thread> workers;
 
@@ -594,6 +605,9 @@ void AppWindow::RunMessageLoop() {
                                 auto& item = m_tagItems[i];
                                 std::string artistClean(item.artistBuf);
                                 std::string albumClean(item.albumBuf);
+
+                                size_t currentNum = ++m_fetchedCount;
+                                LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] Querying AcoustID & MusicBrainz for: " + artistClean + " - " + albumClean);
 
                                 std::string releaseGroupMbId;
 
@@ -643,9 +657,17 @@ void AppWindow::RunMessageLoop() {
 
                                 // 3. Fetch Cover Art from CoverArtArchive.org if Release ID was found
                                 if (!releaseGroupMbId.empty()) {
+                                    LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive image...");
                                     std::wstring caaUrl = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-500");
                                     item.onlineCoverBytes = HttpGetBytes(caaUrl);
+                                    if (!item.onlineCoverBytes.empty()) {
+                                        LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(item.onlineCoverBytes.size()) + " bytes cover art for " + albumClean);
+                                    }
+                                } else {
+                                    LOG_INFO("[NICHE TRACK] MusicBrainz record not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
                                 }
+
+                                item.isFetchCompleted = true;
                             }
                         });
                     }
@@ -655,7 +677,7 @@ void AppWindow::RunMessageLoop() {
                     }
 
                     m_isTagScanning = false;
-                    PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
+                    LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz queries finished.");
                 }).detach();
             }
         }
@@ -725,6 +747,8 @@ void AppWindow::RunMessageLoop() {
             ImGui::SameLine();
             if (item.isMusicBrainzMatched) {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "[MUSICBRAINZ MATCHED]");
+            } else if (m_isTagScanning) {
+                ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), "[SEARCHING MUSICBRAINZ %zu/%zu...]", m_fetchedCount.load(), m_tagItems.size());
             } else {
                 ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "[NICHE TRACK - LEVEL 3 PREFILLED]");
             }
@@ -760,6 +784,8 @@ void AppWindow::RunMessageLoop() {
                 }
                 ImGui::SameLine();
                 ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
+            } else if (m_isTagScanning && !item.isFetchCompleted) {
+                ImGui::TextDisabled("[Загрузка онлайн обложки...]");
             } else {
                 ImGui::TextDisabled("[Онлайн обложка отсутствует]");
             }
@@ -930,7 +956,7 @@ void AppWindow::HandleScanFinished() {
 }
 
 void AppWindow::HandleTagScanFinished() {
-    LOG_INFO("Step 2 Tagging & Cover Art inspection finished. Loaded " + std::to_string(m_tagItems.size()) + " items into Inspector.");
+    LOG_INFO("Step 2 Tagging & Cover Art inspection initialized. Loaded " + std::to_string(m_tagItems.size()) + " items into Inspector.");
 
     for (auto& item : m_tagItems) {
         if (!item.localCoverBytes.empty() && item.localTexture == NULL) {

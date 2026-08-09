@@ -3,6 +3,7 @@
 #include <d3d11.h>
 #include <string>
 #include <vector>
+#include <atomic>
 #include "AcousticAnalyzer.hpp"
 
 #define WM_SCAN_PROGRESS     (WM_USER + 101)
@@ -17,6 +18,7 @@ struct TagReviewItem {
     char titleBuf[256] = {0};
     char trackNoBuf[32] = {0};
     bool isMusicBrainzMatched = false;
+    bool isFetchCompleted = false;
 
     std::string localCoverPath;
     std::string onlineCoverUrl;
@@ -75,4 +77,5 @@ private:
     std::vector<TagReviewItem> m_tagItems;
     size_t m_currentTagIndex = 0;
     bool m_isTagScanning = false;
+    std::atomic<size_t> m_fetchedCount{0};
 };
