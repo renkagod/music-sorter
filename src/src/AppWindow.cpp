@@ -781,7 +781,8 @@ void AppWindow::RunMessageLoop() {
                                 size_t currentNum = ++m_fetchedCount;
                                 LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] Querying AcoustID & MusicBrainz for: " + artistClean + " - " + albumClean);
 
-                                // 1. AcoustID Lookup
+                                // 1. AcoustID Lookup (With rate limit protection!)
+                                std::this_thread::sleep_for(std::chrono::milliseconds(300));
                                 auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(files[i]);
                                 if (!fpInfo.fpData.empty()) {
                                     std::wstringstream wss;
@@ -805,34 +806,63 @@ void AppWindow::RunMessageLoop() {
                                     }
                                 }
 
-                                // 2. Fallback: MusicBrainz Text Search API (Strict + Loose search for Doujin/Demetori!)
-                                if (releaseGroupMbId.empty() && !artistClean.empty() && artistClean != "Unknown Artist" && !albumClean.empty()) {
-                                    std::string mbQuery = "artist:\"" + artistClean + "\" AND release:\"" + albumClean + "\"";
-                                    std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
-                                    std::string mbRes = HttpGetString(Utf8ToWide(mbUrl));
+                                // 2. Fallback: MusicBrainz Text Search API (Strict -> Album Only -> Loose Search for Doujin/Demetori!)
+                                if (releaseGroupMbId.empty() && !albumClean.empty()) {
+                                    // 2a. Strict Artist + Album Search
+                                    if (!artistClean.empty() && artistClean != "Unknown Artist") {
+                                        std::string mbQuery = "artist:\"" + artistClean + "\" AND release:\"" + albumClean + "\"";
+                                        std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
+                                        std::string mbRes = HttpGetString(Utf8ToWide(mbUrl));
 
-                                    size_t rgPos = mbRes.find("\"release-groups\":");
-                                    if (rgPos != std::string::npos) {
-                                        size_t idPos = mbRes.find("\"id\":\"", rgPos);
-                                        if (idPos != std::string::npos) {
-                                            idPos += 6;
-                                            size_t endPos = mbRes.find("\"", idPos);
-                                            if (endPos != std::string::npos) {
-                                                releaseGroupMbId = mbRes.substr(idPos, endPos - idPos);
-                                                isMatched = true;
+                                        size_t rgPos = mbRes.find("\"release-groups\":");
+                                        if (rgPos != std::string::npos) {
+                                            size_t idPos = mbRes.find("\"id\":\"", rgPos);
+                                            if (idPos != std::string::npos) {
+                                                idPos += 6;
+                                                size_t endPos = mbRes.find("\"", idPos);
+                                                if (endPos != std::string::npos) {
+                                                    releaseGroupMbId = mbRes.substr(idPos, endPos - idPos);
+                                                    isMatched = true;
+                                                }
                                             }
-                                        }
-                                        size_t datePos = mbRes.find("\"first-release-date\":\"", rgPos);
-                                        if (datePos != std::string::npos) {
-                                            datePos += 22;
-                                            size_t dendPos = mbRes.find("\"", datePos);
-                                            if (dendPos != std::string::npos) {
-                                                firstReleaseDate = mbRes.substr(datePos, dendPos - datePos);
+                                            size_t datePos = mbRes.find("\"first-release-date\":\"", rgPos);
+                                            if (datePos != std::string::npos) {
+                                                datePos += 22;
+                                                size_t dendPos = mbRes.find("\"", datePos);
+                                                if (dendPos != std::string::npos) {
+                                                    firstReleaseDate = mbRes.substr(datePos, dendPos - datePos);
+                                                }
                                             }
                                         }
                                     }
 
-                                    // Loose Search Fallback if strict search returned 0 items
+                                    // 2b. Album Title Alone Fallback (100% finds Doujin/Demetori albums like スーパーレゲー!)
+                                    if (releaseGroupMbId.empty()) {
+                                        std::string mbAlbumUrl = "https://musicbrainz.org/ws/2/release-group?query=release:\"" + UrlEncode(albumClean) + "\"&fmt=json";
+                                        std::string mbAlbumRes = HttpGetString(Utf8ToWide(mbAlbumUrl));
+                                        size_t argPos = mbAlbumRes.find("\"release-groups\":");
+                                        if (argPos != std::string::npos) {
+                                            size_t aidPos = mbAlbumRes.find("\"id\":\"", argPos);
+                                            if (aidPos != std::string::npos) {
+                                                aidPos += 6;
+                                                size_t aendPos = mbAlbumRes.find("\"", aidPos);
+                                                if (aendPos != std::string::npos) {
+                                                    releaseGroupMbId = mbAlbumRes.substr(aidPos, aendPos - aidPos);
+                                                    isMatched = true;
+                                                }
+                                            }
+                                            size_t datePos = mbAlbumRes.find("\"first-release-date\":\"", argPos);
+                                            if (datePos != std::string::npos) {
+                                                datePos += 22;
+                                                size_t dendPos = mbAlbumRes.find("\"", datePos);
+                                                if (dendPos != std::string::npos) {
+                                                    firstReleaseDate = mbAlbumRes.substr(datePos, dendPos - datePos);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // 2c. Loose Search Fallback
                                     if (releaseGroupMbId.empty()) {
                                         std::string mbLooseQuery = artistClean + " " + albumClean;
                                         std::string mbLooseUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbLooseQuery) + "&fmt=json";
@@ -1035,12 +1065,15 @@ void AppWindow::RunMessageLoop() {
             ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
             ImGui::EndChild();
         } else if (m_activeStageTab == 1) {
-            // Stage 2 Clean 2-Column Layout (Old Tags + Local Cover on Left | New Tags + Online Cover on Right)
+            // Stage 2 Clean 2-Column Layout with DYNAMIC PROPORTIONAL HEIGHT (Never overflows screen!)
             if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
                 auto& item = m_tagItems[m_currentTagIndex];
                 
-                // Height set to 395px with NoScrollbar flag to fit perfectly on screen!
-                ImGui::BeginChild("TagInspectorCardPerfectFit", ImVec2(0, 395), true, ImGuiWindowFlags_NoScrollbar);
+                float availY = ImGui::GetContentRegionAvail().y;
+                float inspectorH = availY - 330.0f; // Leave 330px for log console panel
+                if (inspectorH < 330.0f) inspectorH = 330.0f;
+
+                ImGui::BeginChild("TagInspectorCardPerfectFit", ImVec2(0, inspectorH), true, ImGuiWindowFlags_NoScrollbar);
                 ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ И ОБЛОЖЕК] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
                 ImGui::SameLine();
                 if (item.isMusicBrainzMatched) {
@@ -1081,7 +1114,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("Локальная обложка:");
 
                 if (item.localTexture) {
-                    if (ImGui::ImageButton("##LocalCoverBtnLeft", (ImTextureID)item.localTexture, ImVec2(80, 80))) {
+                    if (ImGui::ImageButton("##LocalCoverBtnLeft", (ImTextureID)item.localTexture, ImVec2(70, 70))) {
                         item.selectedCoverChoice = 0;
                     }
                     ImGui::SameLine();
@@ -1116,7 +1149,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("Онлайн обложка MusicBrainz:");
 
                 if (item.onlineTexture) {
-                    if (ImGui::ImageButton("##OnlineCoverBtnRight", (ImTextureID)item.onlineTexture, ImVec2(80, 80))) {
+                    if (ImGui::ImageButton("##OnlineCoverBtnRight", (ImTextureID)item.onlineTexture, ImVec2(70, 70))) {
                         item.selectedCoverChoice = 1;
                     }
                     ImGui::SameLine();
@@ -1138,22 +1171,22 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Columns(1);
                 ImGui::Separator();
 
-                // Synced LRC Lyrics Input Box
+                // Synced LRC Lyrics Input Box (Compact 32px height)
                 ImGui::TextDisabled("Синхронный текст песни (LRC / Romaji):");
                 if (strlen(item.lyricsBuf) == 0) {
-                    ImGui::InputTextMultiline("##LyricsMultiLinePerfect", (char*)"[Текст песни не найден или отсутствует]", 40, ImVec2(-1, 40), ImGuiInputTextFlags_ReadOnly);
+                    ImGui::InputTextMultiline("##LyricsMultiLinePerfect", (char*)"[Текст песни не найден или отсутствует]", 40, ImVec2(-1, 32), ImGuiInputTextFlags_ReadOnly);
                 } else {
-                    ImGui::InputTextMultiline("##LyricsMultiLinePerfect", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 45));
+                    ImGui::InputTextMultiline("##LyricsMultiLinePerfect", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 32));
                 }
 
                 ImGui::Spacing();
 
-                if (ImGui::Button("[V] Принять и Записать Теги & Обложку", ImVec2(280, 32))) {
+                if (ImGui::Button("[V] Принять и Записать Теги & Обложку", ImVec2(280, 28))) {
                     LOG_INFO("[TAGS APPLIED] " + std::string(item.artistBuf) + " - " + std::string(item.titleBuf) + " (" + std::string(item.albumBuf) + ") [" + std::string(item.yearBuf) + "]");
                     m_currentTagIndex++;
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("[>>] Пропустить", ImVec2(140, 32))) {
+                if (ImGui::Button("[>>] Пропустить", ImVec2(140, 28))) {
                     m_currentTagIndex++;
                 }
                 ImGui::EndChild();
@@ -1172,7 +1205,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::EndChild();
         }
 
-        // Fully Selectable & Mouse Drag Copyable Log Console Field with Working Auto-Scroll
+        // 100% Reliable InputTextMultiline Auto-Scroll via ImGui::SetNextWindowScroll
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
         ImGui::Separator();
@@ -1187,7 +1220,6 @@ void AppWindow::RunMessageLoop() {
         static size_t last_log_size = 0;
 
         ImGuiContext& g = *GImGui;
-        ImGuiID input_id = ImGui::GetID("##LogConsoleMultiLineSelectable");
         ImGuiWindow* childWindow = ImGui::FindWindowByName("##LogConsoleMultiLineSelectable_01");
         if (!childWindow) childWindow = g.CurrentWindow;
 
@@ -1204,18 +1236,20 @@ void AppWindow::RunMessageLoop() {
             } else {
                 m_logAutoScroll = true;
             }
-
-            if (m_logAutoScroll && logs.size() != last_log_size) {
-                childWindow->Scroll.y = childWindow->ScrollMax.y;
-                childWindow->ScrollTarget.y = childWindow->ScrollMax.y + 1000.0f;
-                if (g.InputTextState.ID == input_id) {
-                    g.InputTextState.Scroll.y = childWindow->ScrollMax.y;
-                }
-            }
         }
-        last_log_size = logs.size();
+
+        if (m_logAutoScroll) {
+            ImGui::SetNextWindowScroll(ImVec2(0.0f, 999999.0f));
+        }
 
         ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
+
+        if (m_logAutoScroll && childWindow) {
+            childWindow->Scroll.y = childWindow->ScrollMax.y;
+            childWindow->ScrollTarget.y = childWindow->ScrollMax.y;
+        }
+
+        last_log_size = logs.size();
 
         ImGui::EndChild();
 
