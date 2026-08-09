@@ -143,6 +143,49 @@ static double CalculatePerceptualSharpness(const unsigned char* data, size_t siz
     return variance;
 }
 
+// Multi-Factor Image Quality Score: Sharpness * Resolution * sqrt(FileSizeKB) / (1 + 3 * JpegBlockiness8x8)
+static long long CalculateImageQualityScore(const unsigned char* data, size_t size, int width, int height) {
+    if (!data || size == 0 || width <= 0 || height <= 0) return 0;
+
+    double sharpness = CalculatePerceptualSharpness(data, size);
+
+    // Compute 8x8 JPEG Grid Discontinuity Penalty (Blockiness)
+    int w = 0, h = 0, c = 0;
+    unsigned char* gray = stbi_load_from_memory(data, (int)size, &w, &h, &c, 1);
+    double blockiness = 0.0;
+    if (gray && w >= 16 && h >= 16) {
+        double gridDiff = 0.0, nonGridDiff = 0.0;
+        size_t gridCount = 0, nonGridCount = 0;
+        for (int y = 1; y < h - 1; y += 2) {
+            bool isRowGrid = (y % 8 == 0);
+            for (int x = 1; x < w - 1; x += 2) {
+                bool isColGrid = (x % 8 == 0);
+                int diffH = std::abs((int)gray[y * w + x] - (int)gray[y * w + (x + 1)]);
+                int diffV = std::abs((int)gray[y * w + x] - (int)gray[(y + 1) * w + x]);
+                if (isColGrid) { gridDiff += diffH; gridCount++; }
+                else { nonGridDiff += diffH; nonGridCount++; }
+                if (isRowGrid) { gridDiff += diffV; gridCount++; }
+                else { nonGridDiff += diffV; nonGridCount++; }
+            }
+        }
+        stbi_image_free(gray);
+
+        if (gridCount > 0 && nonGridCount > 0 && nonGridDiff > 0.0) {
+            double ratio = (gridDiff / gridCount) / ((nonGridDiff / nonGridCount) + 0.001);
+            if (ratio > 1.0) blockiness = (ratio - 1.0);
+        }
+    } else if (gray) {
+        stbi_image_free(gray);
+    }
+
+    double sizeKB = (double)size / 1024.0;
+    double sizeFactor = std::sqrt(sizeKB + 1.0);
+    double penalty = 1.0 + 3.0 * blockiness;
+
+    double finalScore = (sharpness * (double)width * (double)height * sizeFactor) / penalty;
+    return (long long)finalScore;
+}
+
 // Helper: Endian Conversions & Vector Writing
 static void WriteUint32LE(std::vector<unsigned char>& buf, uint32_t val) {
     buf.push_back((unsigned char)(val & 0xFF));
@@ -821,16 +864,14 @@ void AppWindow::RunMessageLoop() {
             if (item.localTexture == NULL && !item.localCoverBytes.empty()) {
                 item.localTexture = CreateTextureFromMemory(m_pd3dDevice, item.localCoverBytes.data(), item.localCoverBytes.size(), &item.localWidth, &item.localHeight);
                 if (item.localTexture) {
-                    double sharpness = CalculatePerceptualSharpness(item.localCoverBytes.data(), item.localCoverBytes.size());
-                    item.localScore = (long long)(sharpness * item.localWidth * item.localHeight);
+                    item.localScore = CalculateImageQualityScore(item.localCoverBytes.data(), item.localCoverBytes.size(), item.localWidth, item.localHeight);
                 }
             }
 
             if (item.isFetchCompleted && !item.onlineCoverBytes.empty() && item.onlineTexture == NULL) {
                 item.onlineTexture = CreateTextureFromMemory(m_pd3dDevice, item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), &item.onlineWidth, &item.onlineHeight);
                 if (item.onlineTexture) {
-                    double sharpness = CalculatePerceptualSharpness(item.onlineCoverBytes.data(), item.onlineCoverBytes.size());
-                    item.onlineScore = (long long)(sharpness * item.onlineWidth * item.onlineHeight);
+                    item.onlineScore = CalculateImageQualityScore(item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), item.onlineWidth, item.onlineHeight);
                     
                     // Automatically select mathematically sharper & true higher quality cover art!
                     if (item.onlineScore > item.localScore) {
@@ -1700,15 +1741,13 @@ void AppWindow::HandleTagScanFinished() {
         if (!item.localCoverBytes.empty() && item.localTexture == NULL) {
             item.localTexture = CreateTextureFromMemory(m_pd3dDevice, item.localCoverBytes.data(), item.localCoverBytes.size(), &item.localWidth, &item.localHeight);
             if (item.localTexture) {
-                double sharpness = CalculatePerceptualSharpness(item.localCoverBytes.data(), item.localCoverBytes.size());
-                item.localScore = (long long)(sharpness * item.localWidth * item.localHeight);
+                item.localScore = CalculateImageQualityScore(item.localCoverBytes.data(), item.localCoverBytes.size(), item.localWidth, item.localHeight);
             }
         }
         if (!item.onlineCoverBytes.empty() && item.onlineTexture == NULL) {
             item.onlineTexture = CreateTextureFromMemory(m_pd3dDevice, item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), &item.onlineWidth, &item.onlineHeight);
             if (item.onlineTexture) {
-                double sharpness = CalculatePerceptualSharpness(item.onlineCoverBytes.data(), item.onlineCoverBytes.size());
-                item.onlineScore = (long long)(sharpness * item.onlineWidth * item.onlineHeight);
+                item.onlineScore = CalculateImageQualityScore(item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), item.onlineWidth, item.onlineHeight);
             }
         }
     }
