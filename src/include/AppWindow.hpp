@@ -5,8 +5,31 @@
 #include <vector>
 #include "AcousticAnalyzer.hpp"
 
-#define WM_SCAN_PROGRESS (WM_USER + 101)
-#define WM_SCAN_FINISHED (WM_USER + 102)
+#define WM_SCAN_PROGRESS     (WM_USER + 101)
+#define WM_SCAN_FINISHED     (WM_USER + 102)
+#define WM_TAG_SCAN_FINISHED (WM_USER + 103)
+
+struct TagReviewItem {
+    std::string filePath;
+    std::string relPath;
+    char artistBuf[256] = {0};
+    char albumBuf[256] = {0};
+    char titleBuf[256] = {0};
+    char trackNoBuf[32] = {0};
+    bool isMusicBrainzMatched = false;
+
+    std::string localCoverPath;
+    std::string onlineCoverUrl;
+    std::vector<unsigned char> localCoverBytes;
+    std::vector<unsigned char> onlineCoverBytes;
+
+    ID3D11ShaderResourceView* localTexture = NULL;
+    ID3D11ShaderResourceView* onlineTexture = NULL;
+    int localWidth = 0, localHeight = 0;
+    int onlineWidth = 0, onlineHeight = 0;
+
+    int selectedCoverChoice = 0; // 0 = Local, 1 = Online
+};
 
 class AppWindow {
 public:
@@ -21,6 +44,7 @@ public:
 
     HWND GetHWND() const { return m_hWnd; }
     void HandleScanFinished();
+    void HandleTagScanFinished();
 
 private:
     AppWindow() = default;
@@ -46,4 +70,9 @@ private:
     std::vector<std::string> m_autoDelete;
     size_t m_currentCandidateIndex = 0;
     bool m_isScanning = false;
+
+    // Step 2 Tag & Cover Inspection
+    std::vector<TagReviewItem> m_tagItems;
+    size_t m_currentTagIndex = 0;
+    bool m_isTagScanning = false;
 };

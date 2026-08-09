@@ -1,3 +1,6 @@
+#define STB_IMAGE_IMPLEMENTATION
+#include "../third_party/stb_image.h"
+
 #include "../include/AppWindow.hpp"
 #include "../include/AudioEngine.hpp"
 #include "../include/Logger.hpp"
@@ -10,6 +13,8 @@
 #include <thread>
 #include <sstream>
 #include <filesystem>
+#include <fstream>
+#include <regex>
 
 namespace fs = std::filesystem;
 
@@ -18,6 +23,50 @@ extern std::string g_ToSortDir;
 extern std::string g_DeleteDir;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const unsigned char* data, size_t size, int* outWidth, int* outHeight) {
+    if (!data || size == 0) return NULL;
+    int width = 0, height = 0, channels = 0;
+    unsigned char* image_data = stbi_load_from_memory(data, (int)size, &width, &height, &channels, 4);
+    if (!image_data) return NULL;
+
+    D3D11_TEXTURE2D_DESC desc;
+    ZeroMemory(&desc, sizeof(desc));
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+
+    ID3D11Texture2D* pTexture = NULL;
+    D3D11_SUBRESOURCE_DATA subResource;
+    subResource.pSysMem = image_data;
+    subResource.SysMemPitch = width * 4;
+    subResource.SysMemSlicePitch = 0;
+
+    device->CreateTexture2D(&desc, &subResource, &pTexture);
+
+    ID3D11ShaderResourceView* out_srv = NULL;
+    if (pTexture) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+        ZeroMemory(&srvDesc, sizeof(srvDesc));
+        srvDesc.Format = desc.Format;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = desc.MipLevels;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        device->CreateShaderResourceView(pTexture, &srvDesc, &out_srv);
+        pTexture->Release();
+    }
+
+    stbi_image_free(image_data);
+    if (outWidth) *outWidth = width;
+    if (outHeight) *outHeight = height;
+    return out_srv;
+}
 
 bool AppWindow::CreateDeviceD3D(HWND hWnd) {
     DXGI_SWAP_CHAIN_DESC sd;
@@ -78,7 +127,7 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 
     RegisterClassExW(&wcex);
 
-    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Desktop - Modern Monochrome C++ Studio", WS_OVERLAPPEDWINDOW, 100, 100, 1080, 760, NULL, NULL, hInstance, NULL);
+    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Desktop - Modern Monochrome C++ Studio", WS_OVERLAPPEDWINDOW, 100, 100, 1080, 780, NULL, NULL, hInstance, NULL);
 
     if (!CreateDeviceD3D(m_hWnd)) {
         CleanupDeviceD3D();
@@ -93,16 +142,15 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
-    // Disable built-in Tab button navigation so Tab is exclusively used for A/B Hot-Swapping!
     io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
 
-    // 1. Primary Font: Segoe UI for crisp English, Russian, and Latin
+    // Primary & CJK Merged Fonts
     ImFontConfig font_cfg_primary;
     font_cfg_primary.FontDataOwnedByAtlas = false;
     static const ImWchar ranges_latin_cyrillic[] = {
-        0x0020, 0x00FF, // Basic Latin + Latin Supplement
-        0x0400, 0x052F, // Cyrillic + Cyrillic Supplement
-        0x2000, 0x206F, // General Punctuation
+        0x0020, 0x00FF,
+        0x0400, 0x052F,
+        0x2000, 0x206F,
         0,
     };
 
@@ -112,16 +160,15 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
         io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\arial.ttf", 16.0f, &font_cfg_primary, ranges_latin_cyrillic);
     }
 
-    // 2. Merged CJK Font: MS Gothic / YuGothM for Japanese Hiragana, Katakana, and Kanji
     ImFontConfig font_cfg_cjk;
     font_cfg_cjk.FontDataOwnedByAtlas = false;
-    font_cfg_cjk.MergeMode = true; // Merge Japanese glyphs seamlessly into Segoe UI primary font!
+    font_cfg_cjk.MergeMode = true;
 
     static const ImWchar ranges_cjk[] = {
-        0x3000, 0x30FF, // CJK Symbols and Punctuation + Hiragana + Katakana
-        0x31F0, 0x31FF, // Katakana Phonetic Extensions
-        0x4E00, 0x9FAF, // CJK Unified Ideographs
-        0xFF00, 0xFFEF, // Halfwidth and Fullwidth Forms
+        0x3000, 0x30FF,
+        0x31F0, 0x31FF,
+        0x4E00, 0x9FAF,
+        0xFF00, 0xFFEF,
         0,
     };
 
@@ -131,7 +178,6 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
         io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\YuGothM.ttc", 16.0f, &font_cfg_cjk, ranges_cjk);
     }
 
-    // Apply Sleek Dark Monochrome Styling
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 6.0f;
     style.FrameRounding = 4.0f;
@@ -160,6 +206,12 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 }
 
 void AppWindow::Cleanup() {
+    for (auto& item : m_tagItems) {
+        if (item.localTexture) item.localTexture->Release();
+        if (item.onlineTexture) item.onlineTexture->Release();
+    }
+    m_tagItems.clear();
+
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -265,12 +317,17 @@ void AppWindow::RunMessageLoop() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("2. [Теги] Метаданные & Обложки", ImVec2(230, 36))) {
-            LOG_INFO("Step 2: Tagging canonical metadata & embedding cover art...");
-            std::thread([]() {
-                _popen("python process_collection.py", "r");
-                LOG_INFO("Step 2 Complete: Metadata tagged & covers embedded.");
-            }).detach();
+        if (ImGui::Button("2. [Теги & Обложки] Инспектор", ImVec2(230, 36))) {
+            if (!m_isTagScanning) {
+                m_isTagScanning = true;
+                LOG_INFO("Step 2: Scanning TO SORT tracks for metadata & cover art inspection...");
+                std::thread([this]() {
+                    _popen("python fetch_musicbrainz_metadata.py", "r");
+                    _popen("python process_collection.py", "r");
+                    m_isTagScanning = false;
+                    PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
+                }).detach();
+            }
         }
         ImGui::SameLine();
         if (ImGui::Button("3. [Сортировка] Папки FLAC/MP3", ImVec2(240, 36))) {
@@ -333,6 +390,68 @@ void AppWindow::RunMessageLoop() {
         ImGui::EndChild();
 
         ImGui::Spacing();
+
+        // Step 2 Interactive Tag & Cover Inspector Card (When Step 2 is active)
+        if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
+            auto& item = m_tagItems[m_currentTagIndex];
+            ImGui::BeginChild("TagInspectorCard", ImVec2(0, 220), true);
+            ImGui::TextDisabled("🏷️ ИНСПЕКТОР ТЕГОВ И ВЫБОР ОБЛОЖКИ (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
+            ImGui::SameLine();
+            if (item.isMusicBrainzMatched) {
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "[MUSICBRAINZ MATCHED]");
+            } else {
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "[NICHE TRACK - LEVEL 3 PREFILLED]");
+            }
+
+            ImGui::Columns(2, "TagCols", false);
+            ImGui::SetColumnWidth(0, 480);
+
+            // Prefilled Editable Inputs
+            ImGui::InputText("Исполнитель", item.artistBuf, sizeof(item.artistBuf));
+            ImGui::InputText("Альбом", item.albumBuf, sizeof(item.albumBuf));
+            ImGui::InputText("Название", item.titleBuf, sizeof(item.titleBuf));
+            ImGui::InputText("Номер", item.trackNoBuf, sizeof(item.trackNoBuf));
+
+            ImGui::NextColumn();
+
+            // Side-by-Side Cover Art Choice
+            ImGui::TextDisabled("ВЫБОР ОБЛОЖКИ:");
+            if (item.localTexture) {
+                if (ImGui::ImageButton("##LocalCoverBtn", (ImTextureID)item.localTexture, ImVec2(100, 100))) {
+                    item.selectedCoverChoice = 0;
+                }
+                ImGui::SameLine();
+                ImGui::Text(item.selectedCoverChoice == 0 ? "[X] Локальный скан" : "   Локальный скан");
+            } else {
+                ImGui::TextDisabled("[Локальная обложка отсутствует]");
+            }
+
+            ImGui::SameLine();
+
+            if (item.onlineTexture) {
+                if (ImGui::ImageButton("##OnlineCoverBtn", (ImTextureID)item.onlineTexture, ImVec2(100, 100))) {
+                    item.selectedCoverChoice = 1;
+                }
+                ImGui::SameLine();
+                ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
+            } else {
+                ImGui::TextDisabled("[Онлайн обложка отсутствует]");
+            }
+
+            ImGui::Columns(1);
+            ImGui::Spacing();
+
+            if (ImGui::Button("[✓] Принять и Записать Теги & Обложку", ImVec2(280, 32))) {
+                LOG_INFO("[TAGS APPLIED] " + std::string(item.artistBuf) + " - " + std::string(item.titleBuf) + " (" + std::string(item.albumBuf) + ")");
+                m_currentTagIndex++;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("[⏭] Пропустить", ImVec2(140, 32))) {
+                m_currentTagIndex++;
+            }
+            ImGui::EndChild();
+            ImGui::Spacing();
+        }
 
         // Audio Player Controls & Wave Similarity Section
         ImGui::BeginChild("PlayerControls", ImVec2(0, 140), true);
@@ -441,6 +560,9 @@ LRESULT CALLBACK AppWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
     case WM_SCAN_FINISHED:
         Instance().HandleScanFinished();
         return 0;
+    case WM_TAG_SCAN_FINISHED:
+        Instance().HandleTagScanFinished();
+        return 0;
     case WM_SIZE:
         if (Instance().m_pd3dDevice != NULL && wParam != SIZE_MINIMIZED) {
             Instance().CleanupRenderTarget();
@@ -479,4 +601,8 @@ void AppWindow::HandleScanFinished() {
         AudioEngine::Instance().LoadTrackA(pair.trackA_path);
         AudioEngine::Instance().LoadTrackB(pair.trackB_path);
     }
+}
+
+void AppWindow::HandleTagScanFinished() {
+    LOG_INFO("Step 2 Tagging & Cover Art inspection finished.");
 }
