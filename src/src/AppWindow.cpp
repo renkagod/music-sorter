@@ -722,8 +722,38 @@ static void NativeMirrorCollections() {
 
                     const auto& task = conversionTasks[idx];
                     if (ConvertFlacToMp3(task.first.string(), task.second.string())) {
+                        // Read cover.jpg if present in FLAC folder
+                        fs::path coverFile = task.first.parent_path() / "cover.jpg";
+                        std::vector<unsigned char> coverBytes;
+                        if (fs::exists(coverFile)) {
+                            std::ifstream cIn(coverFile, std::ios::binary | std::ios::ate);
+                            if (cIn.is_open()) {
+                                std::streamsize cLen = cIn.tellg();
+                                cIn.seekg(0, std::ios::beg);
+                                if (cLen > 0) {
+                                    coverBytes.resize((size_t)cLen);
+                                    cIn.read((char*)coverBytes.data(), cLen);
+                                }
+                                cIn.close();
+                            }
+                        }
+
+                        // Parse artist, album, trackNo, title from paths/stems
+                        std::string album = task.first.parent_path().filename().string();
+                        std::string artist = task.first.parent_path().parent_path().filename().string();
+                        std::string filename = task.first.stem().string();
+                        std::string trackNo = "";
+                        std::string title = filename;
+                        size_t dotPos = filename.find(". ");
+                        if (dotPos != std::string::npos && dotPos <= 4) {
+                            trackNo = filename.substr(0, dotPos);
+                            title = filename.substr(dotPos + 2);
+                        }
+
+                        WriteMp3TagsAndPicture(task.second.string(), artist, album, title, trackNo, "", "", coverBytes);
+
                         size_t currentDone = completedCount.fetch_add(1) + 1;
-                        LOG_INFO("[MP3 MIRRORED " + std::to_string(currentDone) + "/" + std::to_string(conversionTasks.size()) + "] Created 320kbps MP3: " + fs::relative(task.second, g_BaseDir).string());
+                        LOG_INFO("[MP3 MIRRORED " + std::to_string(currentDone) + "/" + std::to_string(conversionTasks.size()) + "] Created 320kbps MP3 with ID3v2.3 cover art: " + fs::relative(task.second, g_BaseDir).string());
                     }
                 }
             });
@@ -734,6 +764,45 @@ static void NativeMirrorCollections() {
         }
 
         convertedMp3s = completedCount.load();
+    }
+
+    // 3. Update ID3v2.3 tags & cover art for ALL existing MP3 files in mp3/
+    if (fs::exists(mp3Root)) {
+        for (auto& entry : fs::recursive_directory_iterator(mp3Root)) {
+            if (entry.is_regular_file()) {
+                std::string ext = entry.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".mp3") {
+                    fs::path coverFile = entry.path().parent_path() / "cover.jpg";
+                    std::vector<unsigned char> coverBytes;
+                    if (fs::exists(coverFile)) {
+                        std::ifstream cIn(coverFile, std::ios::binary | std::ios::ate);
+                        if (cIn.is_open()) {
+                            std::streamsize cLen = cIn.tellg();
+                            cIn.seekg(0, std::ios::beg);
+                            if (cLen > 0) {
+                                coverBytes.resize((size_t)cLen);
+                                cIn.read((char*)coverBytes.data(), cLen);
+                            }
+                            cIn.close();
+                        }
+                    }
+
+                    std::string album = entry.path().parent_path().filename().string();
+                    std::string artist = entry.path().parent_path().parent_path().filename().string();
+                    std::string filename = entry.path().stem().string();
+                    std::string trackNo = "";
+                    std::string title = filename;
+                    size_t dotPos = filename.find(". ");
+                    if (dotPos != std::string::npos && dotPos <= 4) {
+                        trackNo = filename.substr(0, dotPos);
+                        title = filename.substr(dotPos + 2);
+                    }
+
+                    WriteMp3TagsAndPicture(entry.path().string(), artist, album, title, trackNo, "", "", coverBytes);
+                }
+            }
+        }
     }
 
     LOG_INFO("Step 3 Complete: Native C++ parallel mirroring finished. Created " + std::to_string(createdDirs) + " folders, converted " + std::to_string(convertedMp3s) + " MP3s across " + std::to_string(std::thread::hardware_concurrency()) + " threads, copied " + std::to_string(copiedFallbacks) + " MP3 fallbacks.");
