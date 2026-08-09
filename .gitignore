@@ -6,9 +6,19 @@
 *.ogg
 /flac/
 /mp3/
+/TO SORT/
+/review/
+/delete/
 
 # Ignore ZIP backup archives
 *.zip
+
+# Ignore C++ build directories and MSVC debug artifacts
+/build/
+*.ilk
+*.pdb
+*.obj
+imgui.ini
 
 # Ignore Python cache and binary tools
 __pycache__/
