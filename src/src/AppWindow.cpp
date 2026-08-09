@@ -198,6 +198,36 @@ std::string HttpGetString(const std::wstring& url) {
     return std::string((char*)bytes.data(), bytes.size());
 }
 
+// Robust HTTP POST for AcoustID Fingerprint Lookup (Fixes HTTP 414 Request-URI Too Long!)
+static std::string AcoustIdHttpPost(const std::string& postData) {
+    std::vector<unsigned char> result;
+    HINTERNET hNet = InternetOpenW(L"MusicSorterApp/2.0 (contact@musicsorter.org)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (!hNet) return "";
+
+    HINTERNET hConnect = InternetConnectW(hNet, L"api.acoustid.org", INTERNET_DEFAULT_HTTPS_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
+    if (hConnect) {
+        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
+        HINTERNET hRequest = HttpOpenRequestW(hConnect, L"POST", L"/v2/lookup", NULL, NULL, NULL, flags, 0);
+        if (hRequest) {
+            std::wstring headers = L"Content-Type: application/x-www-form-urlencoded\r\n";
+            BOOL sent = HttpSendRequestW(hRequest, headers.c_str(), (DWORD)headers.length(), (LPVOID)postData.c_str(), (DWORD)postData.length());
+            if (sent) {
+                unsigned char buffer[16384];
+                DWORD bytesRead = 0;
+                while (InternetReadFile(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
+                    result.insert(result.end(), buffer, buffer + bytesRead);
+                }
+            } else {
+                LOG_INFO("[ACOUSTID POST ERROR] HttpSendRequest failed with error: " + std::to_string(GetLastError()));
+            }
+            InternetCloseHandle(hRequest);
+        }
+        InternetCloseHandle(hConnect);
+    }
+    InternetCloseHandle(hNet);
+    return std::string((char*)result.data(), result.size());
+}
+
 ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const unsigned char* data, size_t size, int* outWidth, int* outHeight) {
     if (!data || size == 0) return NULL;
     int width = 0, height = 0, channels = 0;
@@ -796,18 +826,20 @@ void AppWindow::RunMessageLoop() {
                         size_t currentNum = ++m_fetchedCount;
                         LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] [UI ORDER PRIORITY #" + std::to_string(i + 1) + "] Querying: " + artistClean + " - " + albumClean + " (File: " + item.originalFilename + ")");
 
-                        // 1. AcoustID Fingerprint Lookup
+                        // 1. AcoustID Fingerprint Lookup via HTTP POST (Fixes HTTP 414 Request-URI Too Long!)
                         std::this_thread::sleep_for(std::chrono::milliseconds(200));
                         auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(files[i]);
                         if (!fpInfo.fpData.empty()) {
                             LOG_INFO("[ACOUSTID FINGERPRINT] Extracted " + std::to_string(fpInfo.fpData.size()) + " frames, duration " + std::to_string(fpInfo.duration) + "s for " + item.originalFilename);
-                            std::wstringstream wss;
-                            wss << L"https://api.acoustid.org/v2/lookup?client=8Xa1nV0f&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << L"&fingerprint=";
+                            
+                            std::ostringstream postStream;
+                            postStream << "client=8Xa1nV0f&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << "&fingerprint=";
                             for (size_t k = 0; k < fpInfo.fpData.size(); ++k) {
-                                if (k > 0) wss << L",";
-                                wss << fpInfo.fpData[k];
+                                if (k > 0) postStream << ",";
+                                postStream << fpInfo.fpData[k];
                             }
-                            std::string acoustRes = HttpGetString(wss.str());
+                            
+                            std::string acoustRes = AcoustIdHttpPost(postStream.str());
                             size_t rgPos = acoustRes.find("\"releasegroups\":");
                             if (rgPos != std::string::npos) {
                                 size_t idPos = acoustRes.find("\"id\":\"", rgPos);
@@ -1086,13 +1118,13 @@ void AppWindow::RunMessageLoop() {
             ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
             ImGui::EndChild();
         } else if (m_activeStageTab == 1) {
-            // Stage 2: 3x GIANT Inspector Layout (Tags & GIANT 260x260 Covers take 90% of screen!)
+            // Stage 2: PERFECT SIDE-BY-SIDE COVER ART COMPARISON IN CENTER!
             if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
                 auto& item = m_tagItems[m_currentTagIndex];
                 
                 float availY = ImGui::GetContentRegionAvail().y;
-                float inspectorH = availY - 200.0f; // Give 90% space to Inspector, 200px for Logs console panel
-                if (inspectorH < 450.0f) inspectorH = 450.0f;
+                float inspectorH = availY - 320.0f; // Give 320px to Logs console panel!
+                if (inspectorH < 400.0f) inspectorH = 400.0f;
 
                 ImGui::BeginChild("TagInspectorCardPerfectFit", ImVec2(0, inspectorH), true, ImGuiWindowFlags_NoScrollbar);
                 ImGui::TextDisabled("Инспектор тегов (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
@@ -1109,15 +1141,15 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
                 ImGui::Separator();
 
-                // Main 2-Column Split: Left Half = Original File | Right Half = Proposed New State
-                ImGui::Columns(2, "MainTagInspectorColumns3x", false);
+                // Main 2-Column Split: Left Half = Original Tags + Local Cover | Right Half = Online Cover + Proposed New Tags
+                ImGui::Columns(2, "MainTagInspectorColumnsSideBySideCovers", false);
 
-                // ==================== COLUMN 0 (LEFT HALF OF WINDOW): ORIGINAL FILE ====================
+                // ==================== COLUMN 0 (LEFT HALF OF WINDOW) ====================
                 ImGui::TextDisabled("Исходные теги в файле");
 
-                // Sub-group 1: GIANT Tags Input Fields
+                // Sub-group 1: Original Tags Input Fields (Far Left)
                 ImGui::BeginGroup();
-                ImGui::PushItemWidth(260);
+                ImGui::PushItemWidth(240);
 
                 char origArtist[256], origAlbum[256], origTitle[256], origTrack[32], origYear[32];
                 strncpy_s(origArtist, item.embeddedArtist.c_str(), sizeof(origArtist) - 1);
@@ -1131,19 +1163,19 @@ void AppWindow::RunMessageLoop() {
                 ImGui::InputText("Название##Orig", origTitle, sizeof(origTitle), ImGuiInputTextFlags_ReadOnly);
                 ImGui::PopItemWidth();
 
-                ImGui::PushItemWidth(100);
+                ImGui::PushItemWidth(90);
                 ImGui::InputText("№##Orig", origTrack, sizeof(origTrack), ImGuiInputTextFlags_ReadOnly);
                 ImGui::SameLine();
-                ImGui::PushItemWidth(110);
+                ImGui::PushItemWidth(100);
                 ImGui::InputText("Год##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
                 ImGui::EndGroup();
 
                 ImGui::SameLine();
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 15.0f);
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
 
-                // Sub-group 2: GIANT LOCAL COVER (260x260 px!)
+                // Sub-group 2: LOCAL COVER ART (Left Center)
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("Локальная обложка:");
                 if (item.localTexture) {
@@ -1162,32 +1194,12 @@ void AppWindow::RunMessageLoop() {
                 }
                 ImGui::EndGroup();
 
-                // ==================== COLUMN 1 (RIGHT HALF OF WINDOW): PROPOSED NEW DATA ====================
+                // ==================== COLUMN 1 (RIGHT HALF OF WINDOW) ====================
                 ImGui::NextColumn();
 
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
 
-                // Sub-group 3: GIANT New Proposed Tags Input Fields
-                ImGui::BeginGroup();
-                ImGui::PushItemWidth(260);
-                ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
-                ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
-                ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
-                ImGui::PopItemWidth();
-
-                ImGui::PushItemWidth(100);
-                ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
-                ImGui::SameLine();
-                ImGui::PushItemWidth(110);
-                ImGui::InputText("Год##New", item.yearBuf, sizeof(item.yearBuf));
-                ImGui::PopItemWidth();
-                ImGui::PopItemWidth();
-                ImGui::EndGroup();
-
-                ImGui::SameLine();
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 15.0f);
-
-                // Sub-group 4: GIANT ONLINE COVER (260x260 px!)
+                // Sub-group 3: ONLINE COVER ART (Right Center - SITS DIRECTLY NEXT TO LOCAL COVER ART!)
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("CoverArtArchive:");
                 if (item.onlineTexture) {
@@ -1206,6 +1218,26 @@ void AppWindow::RunMessageLoop() {
                 } else {
                     ImGui::TextDisabled("[Обложка отсутствует]");
                 }
+                ImGui::EndGroup();
+
+                ImGui::SameLine();
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
+
+                // Sub-group 4: Proposed New Tags Input Fields (Far Right)
+                ImGui::BeginGroup();
+                ImGui::PushItemWidth(240);
+                ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
+                ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
+                ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
+                ImGui::PopItemWidth();
+
+                ImGui::PushItemWidth(90);
+                ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
+                ImGui::SameLine();
+                ImGui::PushItemWidth(100);
+                ImGui::InputText("Год##New", item.yearBuf, sizeof(item.yearBuf));
+                ImGui::PopItemWidth();
+                ImGui::PopItemWidth();
                 ImGui::EndGroup();
 
                 ImGui::Columns(1); // Reset main split
@@ -1243,15 +1275,17 @@ void AppWindow::RunMessageLoop() {
             ImGui::EndChild();
         }
 
-        // Clean Syntax-Highlighted & Click-to-Copy Logs Panel with Copy All Button
+        // Clean Syntax-Highlighted & Click-to-Copy Logs Panel (Tall 320px Height + Sleek Copy Button)
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("Logs:");
         ImGui::SameLine();
 
         auto logs = Logger::Instance().GetLogs();
 
-        // One-Click Button to Copy ALL Logs into Windows Clipboard!
-        if (ImGui::Button("Скопировать все логи в буфер", ImVec2(230, 24))) {
+        // Sleek Right-Aligned Copy All Logs Button
+        float availW = ImGui::GetContentRegionAvail().x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + availW - 200.0f);
+        if (ImGui::Button("[ 📋 Скопировать логи ]", ImVec2(190, 24))) {
             std::string full_logs;
             for (const auto& log : logs) {
                 full_logs += log + "\n";
