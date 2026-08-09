@@ -988,9 +988,9 @@ void AppWindow::RunMessageLoop() {
         ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
         ImGui::EndChild();
 
-        // Fully Selectable & Copyable Log Console Field with Exact User Auto-Scroll Logic!
+        // Fully Selectable & Copyable Log Console Field with Cleaned Up Labels!
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
-        ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ (Выделите любой текст мышью / Ctrl+C):");
+        ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
         ImGui::Separator();
 
         auto logs = Logger::Instance().GetLogs();
