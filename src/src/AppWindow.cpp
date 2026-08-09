@@ -710,8 +710,8 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 
     RegisterClassExW(&wcex);
 
-    // Initial Window Size tightened to 1180x950 to end right at the edge of CoverArtArchive column!
-    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Studio", WS_OVERLAPPEDWINDOW, 40, 20, 1180, 950, NULL, NULL, hInstance, NULL);
+    // Initial Window Size adjusted to 1220x950 to perfectly fit all 4 columns and end right after CoverArtArchive!
+    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Studio", WS_OVERLAPPEDWINDOW, 40, 20, 1220, 950, NULL, NULL, hInstance, NULL);
 
     if (!CreateDeviceD3D(m_hWnd)) {
         CleanupDeviceD3D();
@@ -1371,23 +1371,23 @@ void AppWindow::RunMessageLoop() {
 
                 // Main 4-Column Layout: Proposed Tags (Col 0) | Original Tags (Col 1) | Local Cover (Col 2) | Online Cover (Col 3)
                 ImGui::Columns(4, "MainTagInspector4Columns", false);
-                ImGui::SetColumnWidth(0, 300.0f);
-                ImGui::SetColumnWidth(1, 300.0f);
-                ImGui::SetColumnWidth(2, 275.0f);
-                ImGui::SetColumnWidth(3, 275.0f);
+                ImGui::SetColumnWidth(0, 320.0f);
+                ImGui::SetColumnWidth(1, 320.0f);
+                ImGui::SetColumnWidth(2, 280.0f);
+                ImGui::SetColumnWidth(3, 280.0f);
 
                 // ==================== COLUMN 0 (PROPOSED NEW TAGS - FAR LEFT) ====================
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
-                ImGui::PushItemWidth(210);
+                ImGui::PushItemWidth(190);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
                 ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
                 ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
                 ImGui::PopItemWidth();
 
-                ImGui::PushItemWidth(80);
+                ImGui::PushItemWidth(65);
                 ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
                 ImGui::SameLine();
-                ImGui::PushItemWidth(90);
+                ImGui::PushItemWidth(95);
                 ImGui::InputText("Год/Дата##New", item.yearBuf, sizeof(item.yearBuf));
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
@@ -1395,7 +1395,7 @@ void AppWindow::RunMessageLoop() {
                 // ==================== COLUMN 1 (ORIGINAL TAGS) ====================
                 ImGui::NextColumn();
                 ImGui::TextDisabled("Исходные теги в файле");
-                ImGui::PushItemWidth(210);
+                ImGui::PushItemWidth(190);
 
                 char origArtist[256], origAlbum[256], origTitle[256], origTrack[32], origYear[32];
                 strncpy_s(origArtist, item.embeddedArtist.c_str(), sizeof(origArtist) - 1);
@@ -1409,10 +1409,10 @@ void AppWindow::RunMessageLoop() {
                 ImGui::InputText("Название##Orig", origTitle, sizeof(origTitle), ImGuiInputTextFlags_ReadOnly);
                 ImGui::PopItemWidth();
 
-                ImGui::PushItemWidth(80);
+                ImGui::PushItemWidth(65);
                 ImGui::InputText("№##Orig", origTrack, sizeof(origTrack), ImGuiInputTextFlags_ReadOnly);
                 ImGui::SameLine();
-                ImGui::PushItemWidth(90);
+                ImGui::PushItemWidth(95);
                 ImGui::InputText("Год/Дата##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
@@ -1592,13 +1592,12 @@ void AppWindow::RunMessageLoop() {
             }
 
             ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-            ImGui::PushTextWrapPos(0.0f);
-            // Interactive Selectable Line with Text Wrapping!
-            if (ImGui::Selectable(logLine.c_str(), false)) {
+            // Interactive Selectable Line with Text Wrapped and Click-to-Copy!
+            ImGui::TextWrapped("%s", logLine.c_str());
+            if (ImGui::IsItemClicked()) {
                 CopyToClipboardWin32(logLine);
                 LOG_INFO("[CLIPBOARD] Copied line to clipboard: " + logLine);
             }
-            ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
 
             ImGui::PopID();
