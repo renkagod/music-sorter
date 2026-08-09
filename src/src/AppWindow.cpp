@@ -1223,7 +1223,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::EndChild();
         }
 
-        // Clean Logs Panel with Canonical ImGui Auto-Scroll Pause
+        // Clean Logs Panel with Context7 ImGui Child Window Context Auto-Scroll Pattern
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("Logs:");
         ImGui::Separator();
@@ -1237,29 +1237,17 @@ void AppWindow::RunMessageLoop() {
 
         static size_t last_log_size = 0;
 
-        ImGuiContext& g = *GImGui;
-        ImGuiWindow* childWindow = ImGui::FindWindowByName("##LogConsoleMultiLineSelectable_01");
-        if (!childWindow) childWindow = g.CurrentWindow;
-
-        // CANONICAL IMGUI AUTO-SCROLL PAUSE PATTERN:
-        // Check if current scroll position is at the bottom BEFORE adding/scrolling!
-        // If user scrolled up, childWindow->Scroll.y < childWindow->ScrollMax.y - 15.0f!
-        bool isAtBottom = true;
-        if (childWindow && childWindow->ScrollMax.y > 0.0f) {
-            isAtBottom = (childWindow->Scroll.y >= childWindow->ScrollMax.y - 15.0f);
-        }
-
-        // Apply auto-scroll ONLY IF the user was already at the bottom!
-        if (isAtBottom && logs.size() != last_log_size) {
-            ImGui::SetNextWindowScroll(ImVec2(0.0f, 999999.0f));
-        }
-
         ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
 
-        if (isAtBottom && logs.size() != last_log_size && childWindow) {
-            childWindow->Scroll.y = childWindow->ScrollMax.y;
-            childWindow->ScrollTarget.y = childWindow->ScrollMax.y;
+        // CONTEXT7 DOCUMENTATION PATTERN:
+        // Enter the child window context of InputTextMultiline ("##LogConsoleMultiLineSelectable_01")
+        // and execute GetScrollY() >= GetScrollMaxY() inside that context!
+        if (ImGui::BeginChild("##LogConsoleMultiLineSelectable_01")) {
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f && logs.size() != last_log_size) {
+                ImGui::SetScrollHereY(1.0f);
+            }
         }
+        ImGui::EndChild();
 
         last_log_size = logs.size();
 
