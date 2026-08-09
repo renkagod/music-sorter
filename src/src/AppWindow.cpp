@@ -898,7 +898,7 @@ void AppWindow::RunMessageLoop() {
                                     size_t aidPos = mbAlbumRes.find("\"id\":\"", argPos);
                                     if (aidPos != std::string::npos) {
                                         aidPos += 6;
-                                        size_t aendPos = mbAlbumRes.find("\"", aidPos);
+                                        size_t aendPos = mbAlbumRes.find("\"", argPos);
                                         if (aendPos != std::string::npos) {
                                             releaseGroupMbId = mbAlbumRes.substr(aidPos, aendPos - aidPos);
                                             isMatched = true;
@@ -1251,12 +1251,55 @@ void AppWindow::RunMessageLoop() {
 
                 ImGui::Spacing();
 
-                if (ImGui::Button("Принять и записать", ImVec2(240, 32))) {
-                    LOG_INFO("[TAGS APPLIED] " + std::string(item.artistBuf) + " - " + std::string(item.titleBuf) + " (" + std::string(item.albumBuf) + ") [" + std::string(item.yearBuf) + "]");
+                // Crystal Clear Write Action Summary Line
+                std::string chosenCoverStr = (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) ? "CoverArtArchive (" + std::to_string(item.onlineWidth) + "x" + std::to_string(item.onlineHeight) + " px)" : (item.localTexture ? "Локальная обложка (" + std::to_string(item.localWidth) + "x" + std::to_string(item.localHeight) + " px)" : "Без обложки");
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Будет записано:");
+                ImGui::SameLine();
+                ImGui::Text("%s - %s (%s) [%s] | Обложка: %s", item.artistBuf, item.titleBuf, item.albumBuf, item.yearBuf, chosenCoverStr.c_str());
+
+                if (ImGui::Button("[V] Принять и записать новые теги", ImVec2(320, 34))) {
+                    std::string newArtist(item.artistBuf);
+                    std::string newAlbum(item.albumBuf);
+                    std::string newTitle(item.titleBuf);
+                    std::string newTrackNo(item.trackNoBuf);
+                    std::string newYear(item.yearBuf);
+
+                    fs::path srcFile(item.filePath);
+                    std::string ext = srcFile.extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+                    fs::path targetFolder = (ext == ".flac") ? (fs::path(g_BaseDir) / "flac" / newArtist / newAlbum) : (fs::path(g_BaseDir) / "mp3" / newArtist / newAlbum);
+                    fs::create_directories(targetFolder);
+
+                    std::string newFileName = newTrackNo + ". " + newTitle + ext;
+                    fs::path dstFile = targetFolder / newFileName;
+
+                    // Move/copy audio file to sorted target folder
+                    try {
+                        if (fs::exists(dstFile)) fs::remove(dstFile);
+                        fs::rename(srcFile, dstFile);
+                        LOG_INFO("[TAGS APPLIED & FILE MOVED] Written tags & moved to: " + fs::relative(dstFile, g_BaseDir).string());
+
+                        // Save chosen cover art to folder
+                        const auto& coverBytes = (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) ? item.onlineCoverBytes : item.localCoverBytes;
+                        if (!coverBytes.empty()) {
+                            fs::path coverDst = targetFolder / "cover.jpg";
+                            std::ofstream cOut(coverDst, std::ios::binary);
+                            if (cOut.is_open()) {
+                                cOut.write((const char*)coverBytes.data(), coverBytes.size());
+                                cOut.close();
+                                LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                            }
+                        }
+                    } catch (const std::exception& ex) {
+                        LOG_INFO("[WRITE ERROR] Failed to move/write file: " + std::string(ex.what()));
+                    }
+
                     m_currentTagIndex++;
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Пропустить", ImVec2(140, 32))) {
+                if (ImGui::Button("[X] Оставить без изменений (Пропустить)", ImVec2(290, 34))) {
+                    LOG_INFO("[SKIPPED] Skipped track: " + item.originalFilename);
                     m_currentTagIndex++;
                 }
                 ImGui::EndChild();
@@ -1305,15 +1348,15 @@ void AppWindow::RunMessageLoop() {
             ImVec4 textColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
             if (logLine.find("[MUSICBRAINZ MATCHED]") != std::string::npos || logLine.find("[ACOUSTID MATCHED]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER A SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER B SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER C SUCCESS]") != std::string::npos) {
                 textColor = ImVec4(0.2f, 1.0f, 0.4f, 1.0f);
-            } else if (logLine.find("[COVER ART DOWNLOADED]") != std::string::npos) {
+            } else if (logLine.find("[COVER ART DOWNLOADED]") != std::string::npos || logLine.find("[COVER SAVED]") != std::string::npos) {
                 textColor = ImVec4(1.0f, 0.4f, 0.8f, 1.0f);
             } else if (logLine.find("[MUSICBRAINZ FETCH") != std::string::npos || logLine.find("[MUSICBRAINZ TIER") != std::string::npos || logLine.find("[ACOUSTID FINGERPRINT]") != std::string::npos) {
                 textColor = ImVec4(0.9f, 0.8f, 0.2f, 1.0f);
-            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos || logLine.find("[HTTP 429") != std::string::npos || logLine.find("[HTTP 503") != std::string::npos || logLine.find("[HTTP ERROR") != std::string::npos || logLine.find("[COVER ART MISSING]") != std::string::npos) {
+            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos || logLine.find("[HTTP 429") != std::string::npos || logLine.find("[HTTP 503") != std::string::npos || logLine.find("[HTTP ERROR") != std::string::npos || logLine.find("[COVER ART MISSING]") != std::string::npos || logLine.find("[SKIPPED]") != std::string::npos) {
                 textColor = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
             } else if (logLine.find("[LRC LYRICS FETCHED]") != std::string::npos) {
                 textColor = ImVec4(0.3f, 0.8f, 1.0f, 1.0f);
-            } else if (logLine.find("[TAGS APPLIED]") != std::string::npos || logLine.find("[CLIPBOARD]") != std::string::npos || logLine.find("[ALBUM CACHE HIT]") != std::string::npos) {
+            } else if (logLine.find("[TAGS APPLIED") != std::string::npos || logLine.find("[CLIPBOARD]") != std::string::npos || logLine.find("[ALBUM CACHE HIT]") != std::string::npos) {
                 textColor = ImVec4(0.4f, 0.9f, 1.0f, 1.0f);
             }
 
