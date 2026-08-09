@@ -1374,10 +1374,9 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Columns(2, "MainTagInspectorColumnsSideBySideCovers", false);
 
                 // ==================== COLUMN 0 (LEFT HALF OF WINDOW) ====================
-                ImGui::SetCursorPosY(columnTopY);
-
                 // Sub-group 1: Original Tags Input Fields (Far Left)
                 ImGui::BeginGroup();
+                ImGui::SetCursorPosY(columnTopY);
                 ImGui::TextDisabled("Исходные теги в файле");
                 ImGui::PushItemWidth(240);
 
@@ -1406,8 +1405,8 @@ void AppWindow::RunMessageLoop() {
 
                 // Sub-group 2: LOCAL COVER ART (Left Center)
                 ImGui::BeginGroup();
+                ImGui::SetCursorPosY(columnTopY);
                 ImGui::TextDisabled("Локальная обложка:");
-                float coverImageY = ImGui::GetCursorPosY();
                 if (item.localTexture) {
                     if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(260, 260))) {
                         item.selectedCoverChoice = 0;
@@ -1426,12 +1425,11 @@ void AppWindow::RunMessageLoop() {
 
                 // ==================== COLUMN 1 (RIGHT HALF OF WINDOW) ====================
                 ImGui::NextColumn();
-                ImGui::SetCursorPosY(columnTopY);
 
                 // Sub-group 3: ONLINE COVER ART (Right Center - SITS DIRECTLY NEXT TO LOCAL COVER ART!)
                 ImGui::BeginGroup();
+                ImGui::SetCursorPosY(columnTopY);
                 ImGui::TextDisabled("CoverArtArchive:");
-                ImGui::SetCursorPosY(coverImageY);
                 if (item.onlineTexture) {
                     if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(260, 260))) {
                         item.selectedCoverChoice = 1;
@@ -1454,6 +1452,7 @@ void AppWindow::RunMessageLoop() {
 
                 // Sub-group 4: Proposed New Tags Input Fields (Far Right)
                 ImGui::BeginGroup();
+                ImGui::SetCursorPosY(columnTopY);
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
                 ImGui::PushItemWidth(240);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
