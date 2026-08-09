@@ -203,10 +203,15 @@ static void WriteUint32BE(std::vector<unsigned char>& buf, uint32_t val) {
 
 // Native FLAC Vorbis Comment & Picture Block Metadata Inserter
 static bool WriteFlacTagsAndPicture(const std::string& filePath, const std::string& artist, const std::string& album, const std::string& title, const std::string& trackNo, const std::string& dateStr, const std::string& lyrics, const std::vector<unsigned char>& coverBytes) {
-    std::ifstream fIn(filePath, std::ios::binary);
+    std::ifstream fIn(filePath, std::ios::binary | std::ios::ate);
     if (!fIn.is_open()) return false;
 
-    std::vector<unsigned char> flacData((std::istreambuf_iterator<char>(fIn)), std::istreambuf_iterator<char>());
+    std::streamsize fileSize = fIn.tellg();
+    fIn.seekg(0, std::ios::beg);
+    if (fileSize <= 0) return false;
+
+    std::vector<unsigned char> flacData((size_t)fileSize);
+    if (!fIn.read((char*)flacData.data(), fileSize)) return false;
     fIn.close();
 
     if (flacData.size() < 4 || flacData[0] != 'f' || flacData[1] != 'L' || flacData[2] != 'a' || flacData[3] != 'C') {
@@ -331,10 +336,15 @@ static bool WriteFlacTagsAndPicture(const std::string& filePath, const std::stri
 
 // Native MP3 ID3v2.4 Tag & Picture Inserter
 static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::string& artist, const std::string& album, const std::string& title, const std::string& trackNo, const std::string& dateStr, const std::string& lyrics, const std::vector<unsigned char>& coverBytes) {
-    std::ifstream fIn(filePath, std::ios::binary);
+    std::ifstream fIn(filePath, std::ios::binary | std::ios::ate);
     if (!fIn.is_open()) return false;
 
-    std::vector<unsigned char> mp3Data((std::istreambuf_iterator<char>(fIn)), std::istreambuf_iterator<char>());
+    std::streamsize fileSize = fIn.tellg();
+    fIn.seekg(0, std::ios::beg);
+    if (fileSize <= 0) return false;
+
+    std::vector<unsigned char> mp3Data((size_t)fileSize);
+    if (!fIn.read((char*)mp3Data.data(), fileSize)) return false;
     fIn.close();
 
     // Skip old ID3v2 header if present
@@ -1680,6 +1690,7 @@ void AppWindow::RunMessageLoop() {
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
         m_pSwapChain->Present(1, 0); // Present with vsync 60 FPS
+        Sleep(1); // Yield CPU to OS scheduler to keep IDLE CPU usage at 0.0%!
     }
 }
 
