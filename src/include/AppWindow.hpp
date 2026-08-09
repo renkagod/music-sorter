@@ -94,6 +94,9 @@ private:
     bool m_isTagScanning = false;
     std::atomic<size_t> m_fetchedCount{0};
 
+    // Active Stage Tab (0 = Step 1 Duplicates, 1 = Step 2 Inspector, 2 = Step 3 Mirror, 3 = Step 4 Tracklist)
+    int m_activeStageTab = 0;
+
     // Console Log Auto-Scroll State
     bool m_logAutoScroll = true;
 };

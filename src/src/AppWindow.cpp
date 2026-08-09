@@ -31,6 +31,15 @@ extern std::string g_DeleteDir;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+static bool g_logAutoScrollActive = true;
+
+static int LogInputTextCallback(ImGuiInputTextCallbackData* data) {
+    if (g_logAutoScrollActive) {
+        data->CursorPos = data->BufTextLen;
+    }
+    return 0;
+}
+
 struct AlbumMetadataCache {
     std::string releaseGroupMbId;
     std::string firstReleaseDate;
@@ -632,8 +641,10 @@ void AppWindow::RunMessageLoop() {
         ImGui::TextDisabled("MUSIC SORTER DESKTOP (C++20 NATIVE STUDIO)");
         ImGui::Separator();
 
-        // 4 Step-by-Step Workflow Stage Buttons
+        // Dynamic Stage Switcher Buttons (Active Tab Styling)
+        if (m_activeStageTab == 0) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
         if (ImGui::Button("1. [Поиск] Дубликаты (AcoustID)", ImVec2(240, 32))) {
+            m_activeStageTab = 0;
             if (!m_isScanning) {
                 m_isScanning = true;
                 LOG_INFO("Step 1: Running parallel AcoustID duplicate scan...");
@@ -648,9 +659,14 @@ void AppWindow::RunMessageLoop() {
                 }).detach();
             }
         }
+        if (m_activeStageTab == 0) ImGui::PopStyleColor();
+
         ImGui::SameLine();
+
+        if (m_activeStageTab == 1) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
         if (ImGui::Button("2. [Теги & Обложки] Инспектор", ImVec2(230, 32))) {
-            if (!m_isTagScanning) {
+            m_activeStageTab = 1;
+            if (!m_isTagScanning && m_tagItems.empty()) {
                 m_isTagScanning = true;
                 LOG_INFO("Step 2: Instant local scan + parallel 16-thread MusicBrainz lookup...");
                 m_tagItems.clear();
@@ -896,241 +912,274 @@ void AppWindow::RunMessageLoop() {
                 }).detach();
             }
         }
+        if (m_activeStageTab == 1) ImGui::PopStyleColor();
+
         ImGui::SameLine();
+
+        if (m_activeStageTab == 2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
         if (ImGui::Button("3. [Сортировка] Папки FLAC/MP3", ImVec2(240, 32))) {
+            m_activeStageTab = 2;
             std::thread([]() {
                 NativeMirrorCollections();
             }).detach();
         }
+        if (m_activeStageTab == 2) ImGui::PopStyleColor();
+
         ImGui::SameLine();
+
+        if (m_activeStageTab == 3) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
         if (ImGui::Button("4. [Реестр] Обновление Tracklist", ImVec2(240, 32))) {
+            m_activeStageTab = 3;
             std::thread([]() {
                 NativeSyncTracklistDatabase();
             }).detach();
         }
+        if (m_activeStageTab == 3) ImGui::PopStyleColor();
 
         ImGui::Separator();
 
-        // Dual A/B Comparison Cards Layout
-        float halfWidth = (ImGui::GetContentRegionAvail().x - 16.0f) * 0.5f;
+        // DYNAMIC WORKFLOW INTERFACE SWITCHING (Only show active stage controls!)
+        if (m_activeStageTab == 0) {
+            // Stage 1 Interface: Dual A/B Comparison Cards Layout
+            float halfWidth = (ImGui::GetContentRegionAvail().x - 16.0f) * 0.5f;
 
-        // Card A (Left)
-        ImGui::BeginChild("CardA", ImVec2(halfWidth, 150), true);
-        ImGui::TextDisabled("ТРЕК А (Левый)");
-        if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
-            auto& pair = m_candidates[m_currentCandidateIndex];
-            ImGui::TextUnformatted(fs::path(pair.trackA_path).filename().string().c_str());
-            ImGui::Text("%s | %.1fs", pair.extA.c_str(), pair.durA);
-            ImGui::TextDisabled("%s", pair.relA.c_str());
-            ImGui::Spacing();
-            if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК А (Б -> delete)", ImVec2(-1, 32))) {
-                MakeDecisionA();
-            }
-        } else {
-            ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
-        }
-        ImGui::EndChild();
-
-        ImGui::SameLine();
-
-        // Card B (Right)
-        ImGui::BeginChild("CardB", ImVec2(halfWidth, 150), true);
-        ImGui::TextDisabled("ТРЕК Б (Правый)");
-        if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
-            auto& pair = m_candidates[m_currentCandidateIndex];
-            ImGui::TextUnformatted(fs::path(pair.trackB_path).filename().string().c_str());
-            ImGui::Text("%s | %.1fs", pair.extB.c_str(), pair.durB);
-            ImGui::TextDisabled("%s", pair.relB.c_str());
-            ImGui::Spacing();
-            if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК Б (А -> delete)", ImVec2(-1, 32))) {
-                MakeDecisionB();
-            }
-        } else {
-            ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
-        }
-        ImGui::EndChild();
-
-        // Step 2 Interactive Tag & Cover Inspector Card (When Step 2 is active)
-        if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
-            auto& item = m_tagItems[m_currentTagIndex];
-            ImGui::BeginChild("TagInspectorCard", ImVec2(0, 310), true);
-            ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
-            ImGui::SameLine();
-            if (item.isMusicBrainzMatched) {
-                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "[MUSICBRAINZ MATCHED]");
-            } else if (m_isTagScanning) {
-                ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), "[SEARCHING MUSICBRAINZ %zu/%zu...]", m_fetchedCount.load(), m_tagItems.size());
-            } else {
-                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "[NICHE TRACK - LEVEL 3 PREFILLED]");
-            }
-
-            ImGui::SameLine();
-            ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
-
-            // 3-Column Layout: Column 1 = Proposed New Tags, Column 2 = Original File Tags, Column 3 = Cover Selection
-            ImGui::Columns(3, "TagInspectorCols", false);
-            ImGui::SetColumnWidth(0, 370);
-            ImGui::SetColumnWidth(1, 370);
-
-            // Column 1: Proposed New Tags (Editable)
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "[НОВЫЕ ПРЕДЛАГАЕМЫЕ ТЕГИ]");
-            ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
-            ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
-            ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
-
-            ImGui::SetNextItemWidth(100);
-            ImGui::InputText("№ Трека##New", item.trackNoBuf, sizeof(item.trackNoBuf));
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(120);
-            ImGui::InputText("Год##New", item.yearBuf, sizeof(item.yearBuf));
-
-            ImGui::NextColumn();
-
-            // Column 2: Original File Tags (Read-Only)
-            ImGui::TextDisabled("[ИСХОДНЫЕ ТЕГИ В ФАЙЛЕ]");
-            
-            char origArtist[256], origAlbum[256], origTitle[256], origTrack[32], origYear[32];
-            strncpy_s(origArtist, item.embeddedArtist.c_str(), sizeof(origArtist) - 1);
-            strncpy_s(origAlbum, item.embeddedAlbum.c_str(), sizeof(origAlbum) - 1);
-            strncpy_s(origTitle, item.embeddedTitle.c_str(), sizeof(origTitle) - 1);
-            strncpy_s(origTrack, item.embeddedTrackNo.c_str(), sizeof(origTrack) - 1);
-            strncpy_s(origYear, item.embeddedYear.c_str(), sizeof(origYear) - 1);
-
-            ImGui::InputText("Исполнитель##Orig", origArtist, sizeof(origArtist), ImGuiInputTextFlags_ReadOnly);
-            ImGui::InputText("Альбом##Orig", origAlbum, sizeof(origAlbum), ImGuiInputTextFlags_ReadOnly);
-            ImGui::InputText("Название##Orig", origTitle, sizeof(origTitle), ImGuiInputTextFlags_ReadOnly);
-
-            ImGui::SetNextItemWidth(100);
-            ImGui::InputText("№ Трека##Orig", origTrack, sizeof(origTrack), ImGuiInputTextFlags_ReadOnly);
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(120);
-            ImGui::InputText("Год##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
-
-            ImGui::NextColumn();
-
-            // Column 3: Cover Art Selection
-            ImGui::TextDisabled("ОБЛОЖКИ:");
-
-            if (item.localTexture) {
-                if (ImGui::ImageButton("##LocalCoverBtn", (ImTextureID)item.localTexture, ImVec2(75, 75))) {
-                    item.selectedCoverChoice = 0;
+            // Card A (Left)
+            ImGui::BeginChild("CardA", ImVec2(halfWidth, 230), true);
+            ImGui::TextDisabled("ТРЕК А (Левый)");
+            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+                auto& pair = m_candidates[m_currentCandidateIndex];
+                ImGui::TextUnformatted(fs::path(pair.trackA_path).filename().string().c_str());
+                ImGui::Text("%s | %.1fs", pair.extA.c_str(), pair.durA);
+                ImGui::TextDisabled("%s", pair.relA.c_str());
+                ImGui::Spacing();
+                if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК А (Б -> delete)", ImVec2(-1, 36))) {
+                    MakeDecisionA();
                 }
-                ImGui::SameLine();
-                ImGui::BeginGroup();
-                ImGui::Text(item.selectedCoverChoice == 0 ? "[X] Локальная" : "   Локальная");
-                ImGui::TextDisabled("%dx%d px", item.localWidth, item.localHeight);
-                if (item.localScore >= item.onlineScore) {
-                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ");
-                }
-                ImGui::EndGroup();
             } else {
-                ImGui::TextDisabled("[Нет локальной]");
-            }
-
-            ImGui::Spacing();
-
-            if (item.onlineTexture) {
-                if (ImGui::ImageButton("##OnlineCoverBtn", (ImTextureID)item.onlineTexture, ImVec2(75, 75))) {
-                    item.selectedCoverChoice = 1;
-                }
-                ImGui::SameLine();
-                ImGui::BeginGroup();
-                ImGui::Text(item.selectedCoverChoice == 1 ? "[X] MusicBrainz" : "   MusicBrainz");
-                ImGui::TextDisabled("%dx%d px", item.onlineWidth, item.onlineHeight);
-                if (item.onlineScore > item.localScore) {
-                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ");
-                }
-                ImGui::EndGroup();
-            } else if (m_isTagScanning && !item.isFetchCompleted) {
-                ImGui::TextDisabled("[Загрузка...]");
-            } else {
-                ImGui::TextDisabled("[Нет онлайн]");
-            }
-
-            ImGui::Columns(1);
-            ImGui::Separator();
-
-            // Synced LRC Lyrics Input Box (Cleaned UI & No Truncation)
-            ImGui::TextDisabled("Синхронный текст песни (LRC / Romaji):");
-            if (strlen(item.lyricsBuf) == 0) {
-                ImGui::InputTextMultiline("##LyricsMultiLine", (char*)"[Текст песни не найден или отсутствует]", 40, ImVec2(-1, 45), ImGuiInputTextFlags_ReadOnly);
-            } else {
-                ImGui::InputTextMultiline("##LyricsMultiLine", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 55));
-            }
-
-            ImGui::Spacing();
-
-            if (ImGui::Button("[V] Принять и Записать Теги & Обложку", ImVec2(280, 30))) {
-                LOG_INFO("[TAGS APPLIED] " + std::string(item.artistBuf) + " - " + std::string(item.titleBuf) + " (" + std::string(item.albumBuf) + ") [" + std::string(item.yearBuf) + "]");
-                m_currentTagIndex++;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("[>>] Пропустить", ImVec2(140, 30))) {
-                m_currentTagIndex++;
+                ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
             }
             ImGui::EndChild();
+
+            ImGui::SameLine();
+
+            // Card B (Right)
+            ImGui::BeginChild("CardB", ImVec2(halfWidth, 230), true);
+            ImGui::TextDisabled("ТРЕК Б (Правый)");
+            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+                auto& pair = m_candidates[m_currentCandidateIndex];
+                ImGui::TextUnformatted(fs::path(pair.trackB_path).filename().string().c_str());
+                ImGui::Text("%s | %.1fs", pair.extB.c_str(), pair.durB);
+                ImGui::TextDisabled("%s", pair.relB.c_str());
+                ImGui::Spacing();
+                if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК Б (А -> delete)", ImVec2(-1, 36))) {
+                    MakeDecisionB();
+                }
+            } else {
+                ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
+            }
+            ImGui::EndChild();
+
+            // Audio Player Controls
+            ImGui::BeginChild("PlayerControls", ImVec2(0, 115), true);
+            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+                auto& pair = m_candidates[m_currentCandidateIndex];
+                ImGui::Text("Сходство волн: %.1f%% | Смещение фазы: %d кадров", pair.similarity, pair.offset);
+            } else {
+                ImGui::TextDisabled("Сходство волн: --- % | Смещение фазы: --- кадров");
+            }
+
+            double cur = AudioEngine::Instance().GetCurrentPositionSeconds();
+            double dur = AudioEngine::Instance().GetDurationSeconds();
+            float seek_val = (dur > 0.0) ? (float)(cur / dur) : 0.0f;
+
+            int cur_m = (int)cur / 60;
+            int cur_s = (int)cur % 60;
+            int dur_m = (int)dur / 60;
+            int dur_s = (int)dur % 60;
+
+            char time_buf[64];
+            snprintf(time_buf, sizeof(time_buf), "Position: %02d:%02d / %02d:%02d", cur_m, cur_s, dur_m, dur_s);
+
+            if (ImGui::SliderFloat("##SeekSlider", &seek_val, 0.0f, 1.0f, time_buf)) {
+                AudioEngine::Instance().SeekToPercentage((double)seek_val * 100.0);
+            }
+
+            if (ImGui::Button(AudioEngine::Instance().IsPlaying() ? "[||] ПАУЗА" : "[>] ПРОИГРЫВАТЬ", ImVec2(140, 32))) {
+                AudioEngine::Instance().TogglePlay();
+            }
+            ImGui::SameLine();
+
+            char ch = AudioEngine::Instance().GetActiveChannel();
+            if (ch == 'a') {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
+            }
+            if (ImGui::Button("ТРЕК А [1]", ImVec2(140, 32))) {
+                AudioEngine::Instance().SetActiveChannel('a');
+            }
+            if (ch == 'a') ImGui::PopStyleColor(2);
+
+            ImGui::SameLine();
+            if (ch == 'b') {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
+            }
+            if (ImGui::Button("ТРЕК Б [2]", ImVec2(140, 32))) {
+                AudioEngine::Instance().SetActiveChannel('b');
+            }
+            if (ch == 'b') ImGui::PopStyleColor(2);
+
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(160);
+            float masterVolPercent = AudioEngine::Instance().GetMasterVolume() * 100.0f;
+            if (ImGui::SliderFloat("##MasterVolSlider", &masterVolPercent, 0.0f, 100.0f, "Vol: %.0f%%")) {
+                AudioEngine::Instance().SetMasterVolume(masterVolPercent / 100.0f);
+            }
+
+            ImGui::SameLine();
+            ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
+            ImGui::EndChild();
+        } else if (m_activeStageTab == 1) {
+            // Stage 2 Dedicated Full-Height Interface (No A/B cards cluttering!)
+            if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
+                auto& item = m_tagItems[m_currentTagIndex];
+                ImGui::BeginChild("TagInspectorCardFull", ImVec2(0, 360), true);
+                ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ И ОБЛОЖЕК] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
+                ImGui::SameLine();
+                if (item.isMusicBrainzMatched) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "[MUSICBRAINZ MATCHED]");
+                } else if (m_isTagScanning) {
+                    ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), "[SEARCHING MUSICBRAINZ %zu/%zu...]", m_fetchedCount.load(), m_tagItems.size());
+                } else {
+                    ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "[NICHE TRACK - LEVEL 3 PREFILLED]");
+                }
+
+                ImGui::SameLine();
+                ImGui::TextDisabled("| Исходный файл: %s", item.originalFilename.c_str());
+
+                // 2-Column Side-by-Side Tag Comparison + Horizontal Cover Art Previews
+                ImGui::Columns(2, "TagInspectorMainCols", false);
+                ImGui::SetColumnWidth(0, 580);
+
+                // Column 1: New Proposed Tags (Editable)
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "[НОВЫЕ ПРЕДЛАГАЕМЫЕ ТЕГИ]");
+                ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
+                ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
+                ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
+
+                ImGui::SetNextItemWidth(120);
+                ImGui::InputText("№ Трека##New", item.trackNoBuf, sizeof(item.trackNoBuf));
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(140);
+                ImGui::InputText("Год##New", item.yearBuf, sizeof(item.yearBuf));
+
+                ImGui::NextColumn();
+
+                // Column 2: Original File Tags (Read-Only)
+                ImGui::TextDisabled("[ИСХОДНЫЕ ТЕГИ В ФАЙЛЕ]");
+
+                char origArtist[256], origAlbum[256], origTitle[256], origTrack[32], origYear[32];
+                strncpy_s(origArtist, item.embeddedArtist.c_str(), sizeof(origArtist) - 1);
+                strncpy_s(origAlbum, item.embeddedAlbum.c_str(), sizeof(origAlbum) - 1);
+                strncpy_s(origTitle, item.embeddedTitle.c_str(), sizeof(origTitle) - 1);
+                strncpy_s(origTrack, item.embeddedTrackNo.c_str(), sizeof(origTrack) - 1);
+                strncpy_s(origYear, item.embeddedYear.c_str(), sizeof(origYear) - 1);
+
+                ImGui::InputText("Исполнитель##Orig", origArtist, sizeof(origArtist), ImGuiInputTextFlags_ReadOnly);
+                ImGui::InputText("Альбом##Orig", origAlbum, sizeof(origAlbum), ImGuiInputTextFlags_ReadOnly);
+                ImGui::InputText("Название##Orig", origTitle, sizeof(origTitle), ImGuiInputTextFlags_ReadOnly);
+
+                ImGui::SetNextItemWidth(120);
+                ImGui::InputText("№ Трека##Orig", origTrack, sizeof(origTrack), ImGuiInputTextFlags_ReadOnly);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(140);
+                ImGui::InputText("Год##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
+
+                ImGui::Columns(1);
+                ImGui::Separator();
+
+                // HORIZONTAL Side-by-Side Cover Art Choice Section
+                ImGui::TextDisabled("ВЫБОР ОБЛОЖКИ (Кликните по левой или правой обложке):");
+
+                // Local Cover (Left)
+                if (item.localTexture) {
+                    if (ImGui::ImageButton("##LocalCoverBtnH", (ImTextureID)item.localTexture, ImVec2(90, 90))) {
+                        item.selectedCoverChoice = 0;
+                    }
+                    ImGui::SameLine();
+                    ImGui::BeginGroup();
+                    ImGui::Text(item.selectedCoverChoice == 0 ? "[X] Локальный скан" : "   Локальный скан");
+                    ImGui::TextDisabled("%dx%d px | %zu KB", item.localWidth, item.localHeight, item.localCoverBytes.size() / 1024);
+                    if (item.localScore >= item.onlineScore) {
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ НАСТОЯЩЕЕ КАЧЕСТВО");
+                    } else if (item.localWidth >= 1000 && item.localScore < item.onlineScore / 3) {
+                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ/МЫЛО");
+                    }
+                    ImGui::EndGroup();
+                } else {
+                    ImGui::TextDisabled("[Локальная обложка отсутствует]");
+                }
+
+                ImGui::SameLine();
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 40.0f);
+                ImGui::SameLine();
+
+                // Online CoverArtArchive (Right - HORIZONTAL!)
+                if (item.onlineTexture) {
+                    if (ImGui::ImageButton("##OnlineCoverBtnH", (ImTextureID)item.onlineTexture, ImVec2(90, 90))) {
+                        item.selectedCoverChoice = 1;
+                    }
+                    ImGui::SameLine();
+                    ImGui::BeginGroup();
+                    ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
+                    ImGui::TextDisabled("%dx%d px | %zu KB", item.onlineWidth, item.onlineHeight, item.onlineCoverBytes.size() / 1024);
+                    if (item.onlineScore > item.localScore) {
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ НАСТОЯЩЕЕ КАЧЕСТВО");
+                    } else if (item.onlineWidth >= 1000 && item.onlineScore < item.localScore / 3) {
+                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ/МЫЛО");
+                    }
+                    ImGui::EndGroup();
+                } else if (m_isTagScanning && !item.isFetchCompleted) {
+                    ImGui::TextDisabled("[Загрузка онлайн обложки...]");
+                } else {
+                    ImGui::TextDisabled("[Онлайн обложка отсутствует]");
+                }
+
+                ImGui::Spacing();
+
+                // Synced LRC Lyrics Input Box (Cleaned UI & No Truncation)
+                ImGui::TextDisabled("Синхронный текст песни (LRC / Romaji):");
+                if (strlen(item.lyricsBuf) == 0) {
+                    ImGui::InputTextMultiline("##LyricsMultiLineFull", (char*)"[Текст песни не найден или отсутствует]", 40, ImVec2(-1, 45), ImGuiInputTextFlags_ReadOnly);
+                } else {
+                    ImGui::InputTextMultiline("##LyricsMultiLineFull", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 55));
+                }
+
+                ImGui::Spacing();
+
+                if (ImGui::Button("[V] Принять и Записать Теги & Обложку", ImVec2(280, 32))) {
+                    LOG_INFO("[TAGS APPLIED] " + std::string(item.artistBuf) + " - " + std::string(item.titleBuf) + " (" + std::string(item.albumBuf) + ") [" + std::string(item.yearBuf) + "]");
+                    m_currentTagIndex++;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("[>>] Пропустить", ImVec2(140, 32))) {
+                    m_currentTagIndex++;
+                }
+                ImGui::EndChild();
+            } else {
+                ImGui::BeginChild("TagInspectorCardEmpty", ImVec2(0, 150), true);
+                ImGui::TextUnformatted("Нажмите кнопку '2. [Теги & Обложки] Инспектор' выше, чтобы начать сканирование и обработку тегов.");
+                ImGui::EndChild();
+            }
+        } else if (m_activeStageTab == 2) {
+            ImGui::BeginChild("Stage3Child", ImVec2(0, 150), true);
+            ImGui::TextUnformatted("Этап 3: Нативный C++20 поиск и зеркалирование папок FLAC и MP3 активен.");
+            ImGui::EndChild();
+        } else if (m_activeStageTab == 3) {
+            ImGui::BeginChild("Stage4Child", ImVec2(0, 150), true);
+            ImGui::TextUnformatted("Этап 4: Нативное C++20 сканирование и обновление галочек [x] в tracklist.md активно.");
+            ImGui::EndChild();
         }
-
-        // Audio Player Controls & Wave Similarity Section
-        ImGui::BeginChild("PlayerControls", ImVec2(0, 115), true);
-        if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
-            auto& pair = m_candidates[m_currentCandidateIndex];
-            ImGui::Text("Сходство волн: %.1f%% | Смещение фазы: %d кадров", pair.similarity, pair.offset);
-        } else {
-            ImGui::TextDisabled("Сходство волн: --- % | Смещение фазы: --- кадров");
-        }
-
-        double cur = AudioEngine::Instance().GetCurrentPositionSeconds();
-        double dur = AudioEngine::Instance().GetDurationSeconds();
-        float seek_val = (dur > 0.0) ? (float)(cur / dur) : 0.0f;
-
-        int cur_m = (int)cur / 60;
-        int cur_s = (int)cur % 60;
-        int dur_m = (int)dur / 60;
-        int dur_s = (int)dur % 60;
-
-        char time_buf[64];
-        snprintf(time_buf, sizeof(time_buf), "Position: %02d:%02d / %02d:%02d", cur_m, cur_s, dur_m, dur_s);
-
-        if (ImGui::SliderFloat("##SeekSlider", &seek_val, 0.0f, 1.0f, time_buf)) {
-            AudioEngine::Instance().SeekToPercentage((double)seek_val * 100.0);
-        }
-
-        if (ImGui::Button(AudioEngine::Instance().IsPlaying() ? "[||] ПАУЗА" : "[>] ПРОИГРЫВАТЬ", ImVec2(140, 32))) {
-            AudioEngine::Instance().TogglePlay();
-        }
-        ImGui::SameLine();
-
-        char ch = AudioEngine::Instance().GetActiveChannel();
-        if (ch == 'a') {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
-        }
-        if (ImGui::Button("ТРЕК А [1]", ImVec2(140, 32))) {
-            AudioEngine::Instance().SetActiveChannel('a');
-        }
-        if (ch == 'a') ImGui::PopStyleColor(2);
-
-        ImGui::SameLine();
-        if (ch == 'b') {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
-        }
-        if (ImGui::Button("ТРЕК Б [2]", ImVec2(140, 32))) {
-            AudioEngine::Instance().SetActiveChannel('b');
-        }
-        if (ch == 'b') ImGui::PopStyleColor(2);
-
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(160);
-        float masterVolPercent = AudioEngine::Instance().GetMasterVolume() * 100.0f;
-        if (ImGui::SliderFloat("##MasterVolSlider", &masterVolPercent, 0.0f, 100.0f, "Vol: %.0f%%")) {
-            AudioEngine::Instance().SetMasterVolume(masterVolPercent / 100.0f);
-        }
-
-        ImGui::SameLine();
-        ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
-        ImGui::EndChild();
 
         // 100% Selectable Mouse Drag Log Console Field with Guaranteed Auto-Scroll
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
@@ -1145,7 +1194,6 @@ void AppWindow::RunMessageLoop() {
         }
 
         static size_t last_log_size = 0;
-        ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
 
         ImGuiContext& g = *GImGui;
         ImGuiWindow* childWindow = ImGui::FindWindowByName("##LogConsoleMultiLineSelectable_01");
@@ -1164,12 +1212,12 @@ void AppWindow::RunMessageLoop() {
             } else {
                 m_logAutoScroll = true;
             }
-
-            if (m_logAutoScroll && logs.size() != last_log_size) {
-                childWindow->Scroll.y = childWindow->ScrollMax.y;             // Instant pixel scroll to bottom
-                childWindow->ScrollTarget.y = childWindow->ScrollMax.y + 1000.0f; // Target scroll to bottom on next frame
-            }
         }
+
+        g_logAutoScrollActive = m_logAutoScroll;
+
+        ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CallbackAlways, LogInputTextCallback);
+
         last_log_size = logs.size();
 
         ImGui::EndChild();
