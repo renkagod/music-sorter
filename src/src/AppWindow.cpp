@@ -449,7 +449,7 @@ static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::strin
 }
 
 static bool ConvertFlacToMp3(const std::string& inputFlac, const std::string& outputMp3) {
-    std::string cmd = "ffmpeg -v quiet -y -i \"" + inputFlac + "\" -ab 320k \"" + outputMp3 + "\"";
+    std::string cmd = "ffmpeg -v quiet -y -i \"" + inputFlac + "\" -ab 320k -c:v mjpeg -id3v2_version 3 \"" + outputMp3 + "\"";
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
