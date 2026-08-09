@@ -34,6 +34,14 @@ static std::string CleanMetadataString(const std::string& str) {
     return s.empty() ? str : s;
 }
 
+static std::string NormalizeKey(const std::string& text) {
+    if (text.empty()) return "";
+    std::string s = std::regex_replace(text, std::regex(R"(\[[^\]]*\]|\{[^\}]*\}|\([^\)]*\))"), "");
+    s = std::regex_replace(s, std::regex(R"([\s\-_/\\,.\u2044\u2215\u3013\uFF5E]+)"), "");
+    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+    return s;
+}
+
 static std::wstring Utf8ToWide(const std::string& str) {
     if (str.empty()) return L"";
     int len = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), NULL, 0);
@@ -134,6 +142,123 @@ ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const un
     if (outWidth) *outWidth = width;
     if (outHeight) *outHeight = height;
     return out_srv;
+}
+
+// Stage 3: Pure Native C++20 FLAC / MP3 Mirroring
+static void NativeMirrorCollections() {
+    LOG_INFO("Step 3: Running native C++20 collection mirroring...");
+    fs::path flacRoot = fs::path(g_BaseDir) / "flac";
+    fs::path mp3Root = fs::path(g_BaseDir) / "mp3";
+
+    fs::create_directories(flacRoot);
+    fs::create_directories(mp3Root);
+
+    size_t copiedFallbacks = 0;
+    size_t createdDirs = 0;
+
+    // 1. Fallback sync: If MP3 exists in mp3/ but no FLAC in flac/, copy MP3 to flac/ as fallback
+    if (fs::exists(mp3Root)) {
+        for (auto& entry : fs::recursive_directory_iterator(mp3Root)) {
+            if (entry.is_regular_file()) {
+                std::string ext = entry.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".mp3") {
+                    fs::path rel = fs::relative(entry.path(), mp3Root);
+                    fs::path flacTargetDir = flacRoot / rel.parent_path();
+                    std::string stem = entry.path().stem().string();
+
+                    fs::path expectedFlac = flacTargetDir / (stem + ".flac");
+                    fs::path mp3FallbackInFlac = flacTargetDir / entry.path().filename();
+
+                    if (!fs::exists(expectedFlac) && !fs::exists(mp3FallbackInFlac)) {
+                        fs::create_directories(flacTargetDir);
+                        LOG_INFO("[NATIVE C++ MIRROR] Copying MP3 fallback to FLAC folder: " + rel.string());
+                        fs::copy_file(entry.path(), mp3FallbackInFlac, fs::copy_options::overwrite_existing);
+                        copiedFallbacks++;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Folder structure sync: Mirror directory structures
+    if (fs::exists(flacRoot)) {
+        for (auto& entry : fs::recursive_directory_iterator(flacRoot)) {
+            if (entry.is_directory()) {
+                fs::path rel = fs::relative(entry.path(), flacRoot);
+                fs::path mp3EquivalentDir = mp3Root / rel;
+                if (!fs::exists(mp3EquivalentDir)) {
+                    fs::create_directories(mp3EquivalentDir);
+                    createdDirs++;
+                }
+            }
+        }
+    }
+
+    LOG_INFO("Step 3 Complete: Native C++ mirroring finished. Created " + std::to_string(createdDirs) + " folders, copied " + std::to_string(copiedFallbacks) + " MP3 fallbacks.");
+}
+
+// Stage 4: Pure Native C++20 Tracklist Database Checkbox Sync
+static void NativeSyncTracklistDatabase() {
+    LOG_INFO("Step 4: Running native C++20 tracklist.md checkbox sync...");
+    fs::path tracklistPath = fs::path(g_BaseDir) / "tracklist.md";
+    if (!fs::exists(tracklistPath)) {
+        LOG_INFO("Error: tracklist.md not found.");
+        return;
+    }
+
+    std::vector<std::string> scannedNormKeys;
+    for (const auto& sub : { "flac", "mp3", "TO SORT", "review" }) {
+        fs::path dir = fs::path(g_BaseDir) / sub;
+        if (fs::exists(dir)) {
+            for (auto& entry : fs::recursive_directory_iterator(dir)) {
+                if (entry.is_regular_file()) {
+                    std::string ext = entry.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if (ext == ".flac" || ext == ".mp3" || ext == ".wav" || ext == ".m4a") {
+                        scannedNormKeys.push_back(NormalizeKey(entry.path().filename().string()));
+                    }
+                }
+            }
+        }
+    }
+
+    std::ifstream inFile(tracklistPath);
+    std::string line;
+    std::vector<std::string> lines;
+    size_t checkedCount = 0;
+
+    while (std::getline(inFile, line)) {
+        std::regex track_regex(R"(^\s*-\s*\[\s*\]\s*(.+)$)");
+        std::smatch match;
+        if (std::regex_search(line, match, track_regex)) {
+            std::string content = match[1].str();
+            std::string normContent = NormalizeKey(content);
+
+            bool found = false;
+            for (const auto& key : scannedNormKeys) {
+                if (!key.empty() && normContent.find(key) != std::string::npos || key.find(normContent) != std::string::npos) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (found) {
+                line = std::regex_replace(line, std::regex(R"(-\s*\[\s*\])"), "- [x]");
+                checkedCount++;
+            }
+        }
+        lines.push_back(line);
+    }
+    inFile.close();
+
+    std::ofstream outFile(tracklistPath);
+    for (const auto& l : lines) {
+        outFile << l << "\n";
+    }
+    outFile.close();
+
+    LOG_INFO("Step 4 Complete: Native C++ tracklist sync finished. Checked off " + std::to_string(checkedCount) + " tracks in tracklist.md.");
 }
 
 bool AppWindow::CreateDeviceD3D(HWND hWnd) {
@@ -514,18 +639,14 @@ void AppWindow::RunMessageLoop() {
         }
         ImGui::SameLine();
         if (ImGui::Button("3. [Сортировка] Папки FLAC/MP3", ImVec2(240, 36))) {
-            LOG_INFO("Step 3: Mirroring FLAC and MP3 collections...");
             std::thread([]() {
-                _popen("python sync_music.py", "r");
-                LOG_INFO("Step 3 Complete: Collections 100% mirrored.");
+                NativeMirrorCollections();
             }).detach();
         }
         ImGui::SameLine();
         if (ImGui::Button("4. [Реестр] Обновление Tracklist", ImVec2(240, 36))) {
-            LOG_INFO("Step 4: Syncing tracklist.md checkboxes...");
             std::thread([]() {
-                _popen("python populate_and_check_tracklist.py", "r");
-                LOG_INFO("Step 4 Complete: tracklist.md updated.");
+                NativeSyncTracklistDatabase();
             }).detach();
         }
 
