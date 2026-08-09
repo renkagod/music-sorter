@@ -1375,8 +1375,10 @@ void AppWindow::RunMessageLoop() {
                 ImGui::SetColumnWidth(1, 280.0f);
                 ImGui::SetColumnWidth(2, 280.0f);
 
-                // ==================== COLUMN 0 (LEFT: STACKED TAGS) ====================
-                // 1. TOP HALF OF COL 0: ORIGINAL EMBEDDED TAGS
+                // ==================== COLUMN 0 (LEFT: BOTH TAG BLOCKS STACKED) ====================
+                ImGui::BeginGroup();
+
+                // 1. ВЕРХНИЙ БЛОК: ИСХОДНЫЕ ТЕГИ
                 ImGui::TextDisabled("Исходные теги в файле");
                 ImGui::PushItemWidth(190);
 
@@ -1404,7 +1406,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                // 2. BOTTOM HALF OF COL 0: PROPOSED FETCHED TAGS
+                // 2. НИЖНИЙ БЛОК: ПРЕДЛАГАЕМЫЕ ТЕГИ
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
                 ImGui::PushItemWidth(190);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
@@ -1420,8 +1422,11 @@ void AppWindow::RunMessageLoop() {
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
 
+                ImGui::EndGroup();
+
                 // ==================== COLUMN 1 (MIDDLE: LOCAL COVER ART) ====================
                 ImGui::NextColumn();
+                ImGui::BeginGroup();
                 ImGui::TextDisabled("Локальная обложка:");
                 if (item.localTexture) {
                     if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(260, 260))) {
@@ -1437,9 +1442,11 @@ void AppWindow::RunMessageLoop() {
                 } else {
                     ImGui::TextDisabled("[Обложка отсутствует]");
                 }
+                ImGui::EndGroup();
 
                 // ==================== COLUMN 2 (RIGHT: ONLINE COVER ART) ====================
                 ImGui::NextColumn();
+                ImGui::BeginGroup();
                 ImGui::TextDisabled("CoverArtArchive:");
                 if (item.onlineTexture) {
                     if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(260, 260))) {
@@ -1457,6 +1464,7 @@ void AppWindow::RunMessageLoop() {
                 } else {
                     ImGui::TextDisabled("[Обложка отсутствует]");
                 }
+                ImGui::EndGroup();
 
                 ImGui::Columns(1); // Reset main split
                 ImGui::Separator();
