@@ -334,7 +334,21 @@ static bool WriteFlacTagsAndPicture(const std::string& filePath, const std::stri
     return true;
 }
 
-// Native MP3 ID3v2.4 Tag & Picture Inserter
+// Helper: Convert UTF-8 std::string to UTF-16LE byte payload with BOM (0xFF 0xFE) for ID3v2.3
+static std::vector<unsigned char> StringToUtf16LE(const std::string& utf8Str) {
+    std::wstring wstr = Utf8ToWide(utf8Str);
+    std::vector<unsigned char> res;
+    res.push_back(0xFF); // BOM
+    res.push_back(0xFE);
+    for (wchar_t wc : wstr) {
+        uint16_t val = (uint16_t)wc;
+        res.push_back((unsigned char)(val & 0xFF));
+        res.push_back((unsigned char)((val >> 8) & 0xFF));
+    }
+    return res;
+}
+
+// Native MP3 ID3v2.3 Tag & Picture Inserter (Strict Windows Media Player & Windows Explorer Compatible!)
 static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::string& artist, const std::string& album, const std::string& title, const std::string& trackNo, const std::string& dateStr, const std::string& lyrics, const std::vector<unsigned char>& coverBytes) {
     std::ifstream fIn(filePath, std::ios::binary | std::ios::ate);
     if (!fIn.is_open()) return false;
@@ -354,27 +368,31 @@ static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::strin
         audioOffset = 10 + tagSize;
     }
 
-    // Construct ID3v2.4 frames
+    // Construct ID3v2.3 frames
     std::vector<unsigned char> frames;
 
     auto AddTextFrame = [&](const char* frameID, const std::string& val) {
         if (val.empty()) return;
         frames.push_back(frameID[0]); frames.push_back(frameID[1]); frames.push_back(frameID[2]); frames.push_back(frameID[3]);
-        uint32_t len = (uint32_t)val.length() + 1; // +1 for encoding byte 0x03 (UTF-8)
-        frames.push_back((unsigned char)((len >> 21) & 0x7F));
-        frames.push_back((unsigned char)((len >> 14) & 0x7F));
-        frames.push_back((unsigned char)((len >> 7) & 0x7F));
-        frames.push_back((unsigned char)(len & 0x7F));
+        
+        std::vector<unsigned char> payload = StringToUtf16LE(val);
+        uint32_t len = (uint32_t)payload.size() + 1; // +1 for encoding byte 0x01 (UTF-16LE)
+        
+        // ID3v2.3 32-bit regular uint32 BE!
+        frames.push_back((unsigned char)((len >> 24) & 0xFF));
+        frames.push_back((unsigned char)((len >> 16) & 0xFF));
+        frames.push_back((unsigned char)((len >> 8) & 0xFF));
+        frames.push_back((unsigned char)(len & 0xFF));
         frames.push_back(0x00); frames.push_back(0x00); // Flags
-        frames.push_back(0x03); // UTF-8 encoding
-        frames.insert(frames.end(), val.begin(), val.end());
+        frames.push_back(0x01); // UTF-16LE encoding
+        frames.insert(frames.end(), payload.begin(), payload.end());
     };
 
     AddTextFrame("TPE1", artist);
     AddTextFrame("TALB", album);
     AddTextFrame("TIT2", title);
     AddTextFrame("TRCK", trackNo);
-    AddTextFrame("TDRC", dateStr); // Full release date YYYY-MM-DD!
+    AddTextFrame("TDRC", dateStr); // Full release date YYYY-MM-DD
     std::string yr = ExtractYearFromString(dateStr);
     if (!yr.empty()) AddTextFrame("TYER", yr); // Legacy year
 
@@ -385,7 +403,7 @@ static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::strin
             mime = "image/png";
         }
         std::vector<unsigned char> apicPayload;
-        apicPayload.push_back(0x00); // 0x00 = ISO-8859-1 / ASCII encoding for MIME & description
+        apicPayload.push_back(0x00); // ISO-8859-1 for MIME and description
         apicPayload.insert(apicPayload.end(), mime.begin(), mime.end());
         apicPayload.push_back(0x00); // Null term mime
         apicPayload.push_back(0x03); // Picture type 3 = Cover Front
@@ -394,21 +412,24 @@ static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::strin
 
         frames.push_back('A'); frames.push_back('P'); frames.push_back('I'); frames.push_back('C');
         uint32_t pLen = (uint32_t)apicPayload.size();
-        frames.push_back((unsigned char)((pLen >> 21) & 0x7F));
-        frames.push_back((unsigned char)((pLen >> 14) & 0x7F));
-        frames.push_back((unsigned char)((pLen >> 7) & 0x7F));
-        frames.push_back((unsigned char)(pLen & 0x7F));
+        
+        // ID3v2.3 32-bit regular uint32 BE!
+        frames.push_back((unsigned char)((pLen >> 24) & 0xFF));
+        frames.push_back((unsigned char)((pLen >> 16) & 0xFF));
+        frames.push_back((unsigned char)((pLen >> 8) & 0xFF));
+        frames.push_back((unsigned char)(pLen & 0xFF));
         frames.push_back(0x00); frames.push_back(0x00);
         frames.insert(frames.end(), apicPayload.begin(), apicPayload.end());
     }
 
-    // Assemble ID3v2.4 Tag
+    // Assemble ID3v2.3 Tag Header
     std::vector<unsigned char> outMp3;
     outMp3.push_back('I'); outMp3.push_back('D'); outMp3.push_back('3');
-    outMp3.push_back(0x04); outMp3.push_back(0x00); // Version 2.4
+    outMp3.push_back(0x03); outMp3.push_back(0x00); // Version 2.3
     outMp3.push_back(0x00); // Flags
 
     uint32_t fSize = (uint32_t)frames.size();
+    // Synchsafe uint32 for overall ID3v2 tag size
     outMp3.push_back((unsigned char)((fSize >> 21) & 0x7F));
     outMp3.push_back((unsigned char)((fSize >> 14) & 0x7F));
     outMp3.push_back((unsigned char)((fSize >> 7) & 0x7F));
