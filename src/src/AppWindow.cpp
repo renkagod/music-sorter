@@ -37,6 +37,30 @@ struct AlbumMetadataCache {
     bool isFetched = false;
 };
 
+// Robust Native Windows Clipboard Copying
+static void CopyToClipboardWin32(const std::string& text) {
+    if (text.empty()) return;
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, NULL, 0);
+    if (wlen <= 0) return;
+
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, wlen * sizeof(wchar_t));
+    if (!hMem) return;
+
+    wchar_t* pMem = (wchar_t*)GlobalLock(hMem);
+    if (pMem) {
+        MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, pMem, wlen);
+        GlobalUnlock(hMem);
+    }
+
+    if (OpenClipboard(NULL)) {
+        EmptyClipboard();
+        SetClipboardData(CF_UNICODETEXT, hMem);
+        CloseClipboard();
+    } else {
+        GlobalFree(hMem);
+    }
+}
+
 static std::string CleanMetadataString(const std::string& str) {
     if (str.empty()) return "";
     std::string s = std::regex_replace(str, std::regex(R"(\[[^\]]*\]|\{[^\}]*\}|\([^\)]*\)|\d{4}\.\d{2}\.\d{2})"), "");
@@ -963,16 +987,18 @@ void AppWindow::RunMessageLoop() {
         ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
         ImGui::EndChild();
 
-        // Native High-Precision Log Console Panel with Working Auto-Scroll & High Visibility!
+        // Native High-Precision Log Console Panel with Native Win32 Clipboard Copying!
         ImGui::BeginChild("LogConsole", ImVec2(0, 0), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
         ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
         ImGui::SameLine();
+
+        auto logs = Logger::Instance().GetLogs();
+
         if (ImGui::Button("Копировать весь лог в буфер обмена")) {
-            auto logs = Logger::Instance().GetLogs();
             std::string full_log;
             for (const auto& log : logs) full_log += log + "\n";
-            ImGui::SetClipboardText(full_log.c_str());
-            LOG_INFO("Logs copied to clipboard.");
+            CopyToClipboardWin32(full_log);
+            LOG_INFO("Logs copied to Windows Clipboard.");
         }
         ImGui::Separator();
 
@@ -985,9 +1011,10 @@ void AppWindow::RunMessageLoop() {
             m_logAutoScroll = false;
         }
 
-        auto logs = Logger::Instance().GetLogs();
-        for (const auto& logLine : logs) {
-            ImGui::TextUnformatted(logLine.c_str());
+        for (size_t idx = 0; idx < logs.size(); ++idx) {
+            ImGui::PushID((int)idx);
+            ImGui::TextUnformatted(logs[idx].c_str());
+            ImGui::PopID();
         }
 
         if (m_logAutoScroll) {
