@@ -10,11 +10,14 @@
 #include "../third_party/imgui/imgui_impl_dx11.h"
 
 #include <shellapi.h>
+#include <wininet.h>
 #include <thread>
 #include <sstream>
 #include <filesystem>
 #include <fstream>
 #include <regex>
+
+#pragma comment(lib, "wininet.lib")
 
 namespace fs = std::filesystem;
 
@@ -23,6 +26,44 @@ extern std::string g_ToSortDir;
 extern std::string g_DeleteDir;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+static std::wstring Utf8ToWide(const std::string& str) {
+    if (str.empty()) return L"";
+    int len = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), NULL, 0);
+    std::wstring wstr(len, 0);
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), &wstr[0], len);
+    return wstr;
+}
+
+std::vector<unsigned char> HttpGetBytes(const std::wstring& url) {
+    std::vector<unsigned char> result;
+    HINTERNET hNet = InternetOpenW(L"MusicSorter/2.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (!hNet) return result;
+    HINTERNET hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE, 0);
+    if (!hFile) {
+        hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, INTERNET_FLAG_RELOAD, 0);
+    }
+    if (!hFile) {
+        InternetCloseHandle(hNet);
+        return result;
+    }
+
+    unsigned char buffer[16384];
+    DWORD bytesRead = 0;
+    while (InternetReadFile(hFile, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
+        result.insert(result.end(), buffer, buffer + bytesRead);
+    }
+
+    InternetCloseHandle(hFile);
+    InternetCloseHandle(hNet);
+    return result;
+}
+
+std::string HttpGetString(const std::wstring& url) {
+    auto bytes = HttpGetBytes(url);
+    if (bytes.empty()) return "";
+    return std::string((char*)bytes.data(), bytes.size());
+}
 
 ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const unsigned char* data, size_t size, int* outWidth, int* outHeight) {
     if (!data || size == 0) return NULL;
@@ -321,9 +362,87 @@ void AppWindow::RunMessageLoop() {
             if (!m_isTagScanning) {
                 m_isTagScanning = true;
                 LOG_INFO("Step 2: Scanning TO SORT tracks for metadata & cover art inspection...");
+                m_tagItems.clear();
+                m_currentTagIndex = 0;
+
                 std::thread([this]() {
-                    _popen("python fetch_musicbrainz_metadata.py", "r");
-                    _popen("python process_collection.py", "r");
+                    std::vector<std::string> files;
+                    if (fs::exists(g_ToSortDir)) {
+                        for (auto& p : fs::recursive_directory_iterator(g_ToSortDir)) {
+                            if (p.is_regular_file()) {
+                                std::string ext = p.path().extension().string();
+                                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                                if (ext == ".flac" || ext == ".mp3") {
+                                    files.push_back(p.path().string());
+                                }
+                            }
+                        }
+                    }
+
+                    for (const auto& file : files) {
+                        TagReviewItem item;
+                        item.filePath = file;
+                        item.relPath = fs::relative(file, g_BaseDir).string();
+
+                        std::string fn = fs::path(file).stem().string();
+                        std::string trackNo = "01";
+                        std::string title = fn;
+                        std::string artist = "Unknown Artist";
+                        std::string album = fs::path(file).parent_path().filename().string();
+
+                        std::regex num_regex(R"(^(\d{1,2})[\.\s_\-]+(.+)$)");
+                        std::smatch match;
+                        if (std::regex_search(fn, match, num_regex)) {
+                            trackNo = match[1].str();
+                            if (trackNo.length() == 1) trackNo = "0" + trackNo;
+                            title = match[2].str();
+                        }
+
+                        std::string parentDir = fs::path(file).parent_path().parent_path().filename().string();
+                        if (!parentDir.empty() && parentDir != "TO SORT" && parentDir != "media" && parentDir != "music") {
+                            artist = parentDir;
+                        }
+
+                        strncpy_s(item.artistBuf, artist.c_str(), sizeof(item.artistBuf) - 1);
+                        strncpy_s(item.albumBuf, album.c_str(), sizeof(item.albumBuf) - 1);
+                        strncpy_s(item.titleBuf, title.c_str(), sizeof(item.titleBuf) - 1);
+                        strncpy_s(item.trackNoBuf, trackNo.c_str(), sizeof(item.trackNoBuf) - 1);
+
+                        // Look for local cover image
+                        fs::path folderPath = fs::path(file).parent_path();
+                        for (auto& cfile : fs::directory_iterator(folderPath)) {
+                            if (cfile.is_regular_file()) {
+                                std::string cext = cfile.path().extension().string();
+                                std::transform(cext.begin(), cext.end(), cext.begin(), ::tolower);
+                                if (cext == ".jpg" || cext == ".jpeg" || cext == ".png" || cext == ".bmp") {
+                                    std::ifstream fIn(cfile.path(), std::ios::binary);
+                                    if (fIn.is_open()) {
+                                        item.localCoverBytes = std::vector<unsigned char>((std::istreambuf_iterator<char>(fIn)), std::istreambuf_iterator<char>());
+                                        item.localCoverPath = cfile.path().string();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Try AcoustID MusicBrainz API lookup
+                        auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(file);
+                        if (!fpInfo.fpData.empty()) {
+                            std::wstringstream wss;
+                            wss << L"https://api.acoustid.org/v2/lookup?client=8Xa1nV0f&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << L"&fingerprint=";
+                            for (size_t k = 0; k < fpInfo.fpData.size(); ++k) {
+                                if (k > 0) wss << L",";
+                                wss << fpInfo.fpData[k];
+                            }
+                            std::string acoustRes = HttpGetString(wss.str());
+                            if (acoustRes.find("\"status\":\"ok\"") != std::string::npos) {
+                                item.isMusicBrainzMatched = true;
+                            }
+                        }
+
+                        m_tagItems.push_back(item);
+                    }
+
                     m_isTagScanning = false;
                     PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
                 }).detach();
@@ -604,5 +723,18 @@ void AppWindow::HandleScanFinished() {
 }
 
 void AppWindow::HandleTagScanFinished() {
-    LOG_INFO("Step 2 Tagging & Cover Art inspection finished.");
+    LOG_INFO("Step 2 Tagging & Cover Art inspection finished. Loaded " + std::to_string(m_tagItems.size()) + " items into Inspector.");
+
+    for (auto& item : m_tagItems) {
+        if (!item.localCoverBytes.empty()) {
+            item.localTexture = CreateTextureFromMemory(m_pd3dDevice, item.localCoverBytes.data(), item.localCoverBytes.size(), &item.localWidth, &item.localHeight);
+        }
+        if (!item.onlineCoverBytes.empty()) {
+            item.onlineTexture = CreateTextureFromMemory(m_pd3dDevice, item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), &item.onlineWidth, &item.onlineHeight);
+        }
+    }
+
+    if (!m_tagItems.empty()) {
+        m_currentTagIndex = 0;
+    }
 }
