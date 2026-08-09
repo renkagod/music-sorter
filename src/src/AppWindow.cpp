@@ -433,8 +433,8 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 
     RegisterClassExW(&wcex);
 
-    // Initial Window Size enlarged to 1280x920 so Console Panel is fully visible by default!
-    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Studio", WS_OVERLAPPEDWINDOW, 60, 40, 1280, 920, NULL, NULL, hInstance, NULL);
+    // Initial Window Size enlarged to 1340x960 for 3x GIANT Inspector layout!
+    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Studio", WS_OVERLAPPEDWINDOW, 40, 20, 1340, 960, NULL, NULL, hInstance, NULL);
 
     if (!CreateDeviceD3D(m_hWnd)) {
         CleanupDeviceD3D();
@@ -492,7 +492,7 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     style.ScrollbarRounding = 4.0f;
     style.GrabRounding = 4.0f;
     style.ItemSpacing = ImVec2(10, 6);
-    style.FramePadding = ImVec2(10, 5);
+    style.FramePadding = ImVec2(10, 6);
 
     ImVec4* colors = style.Colors;
     colors[ImGuiCol_WindowBg] = ImVec4(0.07f, 0.07f, 0.07f, 1.00f);
@@ -687,6 +687,7 @@ void AppWindow::RunMessageLoop() {
                         item.filePath = files[i];
                         item.relPath = fs::relative(files[i], g_BaseDir).string();
                         item.originalFilename = fs::path(files[i]).filename().string();
+                        memset(item.lyricsBuf, 0, sizeof(item.lyricsBuf)); // Safely zero-terminate lyrics buffer!
 
                         std::string fn = fs::path(files[i]).stem().string();
                         std::string trackNo = "01";
@@ -1065,13 +1066,13 @@ void AppWindow::RunMessageLoop() {
             ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
             ImGui::EndChild();
         } else if (m_activeStageTab == 1) {
-            // Stage 2 Clean Side-by-Side Split (Left Half = Old File State | Right Half = Proposed New State)
+            // Stage 2: 3x GIANT Inspector Layout (Tags & GIANT 260x260 Covers take 90% of screen!)
             if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
                 auto& item = m_tagItems[m_currentTagIndex];
                 
                 float availY = ImGui::GetContentRegionAvail().y;
-                float inspectorH = availY - 260.0f; // Leave 260px for Logs console panel
-                if (inspectorH < 350.0f) inspectorH = 350.0f;
+                float inspectorH = availY - 200.0f; // Give 90% space to Inspector, 200px for Logs console panel
+                if (inspectorH < 450.0f) inspectorH = 450.0f;
 
                 ImGui::BeginChild("TagInspectorCardPerfectFit", ImVec2(0, inspectorH), true, ImGuiWindowFlags_NoScrollbar);
                 ImGui::TextDisabled("Инспектор тегов (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
@@ -1086,16 +1087,17 @@ void AppWindow::RunMessageLoop() {
 
                 ImGui::SameLine();
                 ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
+                ImGui::Separator();
 
-                // Main 2-Column Split: Column 0 = Left Half | Column 1 = Right Half (NO NESTED COLUMNS!)
-                ImGui::Columns(2, "MainTagInspectorColumns", false);
+                // Main 2-Column Split: Left Half = Original File | Right Half = Proposed New State
+                ImGui::Columns(2, "MainTagInspectorColumns3x", false);
 
                 // ==================== COLUMN 0 (LEFT HALF OF WINDOW): ORIGINAL FILE ====================
                 ImGui::TextDisabled("Исходные теги в файле");
 
-                // Sub-group 1: Tags Input Fields
+                // Sub-group 1: GIANT Tags Input Fields
                 ImGui::BeginGroup();
-                ImGui::PushItemWidth(200);
+                ImGui::PushItemWidth(260);
 
                 char origArtist[256], origAlbum[256], origTitle[256], origTrack[32], origYear[32];
                 strncpy_s(origArtist, item.embeddedArtist.c_str(), sizeof(origArtist) - 1);
@@ -1109,10 +1111,10 @@ void AppWindow::RunMessageLoop() {
                 ImGui::InputText("Название##Orig", origTitle, sizeof(origTitle), ImGuiInputTextFlags_ReadOnly);
                 ImGui::PopItemWidth();
 
-                ImGui::PushItemWidth(75);
+                ImGui::PushItemWidth(100);
                 ImGui::InputText("№##Orig", origTrack, sizeof(origTrack), ImGuiInputTextFlags_ReadOnly);
                 ImGui::SameLine();
-                ImGui::PushItemWidth(85);
+                ImGui::PushItemWidth(110);
                 ImGui::InputText("Год##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
@@ -1121,11 +1123,11 @@ void AppWindow::RunMessageLoop() {
                 ImGui::SameLine();
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 15.0f);
 
-                // Sub-group 2: LARGE LOCAL COVER (Right side of Left Half)
+                // Sub-group 2: GIANT LOCAL COVER (260x260 px!)
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("Локальная обложка:");
                 if (item.localTexture) {
-                    if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(145, 145))) {
+                    if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(260, 260))) {
                         item.selectedCoverChoice = 0;
                     }
                     ImGui::Text(item.selectedCoverChoice == 0 ? "[X] Локальный скан" : "   Локальный скан");
@@ -1145,18 +1147,18 @@ void AppWindow::RunMessageLoop() {
 
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
 
-                // Sub-group 3: New Proposed Tags Input Fields
+                // Sub-group 3: GIANT New Proposed Tags Input Fields
                 ImGui::BeginGroup();
-                ImGui::PushItemWidth(200);
+                ImGui::PushItemWidth(260);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
                 ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
                 ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
                 ImGui::PopItemWidth();
 
-                ImGui::PushItemWidth(75);
+                ImGui::PushItemWidth(100);
                 ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
                 ImGui::SameLine();
-                ImGui::PushItemWidth(85);
+                ImGui::PushItemWidth(110);
                 ImGui::InputText("Год##New", item.yearBuf, sizeof(item.yearBuf));
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
@@ -1165,11 +1167,11 @@ void AppWindow::RunMessageLoop() {
                 ImGui::SameLine();
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 15.0f);
 
-                // Sub-group 4: LARGE ONLINE COVER (Right side of Right Half)
+                // Sub-group 4: GIANT ONLINE COVER (260x260 px!)
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("CoverArtArchive:");
                 if (item.onlineTexture) {
-                    if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(145, 145))) {
+                    if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(260, 260))) {
                         item.selectedCoverChoice = 1;
                     }
                     ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
@@ -1189,22 +1191,20 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Columns(1); // Reset main split
                 ImGui::Separator();
 
-                // Synced LRC Lyrics Input Box
-                ImGui::TextDisabled("Текст песни (LRC / Romaji):");
-                if (strlen(item.lyricsBuf) == 0) {
-                    ImGui::InputTextMultiline("##LyricsMultiLinePerfect", (char*)"[Текст песни не найден или отсутствует]", 40, ImVec2(-1, 30), ImGuiInputTextFlags_ReadOnly);
-                } else {
-                    ImGui::InputTextMultiline("##LyricsMultiLinePerfect", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 30));
+                // Compact Secluded Lyrics Section at bottom
+                if (ImGui::TreeNode("Текст песни (LRC / Romaji)")) {
+                    ImGui::InputTextMultiline("##LyricsMultiLineSafe", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 60));
+                    ImGui::TreePop();
                 }
 
                 ImGui::Spacing();
 
-                if (ImGui::Button("Принять и записать", ImVec2(220, 28))) {
+                if (ImGui::Button("Принять и записать", ImVec2(240, 32))) {
                     LOG_INFO("[TAGS APPLIED] " + std::string(item.artistBuf) + " - " + std::string(item.titleBuf) + " (" + std::string(item.albumBuf) + ") [" + std::string(item.yearBuf) + "]");
                     m_currentTagIndex++;
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Пропустить", ImVec2(120, 28))) {
+                if (ImGui::Button("Пропустить", ImVec2(140, 32))) {
                     m_currentTagIndex++;
                 }
                 ImGui::EndChild();
@@ -1223,35 +1223,42 @@ void AppWindow::RunMessageLoop() {
             ImGui::EndChild();
         }
 
-        // Clean Logs Panel with Context7 ImGui Child Window Context Auto-Scroll Pattern
+        // Clean Syntax-Highlighted Colored Logs Panel with Context7 Auto-Scroll Pattern
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("Logs:");
         ImGui::Separator();
 
+        ImGui::BeginChild("LogListRegion", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+
+        bool isAtBottom = (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f);
         auto logs = Logger::Instance().GetLogs();
-        static std::string log_buffer;
-        log_buffer.clear();
-        for (const auto& log : logs) {
-            log_buffer += log + "\n";
+
+        for (const auto& logLine : logs) {
+            if (logLine.find("[MUSICBRAINZ MATCHED]") != std::string::npos) {
+                ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.4f, 1.0f), "%s", logLine.c_str());
+            } else if (logLine.find("[COVER ART DOWNLOADED]") != std::string::npos) {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.8f, 1.0f), "%s", logLine.c_str());
+            } else if (logLine.find("[MUSICBRAINZ FETCH") != std::string::npos) {
+                ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), "%s", logLine.c_str());
+            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos) {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", logLine.c_str());
+            } else if (logLine.find("[LRC LYRICS FETCHED]") != std::string::npos) {
+                ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "%s", logLine.c_str());
+            } else if (logLine.find("[TAGS APPLIED]") != std::string::npos) {
+                ImGui::TextColored(ImVec4(0.4f, 0.9f, 1.0f, 1.0f), "%s", logLine.c_str());
+            } else {
+                ImGui::TextUnformatted(logLine.c_str());
+            }
         }
 
         static size_t last_log_size = 0;
-
-        ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
-
-        // CONTEXT7 DOCUMENTATION PATTERN:
-        // Enter the child window context of InputTextMultiline ("##LogConsoleMultiLineSelectable_01")
-        // and execute GetScrollY() >= GetScrollMaxY() inside that context!
-        if (ImGui::BeginChild("##LogConsoleMultiLineSelectable_01")) {
-            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f && logs.size() != last_log_size) {
-                ImGui::SetScrollHereY(1.0f);
-            }
+        if (isAtBottom && logs.size() != last_log_size) {
+            ImGui::SetScrollHereY(1.0f);
         }
-        ImGui::EndChild();
-
         last_log_size = logs.size();
 
-        ImGui::EndChild();
+        ImGui::EndChild(); // End LogListRegion
+        ImGui::EndChild(); // End LogConsoleHeader
 
         ImGui::End();
 
