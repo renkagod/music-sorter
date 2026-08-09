@@ -433,12 +433,25 @@ void AppWindow::RunMessageLoop() {
         }
         if (done) break;
 
-        // Dynamic Texture Creation for newly completed background online cover downloads
+        // Dynamic Texture Creation & Mathematical Cover Quality Evaluation
         for (auto& item : m_tagItems) {
+            if (item.localTexture == NULL && !item.localCoverBytes.empty()) {
+                item.localTexture = CreateTextureFromMemory(m_pd3dDevice, item.localCoverBytes.data(), item.localCoverBytes.size(), &item.localWidth, &item.localHeight);
+                if (item.localTexture) {
+                    item.localScore = (long long)item.localWidth * item.localHeight * (item.localCoverBytes.size() / 1024 + 1);
+                }
+            }
+
             if (item.isFetchCompleted && !item.onlineCoverBytes.empty() && item.onlineTexture == NULL) {
                 item.onlineTexture = CreateTextureFromMemory(m_pd3dDevice, item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), &item.onlineWidth, &item.onlineHeight);
                 if (item.onlineTexture) {
-                    item.selectedCoverChoice = 1; // Auto-select online cover once loaded
+                    item.onlineScore = (long long)item.onlineWidth * item.onlineHeight * (item.onlineCoverBytes.size() / 1024 + 1);
+                    // Automatically select mathematically higher quality cover art!
+                    if (item.onlineScore > item.localScore) {
+                        item.selectedCoverChoice = 1;
+                    } else {
+                        item.selectedCoverChoice = 0;
+                    }
                 }
             }
         }
@@ -775,7 +788,7 @@ void AppWindow::RunMessageLoop() {
         // Step 2 Interactive Tag & Cover Inspector Card (When Step 2 is active)
         if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
             auto& item = m_tagItems[m_currentTagIndex];
-            ImGui::BeginChild("TagInspectorCard", ImVec2(0, 220), true);
+            ImGui::BeginChild("TagInspectorCard", ImVec2(0, 240), true);
             ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ И ВЫБОР ОБЛОЖКИ] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
             ImGui::SameLine();
             if (item.isMusicBrainzMatched) {
@@ -797,18 +810,27 @@ void AppWindow::RunMessageLoop() {
 
             ImGui::NextColumn();
 
-            // Side-by-Side Cover Art Choice
-            ImGui::TextDisabled("ВЫБОР ОБЛОЖКИ:");
+            // Side-by-Side Cover Art Choice & Mathematical Quality Comparison
+            ImGui::TextDisabled("ВЫБОР И КАЧЕСТВО ОБЛОЖЕК:");
+
             if (item.localTexture) {
                 if (ImGui::ImageButton("##LocalCoverBtn", (ImTextureID)item.localTexture, ImVec2(100, 100))) {
                     item.selectedCoverChoice = 0;
                 }
                 ImGui::SameLine();
+                ImGui::BeginGroup();
                 ImGui::Text(item.selectedCoverChoice == 0 ? "[X] Локальный скан" : "   Локальный скан");
+                ImGui::TextDisabled("%dx%d px | %zu KB", item.localWidth, item.localHeight, item.localCoverBytes.size() / 1024);
+                if (item.localScore >= item.onlineScore) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
+                }
+                ImGui::EndGroup();
             } else {
                 ImGui::TextDisabled("[Локальная обложка отсутствует]");
             }
 
+            ImGui::SameLine();
+            ImGui::Spacing();
             ImGui::SameLine();
 
             if (item.onlineTexture) {
@@ -816,7 +838,13 @@ void AppWindow::RunMessageLoop() {
                     item.selectedCoverChoice = 1;
                 }
                 ImGui::SameLine();
+                ImGui::BeginGroup();
                 ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
+                ImGui::TextDisabled("%dx%d px | %zu KB", item.onlineWidth, item.onlineHeight, item.onlineCoverBytes.size() / 1024);
+                if (item.onlineScore > item.localScore) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
+                }
+                ImGui::EndGroup();
             } else if (m_isTagScanning && !item.isFetchCompleted) {
                 ImGui::TextDisabled("[Загрузка онлайн обложки...]");
             } else {
@@ -901,7 +929,7 @@ void AppWindow::RunMessageLoop() {
 
         ImGui::Spacing();
 
-        // Log Console Panel
+        // Log Console Panel with Smart Auto-Scroll Detection
         ImGui::BeginChild("LogConsole", ImVec2(0, 0), true);
         ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
         ImGui::SameLine();
@@ -921,7 +949,21 @@ void AppWindow::RunMessageLoop() {
             log_buffer += log + "\n";
         }
 
+        float scrollY = ImGui::GetScrollY();
+        float maxScrollY = ImGui::GetScrollMaxY();
+
+        if (scrollY >= maxScrollY - 25.0f) {
+            m_logAutoScroll = true;
+        } else if (scrollY < maxScrollY - 25.0f) {
+            m_logAutoScroll = false;
+        }
+
         ImGui::InputTextMultiline("##LogConsoleMultiLine", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
+
+        if (m_logAutoScroll) {
+            ImGui::SetScrollHereY(1.0f);
+        }
+
         ImGui::EndChild();
 
         ImGui::End();
@@ -994,9 +1036,15 @@ void AppWindow::HandleTagScanFinished() {
     for (auto& item : m_tagItems) {
         if (!item.localCoverBytes.empty() && item.localTexture == NULL) {
             item.localTexture = CreateTextureFromMemory(m_pd3dDevice, item.localCoverBytes.data(), item.localCoverBytes.size(), &item.localWidth, &item.localHeight);
+            if (item.localTexture) {
+                item.localScore = (long long)item.localWidth * item.localHeight * (item.localCoverBytes.size() / 1024 + 1);
+            }
         }
         if (!item.onlineCoverBytes.empty() && item.onlineTexture == NULL) {
             item.onlineTexture = CreateTextureFromMemory(m_pd3dDevice, item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), &item.onlineWidth, &item.onlineHeight);
+            if (item.onlineTexture) {
+                item.onlineScore = (long long)item.onlineWidth * item.onlineHeight * (item.onlineCoverBytes.size() / 1024 + 1);
+            }
         }
     }
 

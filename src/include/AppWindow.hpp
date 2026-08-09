@@ -30,6 +30,9 @@ struct TagReviewItem {
     int localWidth = 0, localHeight = 0;
     int onlineWidth = 0, onlineHeight = 0;
 
+    long long localScore = 0;
+    long long onlineScore = 0;
+
     int selectedCoverChoice = 0; // 0 = Local, 1 = Online
 };
 
@@ -78,4 +81,7 @@ private:
     size_t m_currentTagIndex = 0;
     bool m_isTagScanning = false;
     std::atomic<size_t> m_fetchedCount{0};
+
+    // Console Log Auto-Scroll State
+    bool m_logAutoScroll = true;
 };
