@@ -1373,8 +1373,8 @@ void AppWindow::RunMessageLoop() {
                 float inspectorTopY = ImGui::GetCursorPosY();
                 ImGui::Columns(3, "Main3InspectorColumnsFixedTop", false);
                 ImGui::SetColumnWidth(0, 320.0f);
-                ImGui::SetColumnWidth(1, 260.0f);
-                ImGui::SetColumnWidth(2, 260.0f);
+                ImGui::SetColumnWidth(1, 265.0f);
+                ImGui::SetColumnWidth(2, 265.0f);
 
                 // ==================== COLUMN 0 (LEFT: BOTH TAG BLOCKS STACKED) ====================
                 ImGui::SetCursorPosY(inspectorTopY);
@@ -1431,7 +1431,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("Локальная обложка:");
                 if (item.localTexture) {
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-                    if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(245, 245))) {
+                    if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(225, 225))) {
                         item.selectedCoverChoice = 0;
                     }
                     ImGui::PopStyleVar();
@@ -1454,7 +1454,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("CoverArtArchive:");
                 if (item.onlineTexture) {
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-                    if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(245, 245))) {
+                    if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(225, 225))) {
                         item.selectedCoverChoice = 1;
                     }
                     ImGui::PopStyleVar();
