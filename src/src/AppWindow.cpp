@@ -618,8 +618,10 @@ static void NativeMirrorCollections() {
     fs::create_directories(mp3Root);
 
     size_t copiedFallbacks = 0;
+    size_t convertedMp3s = 0;
     size_t createdDirs = 0;
 
+    // 1. MP3 Fallback -> flac/
     if (fs::exists(mp3Root)) {
         for (auto& entry : fs::recursive_directory_iterator(mp3Root)) {
             if (entry.is_regular_file()) {
@@ -644,6 +646,7 @@ static void NativeMirrorCollections() {
         }
     }
 
+    // 2. FLAC -> mp3/ 320kbps conversion & cover.jpg mirroring
     if (fs::exists(flacRoot)) {
         for (auto& entry : fs::recursive_directory_iterator(flacRoot)) {
             if (entry.is_directory()) {
@@ -653,11 +656,36 @@ static void NativeMirrorCollections() {
                     fs::create_directories(mp3EquivalentDir);
                     createdDirs++;
                 }
+
+                // Copy cover.jpg if present in flac/ but missing in mp3/
+                fs::path flacCover = entry.path() / "cover.jpg";
+                fs::path mp3Cover = mp3EquivalentDir / "cover.jpg";
+                if (fs::exists(flacCover) && !fs::exists(mp3Cover)) {
+                    fs::copy_file(flacCover, mp3Cover, fs::copy_options::overwrite_existing);
+                }
+            } else if (entry.is_regular_file()) {
+                std::string ext = entry.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".flac") {
+                    fs::path rel = fs::relative(entry.path(), flacRoot);
+                    fs::path mp3TargetFile = mp3Root / rel.parent_path() / (entry.path().stem().string() + ".mp3");
+
+                    if (!fs::exists(mp3TargetFile) || fs::file_size(mp3TargetFile) == 0) {
+                        fs::create_directories(mp3TargetFile.parent_path());
+                        LOG_INFO("[MP3 CONVERTING] Encoding 320kbps MP3: " + rel.string() + " ...");
+                        if (ConvertFlacToMp3(entry.path().string(), mp3TargetFile.string())) {
+                            convertedMp3s++;
+                            LOG_INFO("[MP3 MIRRORED] Created 320kbps MP3: " + fs::relative(mp3TargetFile, g_BaseDir).string());
+                        } else {
+                            LOG_INFO("[CONVERT ERROR] Failed FFmpeg conversion for: " + rel.string());
+                        }
+                    }
+                }
             }
         }
     }
 
-    LOG_INFO("Step 3 Complete: Native C++ mirroring finished. Created " + std::to_string(createdDirs) + " folders, copied " + std::to_string(copiedFallbacks) + " MP3 fallbacks.");
+    LOG_INFO("Step 3 Complete: Native C++ mirroring finished. Created " + std::to_string(createdDirs) + " folders, converted " + std::to_string(convertedMp3s) + " MP3s, copied " + std::to_string(copiedFallbacks) + " MP3 fallbacks.");
 }
 
 // Stage 4: Pure Native C++20 Tracklist Database Checkbox Sync
