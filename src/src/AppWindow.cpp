@@ -143,7 +143,7 @@ static double CalculatePerceptualSharpness(const unsigned char* data, size_t siz
     return variance;
 }
 
-// Robust HTTP GET with Exponential Backoff Retries
+// Robust HTTP GET with Smart Exponential Backoff Retries & HTTP 429 Rate Limit Handling
 std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries = 3) {
     std::vector<unsigned char> result;
     for (int attempt = 0; attempt < maxRetries; ++attempt) {
@@ -156,8 +156,17 @@ std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries 
                 hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, flags, 0);
             }
             if (hFile) {
-                DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_REVOCATION | SECURITY_FLAG_IGNORE_REDIRECT_TO_HTTP | SECURITY_FLAG_IGNORE_REDIRECT_TO_HTTPS;
-                InternetSetOptionW(hFile, INTERNET_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
+                DWORD statusCode = 0;
+                DWORD statusSize = sizeof(statusCode);
+                HttpQueryInfoW(hFile, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, NULL);
+
+                if (statusCode == 429 || statusCode == 503) {
+                    LOG_INFO("[RATE LIMIT 429/503] MusicBrainz API busy. Backing off for " + std::to_string(500 * (attempt + 1)) + "ms...");
+                    InternetCloseHandle(hFile);
+                    InternetCloseHandle(hNet);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500 * (attempt + 1)));
+                    continue;
+                }
 
                 unsigned char buffer[16384];
                 DWORD bytesRead = 0;
@@ -178,14 +187,6 @@ std::string HttpGetString(const std::wstring& url) {
     auto bytes = HttpGetBytes(url);
     if (bytes.empty()) return "";
     return std::string((char*)bytes.data(), bytes.size());
-}
-
-// Mutex-protected Rate Limiter for MusicBrainz REST API to prevent HTTP 429 / 503 throttling!
-static std::mutex g_MbApiMutex;
-static std::string HttpGetStringThrottled(const std::wstring& url) {
-    std::lock_guard<std::mutex> lock(g_MbApiMutex);
-    std::this_thread::sleep_for(std::chrono::milliseconds(250)); // Strict MusicBrainz 1 req / sec compliant rate limit!
-    return HttpGetString(url);
 }
 
 ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const unsigned char* data, size_t size, int* outWidth, int* outHeight) {
@@ -670,7 +671,7 @@ void AppWindow::RunMessageLoop() {
             m_activeStageTab = 1;
             if (!m_isTagScanning && m_tagItems.empty()) {
                 m_isTagScanning = true;
-                LOG_INFO("Step 2: Instant local scan + parallel 16-thread MusicBrainz lookup...");
+                LOG_INFO("Step 2: Instant local scan + UI-sequential priority MusicBrainz lookup...");
                 m_tagItems.clear();
                 m_currentTagIndex = 0;
                 m_fetchedCount = 0;
@@ -752,192 +753,175 @@ void AppWindow::RunMessageLoop() {
                     // Post immediate notification to show local UI instantly!
                     PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
 
-                    // ALBUM-LEVEL PARALLEL CACHING (Reduces 117 queries down to 10 album queries!)
+                    // STRICT UI-SEQUENTIAL PROCESSING (Track #1 FIRST, then #2, #3...) + ALBUM CACHING!
                     std::unordered_map<std::string, AlbumMetadataCache> albumCache;
-                    std::mutex cacheMutex;
 
-                    const size_t numThreads = 16;
-                    std::vector<std::thread> workers;
+                    for (size_t i = 0; i < files.size(); ++i) {
+                        auto& item = m_tagItems[i];
+                        std::string artistClean(item.artistBuf);
+                        std::string albumClean(item.albumBuf);
+                        std::string titleClean(item.titleBuf);
+                        std::string albumKey = artistClean + "___" + albumClean;
 
-                    for (size_t t = 0; t < numThreads; ++t) {
-                        workers.emplace_back([this, t, numThreads, &files, &albumCache, &cacheMutex]() {
-                            for (size_t i = t; i < files.size(); i += numThreads) {
-                                auto& item = m_tagItems[i];
-                                std::string artistClean(item.artistBuf);
-                                std::string albumClean(item.albumBuf);
-                                std::string titleClean(item.titleBuf);
-                                std::string albumKey = artistClean + "___" + albumClean;
+                        std::string releaseGroupMbId;
+                        std::string firstReleaseDate;
+                        std::vector<unsigned char> coverData;
+                        bool isMatched = false;
 
-                                std::string releaseGroupMbId;
-                                std::string firstReleaseDate;
-                                std::vector<unsigned char> coverData;
-                                bool isMatched = false;
+                        // Check Album Cache first (Instantly resolves tracks 2-30 of the same album!)
+                        if (albumCache.find(albumKey) != albumCache.end() && albumCache[albumKey].isFetched) {
+                            auto& c = albumCache[albumKey];
+                            item.isMusicBrainzMatched = c.isMatched;
+                            item.onlineCoverBytes = c.coverBytes;
+                            if (!c.firstReleaseDate.empty()) {
+                                strncpy_s(item.yearBuf, c.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
+                            }
+                            item.isFetchCompleted = true;
+                            m_fetchedCount++;
+                            continue;
+                        }
 
-                                {
-                                    std::lock_guard<std::mutex> lock(cacheMutex);
-                                    if (albumCache.find(albumKey) != albumCache.end() && albumCache[albumKey].isFetched) {
-                                        auto& c = albumCache[albumKey];
-                                        item.isMusicBrainzMatched = c.isMatched;
-                                        item.onlineCoverBytes = c.coverBytes;
-                                        if (!c.firstReleaseDate.empty()) {
-                                            strncpy_s(item.yearBuf, c.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
-                                        }
-                                        item.isFetchCompleted = true;
-                                        m_fetchedCount++;
-                                        continue;
+                        size_t currentNum = ++m_fetchedCount;
+                        LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] [UI ORDER PRIORITY #" + std::to_string(i + 1) + "] Querying: " + artistClean + " - " + albumClean);
+
+                        // 1. AcoustID Lookup
+                        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                        auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(files[i]);
+                        if (!fpInfo.fpData.empty()) {
+                            std::wstringstream wss;
+                            wss << L"https://api.acoustid.org/v2/lookup?client=8Xa1nV0f&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << L"&fingerprint=";
+                            for (size_t k = 0; k < fpInfo.fpData.size(); ++k) {
+                                if (k > 0) wss << L",";
+                                wss << fpInfo.fpData[k];
+                            }
+                            std::string acoustRes = HttpGetString(wss.str());
+                            size_t rgPos = acoustRes.find("\"releasegroups\":");
+                            if (rgPos != std::string::npos) {
+                                size_t idPos = acoustRes.find("\"id\":\"", rgPos);
+                                if (idPos != std::string::npos) {
+                                    idPos += 6;
+                                    size_t endPos = acoustRes.find("\"", idPos);
+                                    if (endPos != std::string::npos) {
+                                        releaseGroupMbId = acoustRes.substr(idPos, endPos - idPos);
+                                        isMatched = true;
                                     }
-                                }
-
-                                size_t currentNum = ++m_fetchedCount;
-                                LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] Querying AcoustID & MusicBrainz for: " + artistClean + " - " + albumClean);
-
-                                // 1. AcoustID Lookup (With rate limit protection!)
-                                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                                auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(files[i]);
-                                if (!fpInfo.fpData.empty()) {
-                                    std::wstringstream wss;
-                                    wss << L"https://api.acoustid.org/v2/lookup?client=8Xa1nV0f&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << L"&fingerprint=";
-                                    for (size_t k = 0; k < fpInfo.fpData.size(); ++k) {
-                                        if (k > 0) wss << L",";
-                                        wss << fpInfo.fpData[k];
-                                    }
-                                    std::string acoustRes = HttpGetString(wss.str());
-                                    size_t rgPos = acoustRes.find("\"releasegroups\":");
-                                    if (rgPos != std::string::npos) {
-                                        size_t idPos = acoustRes.find("\"id\":\"", rgPos);
-                                        if (idPos != std::string::npos) {
-                                            idPos += 6;
-                                            size_t endPos = acoustRes.find("\"", idPos);
-                                            if (endPos != std::string::npos) {
-                                                releaseGroupMbId = acoustRes.substr(idPos, endPos - idPos);
-                                                isMatched = true;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // 2. Robust Multi-Tier MusicBrainz Search with Rate-Limited Requests!
-                                if (releaseGroupMbId.empty() && !albumClean.empty()) {
-                                    // Tier A: Strict Release Group Search
-                                    if (!artistClean.empty() && artistClean != "Unknown Artist") {
-                                        std::string mbQuery = "artist:\"" + artistClean + "\" AND release:\"" + albumClean + "\"";
-                                        std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
-                                        std::string mbRes = HttpGetStringThrottled(Utf8ToWide(mbUrl));
-
-                                        size_t rgPos = mbRes.find("\"release-groups\":");
-                                        if (rgPos != std::string::npos) {
-                                            size_t idPos = mbRes.find("\"id\":\"", rgPos);
-                                            if (idPos != std::string::npos) {
-                                                idPos += 6;
-                                                size_t endPos = mbRes.find("\"", idPos);
-                                                if (endPos != std::string::npos) {
-                                                    releaseGroupMbId = mbRes.substr(idPos, endPos - idPos);
-                                                    isMatched = true;
-                                                }
-                                            }
-                                            size_t datePos = mbRes.find("\"first-release-date\":\"", rgPos);
-                                            if (datePos != std::string::npos) {
-                                                datePos += 22;
-                                                size_t dendPos = mbRes.find("\"", datePos);
-                                                if (dendPos != std::string::npos) {
-                                                    firstReleaseDate = mbRes.substr(datePos, dendPos - datePos);
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Tier B: Album Title Alone Search (100% matches Doujin albums!)
-                                    if (releaseGroupMbId.empty()) {
-                                        std::string mbAlbumUrl = "https://musicbrainz.org/ws/2/release-group?query=release:\"" + UrlEncode(albumClean) + "\"&fmt=json";
-                                        std::string mbAlbumRes = HttpGetStringThrottled(Utf8ToWide(mbAlbumUrl));
-                                        size_t argPos = mbAlbumRes.find("\"release-groups\":");
-                                        if (argPos != std::string::npos) {
-                                            size_t aidPos = mbAlbumRes.find("\"id\":\"", argPos);
-                                            if (aidPos != std::string::npos) {
-                                                aidPos += 6;
-                                                size_t aendPos = mbAlbumRes.find("\"", aidPos);
-                                                if (aendPos != std::string::npos) {
-                                                    releaseGroupMbId = mbAlbumRes.substr(aidPos, aendPos - aidPos);
-                                                    isMatched = true;
-                                                }
-                                            }
-                                            size_t datePos = mbAlbumRes.find("\"first-release-date\":\"", argPos);
-                                            if (datePos != std::string::npos) {
-                                                datePos += 22;
-                                                size_t dendPos = mbAlbumRes.find("\"", datePos);
-                                                if (dendPos != std::string::npos) {
-                                                    firstReleaseDate = mbAlbumRes.substr(datePos, dendPos - datePos);
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Tier C: Loose Text Search
-                                    if (releaseGroupMbId.empty()) {
-                                        std::string mbLooseQuery = artistClean + " " + albumClean;
-                                        std::string mbLooseUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbLooseQuery) + "&fmt=json";
-                                        std::string mbLooseRes = HttpGetStringThrottled(Utf8ToWide(mbLooseUrl));
-                                        size_t lrgPos = mbLooseRes.find("\"release-groups\":");
-                                        if (lrgPos != std::string::npos) {
-                                            size_t lidPos = mbLooseRes.find("\"id\":\"", lrgPos);
-                                            if (lidPos != std::string::npos) {
-                                                lidPos += 6;
-                                                size_t lendPos = mbLooseRes.find("\"", lidPos);
-                                                if (lendPos != std::string::npos) {
-                                                    releaseGroupMbId = mbLooseRes.substr(lidPos, lendPos - lidPos);
-                                                    isMatched = true;
-                                                }
-                                            }
-                                            size_t datePos = mbLooseRes.find("\"first-release-date\":\"", lrgPos);
-                                            if (datePos != std::string::npos) {
-                                                datePos += 22;
-                                                size_t dendPos = mbLooseRes.find("\"", datePos);
-                                                if (dendPos != std::string::npos) {
-                                                    firstReleaseDate = mbLooseRes.substr(datePos, dendPos - datePos);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // 3. Fetch Cover Art from CoverArtArchive.org if Release ID was found
-                                if (!releaseGroupMbId.empty()) {
-                                    LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive image...");
-                                    std::wstring caaUrl = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-500");
-                                    coverData = HttpGetBytes(caaUrl);
-                                    if (!coverData.empty()) {
-                                        LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art for " + albumClean);
-                                    }
-                                } else {
-                                    LOG_INFO("[NICHE TRACK] MusicBrainz record not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
-                                }
-
-                                // 4. Fetch Synced Romanized LRC Lyrics via LrcLib REST API
-                                std::string lrcLyrics = FetchLrcLibSyncedLyrics(artistClean, titleClean, albumClean);
-                                if (!lrcLyrics.empty()) {
-                                    item.hasLyrics = true;
-                                    strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
-                                    LOG_INFO("[LRC LYRICS FETCHED] Found synced lyrics for " + artistClean + " - " + titleClean);
-                                }
-
-                                if (!firstReleaseDate.empty()) {
-                                    strncpy_s(item.yearBuf, firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
-                                }
-
-                                item.isMusicBrainzMatched = isMatched;
-                                item.onlineCoverBytes = coverData;
-                                item.isFetchCompleted = true;
-
-                                {
-                                    std::lock_guard<std::mutex> lock(cacheMutex);
-                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, isMatched, true };
                                 }
                             }
-                        });
-                    }
+                        }
 
-                    for (auto& w : workers) {
-                        if (w.joinable()) w.join();
+                        // 2. Multi-Tier MusicBrainz Search Strategy with Backoff & Retries
+                        if (releaseGroupMbId.empty() && !albumClean.empty()) {
+                            // Tier A: Strict Release Group Search
+                            if (!artistClean.empty() && artistClean != "Unknown Artist") {
+                                std::string mbQuery = "artist:\"" + artistClean + "\" AND release:\"" + albumClean + "\"";
+                                std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
+                                std::string mbRes = HttpGetString(Utf8ToWide(mbUrl));
+
+                                size_t rgPos = mbRes.find("\"release-groups\":");
+                                if (rgPos != std::string::npos) {
+                                    size_t idPos = mbRes.find("\"id\":\"", rgPos);
+                                    if (idPos != std::string::npos) {
+                                        idPos += 6;
+                                        size_t endPos = mbRes.find("\"", idPos);
+                                        if (endPos != std::string::npos) {
+                                            releaseGroupMbId = mbRes.substr(idPos, endPos - idPos);
+                                            isMatched = true;
+                                        }
+                                    }
+                                    size_t datePos = mbRes.find("\"first-release-date\":\"", rgPos);
+                                    if (datePos != std::string::npos) {
+                                        datePos += 22;
+                                        size_t dendPos = mbRes.find("\"", datePos);
+                                        if (dendPos != std::string::npos) {
+                                            firstReleaseDate = mbRes.substr(datePos, dendPos - datePos);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Tier B: Album Title Alone Search (100% matches Doujin albums!)
+                            if (releaseGroupMbId.empty()) {
+                                std::string mbAlbumUrl = "https://musicbrainz.org/ws/2/release-group?query=release:\"" + UrlEncode(albumClean) + "\"&fmt=json";
+                                std::string mbAlbumRes = HttpGetString(Utf8ToWide(mbAlbumUrl));
+                                size_t argPos = mbAlbumRes.find("\"release-groups\":");
+                                if (argPos != std::string::npos) {
+                                    size_t aidPos = mbAlbumRes.find("\"id\":\"", argPos);
+                                    if (aidPos != std::string::npos) {
+                                        aidPos += 6;
+                                        size_t aendPos = mbAlbumRes.find("\"", aidPos);
+                                        if (aendPos != std::string::npos) {
+                                            releaseGroupMbId = mbAlbumRes.substr(aidPos, aendPos - aidPos);
+                                            isMatched = true;
+                                        }
+                                    }
+                                    size_t datePos = mbAlbumRes.find("\"first-release-date\":\"", argPos);
+                                    if (datePos != std::string::npos) {
+                                        datePos += 22;
+                                        size_t dendPos = mbAlbumRes.find("\"", datePos);
+                                        if (dendPos != std::string::npos) {
+                                            firstReleaseDate = mbAlbumRes.substr(datePos, dendPos - datePos);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Tier C: Loose Text Search
+                            if (releaseGroupMbId.empty()) {
+                                std::string mbLooseQuery = artistClean + " " + albumClean;
+                                std::string mbLooseUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbLooseQuery) + "&fmt=json";
+                                std::string mbLooseRes = HttpGetString(Utf8ToWide(mbLooseUrl));
+                                size_t lrgPos = mbLooseRes.find("\"release-groups\":");
+                                if (lrgPos != std::string::npos) {
+                                    size_t lidPos = mbLooseRes.find("\"id\":\"", lrgPos);
+                                    if (lidPos != std::string::npos) {
+                                        lidPos += 6;
+                                        size_t lendPos = mbLooseRes.find("\"", lidPos);
+                                        if (lendPos != std::string::npos) {
+                                            releaseGroupMbId = mbLooseRes.substr(lidPos, lendPos - lidPos);
+                                            isMatched = true;
+                                        }
+                                    }
+                                    size_t datePos = mbLooseRes.find("\"first-release-date\":\"", lrgPos);
+                                    if (datePos != std::string::npos) {
+                                        datePos += 22;
+                                        size_t dendPos = mbLooseRes.find("\"", datePos);
+                                        if (dendPos != std::string::npos) {
+                                            firstReleaseDate = mbLooseRes.substr(datePos, dendPos - datePos);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Fetch Cover Art from CoverArtArchive.org if Release ID was found
+                        if (!releaseGroupMbId.empty()) {
+                            LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive image...");
+                            std::wstring caaUrl = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-500");
+                            coverData = HttpGetBytes(caaUrl);
+                            if (!coverData.empty()) {
+                                LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art for " + albumClean);
+                            }
+                        } else {
+                            LOG_INFO("[NICHE TRACK] MusicBrainz record not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
+                        }
+
+                        // 4. Fetch Synced Romanized LRC Lyrics via LrcLib REST API
+                        std::string lrcLyrics = FetchLrcLibSyncedLyrics(artistClean, titleClean, albumClean);
+                        if (!lrcLyrics.empty()) {
+                            item.hasLyrics = true;
+                            strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+                            LOG_INFO("[LRC LYRICS FETCHED] Found synced lyrics for " + artistClean + " - " + titleClean);
+                        }
+
+                        if (!firstReleaseDate.empty()) {
+                            strncpy_s(item.yearBuf, firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
+                        }
+
+                        item.isMusicBrainzMatched = isMatched;
+                        item.onlineCoverBytes = coverData;
+                        item.isFetchCompleted = true;
+
+                        albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, isMatched, true };
                     }
 
                     m_isTagScanning = false;
@@ -1266,7 +1250,7 @@ void AppWindow::RunMessageLoop() {
                 textColor = ImVec4(1.0f, 0.4f, 0.8f, 1.0f);
             } else if (logLine.find("[MUSICBRAINZ FETCH") != std::string::npos) {
                 textColor = ImVec4(0.9f, 0.8f, 0.2f, 1.0f);
-            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos) {
+            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos || logLine.find("[RATE LIMIT") != std::string::npos) {
                 textColor = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
             } else if (logLine.find("[LRC LYRICS FETCHED]") != std::string::npos) {
                 textColor = ImVec4(0.3f, 0.8f, 1.0f, 1.0f);
