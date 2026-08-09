@@ -27,6 +27,13 @@ extern std::string g_DeleteDir;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+static std::string CleanMetadataString(const std::string& str) {
+    if (str.empty()) return "";
+    std::string s = std::regex_replace(str, std::regex(R"(\[[^\]]*\]|\{[^\}]*\}|\([^\)]*\)|\d{4}\.\d{2}\.\d{2})"), "");
+    s = std::regex_replace(s, std::regex(R"(^\s+|\s+$)"), "");
+    return s.empty() ? str : s;
+}
+
 static std::wstring Utf8ToWide(const std::string& str) {
     if (str.empty()) return L"";
     int len = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), NULL, 0);
@@ -35,18 +42,38 @@ static std::wstring Utf8ToWide(const std::string& str) {
     return wstr;
 }
 
+static std::string UrlEncode(const std::string& str) {
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
+    for (char c : str) {
+        if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            escaped << c;
+        } else {
+            escaped << '%' << std::setw(2) << std::uppercase << (int)(unsigned char)c;
+        }
+    }
+    return escaped.str();
+}
+
 std::vector<unsigned char> HttpGetBytes(const std::wstring& url) {
     std::vector<unsigned char> result;
     HINTERNET hNet = InternetOpenW(L"MusicSorter/2.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hNet) return result;
-    HINTERNET hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE, 0);
+
+    DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
+    HINTERNET hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, flags, 0);
     if (!hFile) {
-        hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, INTERNET_FLAG_RELOAD, 0);
+        flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
+        hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, flags, 0);
     }
     if (!hFile) {
         InternetCloseHandle(hNet);
         return result;
     }
+
+    DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_REVOCATION | SECURITY_FLAG_IGNORE_REDIRECT_TO_HTTP | SECURITY_FLAG_IGNORE_REDIRECT_TO_HTTPS;
+    InternetSetOptionW(hFile, INTERNET_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
 
     unsigned char buffer[16384];
     DWORD bytesRead = 0;
@@ -387,8 +414,8 @@ void AppWindow::RunMessageLoop() {
                         std::string fn = fs::path(file).stem().string();
                         std::string trackNo = "01";
                         std::string title = fn;
-                        std::string artist = "Unknown Artist";
-                        std::string album = fs::path(file).parent_path().filename().string();
+                        std::string artistRaw = fs::path(file).parent_path().parent_path().filename().string();
+                        std::string albumRaw = fs::path(file).parent_path().filename().string();
 
                         std::regex num_regex(R"(^(\d{1,2})[\.\s_\-]+(.+)$)");
                         std::smatch match;
@@ -398,13 +425,14 @@ void AppWindow::RunMessageLoop() {
                             title = match[2].str();
                         }
 
-                        std::string parentDir = fs::path(file).parent_path().parent_path().filename().string();
-                        if (!parentDir.empty() && parentDir != "TO SORT" && parentDir != "media" && parentDir != "music") {
-                            artist = parentDir;
+                        std::string artistClean = CleanMetadataString(artistRaw);
+                        if (artistClean.empty() || artistClean == "TO SORT" || artistClean == "media" || artistClean == "music") {
+                            artistClean = "Unknown Artist";
                         }
+                        std::string albumClean = CleanMetadataString(albumRaw);
 
-                        strncpy_s(item.artistBuf, artist.c_str(), sizeof(item.artistBuf) - 1);
-                        strncpy_s(item.albumBuf, album.c_str(), sizeof(item.albumBuf) - 1);
+                        strncpy_s(item.artistBuf, artistClean.c_str(), sizeof(item.artistBuf) - 1);
+                        strncpy_s(item.albumBuf, albumClean.c_str(), sizeof(item.albumBuf) - 1);
                         strncpy_s(item.titleBuf, title.c_str(), sizeof(item.titleBuf) - 1);
                         strncpy_s(item.trackNoBuf, trackNo.c_str(), sizeof(item.trackNoBuf) - 1);
 
@@ -425,7 +453,8 @@ void AppWindow::RunMessageLoop() {
                             }
                         }
 
-                        // Try AcoustID MusicBrainz API lookup
+                        // 1. AcoustID Raw Fingerprint API Lookup
+                        std::string releaseGroupMbId;
                         auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(file);
                         if (!fpInfo.fpData.empty()) {
                             std::wstringstream wss;
@@ -435,9 +464,44 @@ void AppWindow::RunMessageLoop() {
                                 wss << fpInfo.fpData[k];
                             }
                             std::string acoustRes = HttpGetString(wss.str());
-                            if (acoustRes.find("\"status\":\"ok\"") != std::string::npos) {
-                                item.isMusicBrainzMatched = true;
+                            size_t rgPos = acoustRes.find("\"releasegroups\":");
+                            if (rgPos != std::string::npos) {
+                                size_t idPos = acoustRes.find("\"id\":\"", rgPos);
+                                if (idPos != std::string::npos) {
+                                    idPos += 6;
+                                    size_t endPos = acoustRes.find("\"", idPos);
+                                    if (endPos != std::string::npos) {
+                                        releaseGroupMbId = acoustRes.substr(idPos, endPos - idPos);
+                                        item.isMusicBrainzMatched = true;
+                                    }
+                                }
                             }
+                        }
+
+                        // 2. Fallback: MusicBrainz Text Search API (handles Doujin / Demetori / Touhou albums!)
+                        if (releaseGroupMbId.empty() && !artistClean.empty() && artistClean != "Unknown Artist" && !albumClean.empty()) {
+                            std::string mbQuery = "artist:\"" + artistClean + "\" AND release:\"" + albumClean + "\"";
+                            std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
+                            std::string mbRes = HttpGetString(Utf8ToWide(mbUrl));
+
+                            size_t rgPos = mbRes.find("\"release-groups\":");
+                            if (rgPos != std::string::npos) {
+                                size_t idPos = mbRes.find("\"id\":\"", rgPos);
+                                if (idPos != std::string::npos) {
+                                    idPos += 6;
+                                    size_t endPos = mbRes.find("\"", idPos);
+                                    if (endPos != std::string::npos) {
+                                        releaseGroupMbId = mbRes.substr(idPos, endPos - idPos);
+                                        item.isMusicBrainzMatched = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Fetch Cover Art from CoverArtArchive.org if Release ID was found
+                        if (!releaseGroupMbId.empty()) {
+                            std::wstring caaUrl = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-500");
+                            item.onlineCoverBytes = HttpGetBytes(caaUrl);
                         }
 
                         m_tagItems.push_back(item);
@@ -514,7 +578,7 @@ void AppWindow::RunMessageLoop() {
         if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
             auto& item = m_tagItems[m_currentTagIndex];
             ImGui::BeginChild("TagInspectorCard", ImVec2(0, 220), true);
-            ImGui::TextDisabled("🏷️ ИНСПЕКТОР ТЕГОВ И ВЫБОР ОБЛОЖКИ (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
+            ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ И ВЫБОР ОБЛОЖКИ] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
             ImGui::SameLine();
             if (item.isMusicBrainzMatched) {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "[MUSICBRAINZ MATCHED]");
@@ -560,12 +624,12 @@ void AppWindow::RunMessageLoop() {
             ImGui::Columns(1);
             ImGui::Spacing();
 
-            if (ImGui::Button("[✓] Принять и Записать Теги & Обложку", ImVec2(280, 32))) {
+            if (ImGui::Button("[V] Принять и Записать Теги & Обложку", ImVec2(280, 32))) {
                 LOG_INFO("[TAGS APPLIED] " + std::string(item.artistBuf) + " - " + std::string(item.titleBuf) + " (" + std::string(item.albumBuf) + ")");
                 m_currentTagIndex++;
             }
             ImGui::SameLine();
-            if (ImGui::Button("[⏭] Пропустить", ImVec2(140, 32))) {
+            if (ImGui::Button("[>>] Пропустить", ImVec2(140, 32))) {
                 m_currentTagIndex++;
             }
             ImGui::EndChild();
