@@ -1369,7 +1369,14 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
                 ImGui::Separator();
 
-                // ==================== ROW 1 (TOP LEFT): ORIGINAL TAGS ====================
+                // Main 3-Column Layout: Left Column (Col 0) = Stacked Original & Proposed Tags | Middle (Col 1) = Local Cover | Right (Col 2) = Online Cover
+                ImGui::Columns(3, "Main3InspectorColumns", false);
+                ImGui::SetColumnWidth(0, 340.0f);
+                ImGui::SetColumnWidth(1, 280.0f);
+                ImGui::SetColumnWidth(2, 280.0f);
+
+                // ==================== COLUMN 0 (LEFT: STACKED TAGS) ====================
+                // 1. TOP HALF OF COL 0: ORIGINAL EMBEDDED TAGS
                 ImGui::TextDisabled("Исходные теги в файле");
                 ImGui::PushItemWidth(190);
 
@@ -1397,13 +1404,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                // ==================== ROW 2 (BOTTOM): 3 COLUMNS (PROPOSED TAGS | LOCAL COVER | ONLINE COVER) ====================
-                ImGui::Columns(3, "InspectorBottomRow3Columns", false);
-                ImGui::SetColumnWidth(0, 340.0f);
-                ImGui::SetColumnWidth(1, 280.0f);
-                ImGui::SetColumnWidth(2, 280.0f);
-
-                // 1. Bottom-Left: Proposed Fetched Tags (directly under Original Tags!)
+                // 2. BOTTOM HALF OF COL 0: PROPOSED FETCHED TAGS
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
                 ImGui::PushItemWidth(190);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
@@ -1419,7 +1420,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
 
-                // 2. Bottom-Center: Local Cover Art
+                // ==================== COLUMN 1 (MIDDLE: LOCAL COVER ART) ====================
                 ImGui::NextColumn();
                 ImGui::TextDisabled("Локальная обложка:");
                 if (item.localTexture) {
@@ -1437,7 +1438,7 @@ void AppWindow::RunMessageLoop() {
                     ImGui::TextDisabled("[Обложка отсутствует]");
                 }
 
-                // 3. Bottom-Right: CoverArtArchive Cover Art
+                // ==================== COLUMN 2 (RIGHT: ONLINE COVER ART) ====================
                 ImGui::NextColumn();
                 ImGui::TextDisabled("CoverArtArchive:");
                 if (item.onlineTexture) {
@@ -1448,7 +1449,7 @@ void AppWindow::RunMessageLoop() {
                     ImGui::TextDisabled("%dx%d px | %zu KB", item.onlineWidth, item.onlineHeight, item.onlineCoverBytes.size() / 1024);
                     if (item.onlineScore > item.localScore) {
                         ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
-                    } else if (item.onlineWidth >= 1000 && item.onlineScore < item.onlineScore / 3) {
+                    } else if (item.onlineWidth >= 1000 && item.onlineScore < item.localScore / 3) {
                         ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ");
                     }
                 } else if (m_isTagScanning && !item.isFetchCompleted) {
