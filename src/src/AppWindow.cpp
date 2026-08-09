@@ -1370,12 +1370,14 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Separator();
 
                 // Main 3-Column Layout: Left Column (Col 0) = Stacked Original & Proposed Tags | Middle (Col 1) = Local Cover | Right (Col 2) = Online Cover
-                ImGui::Columns(3, "Main3InspectorColumns", false);
+                float inspectorTopY = ImGui::GetCursorPosY();
+                ImGui::Columns(3, "Main3InspectorColumnsFixedTop", false);
                 ImGui::SetColumnWidth(0, 340.0f);
                 ImGui::SetColumnWidth(1, 280.0f);
                 ImGui::SetColumnWidth(2, 280.0f);
 
                 // ==================== COLUMN 0 (LEFT: BOTH TAG BLOCKS STACKED) ====================
+                ImGui::SetCursorPosY(inspectorTopY);
                 ImGui::BeginGroup();
 
                 // 1. ВЕРХНИЙ БЛОК: ИСХОДНЫЕ ТЕГИ
@@ -1402,9 +1404,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
 
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
+                ImGui::Dummy(ImVec2(0, 8.0f));
 
                 // 2. НИЖНИЙ БЛОК: ПРЕДЛАГАЕМЫЕ ТЕГИ
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
@@ -1424,8 +1424,9 @@ void AppWindow::RunMessageLoop() {
 
                 ImGui::EndGroup();
 
-                // ==================== COLUMN 1 (MIDDLE: LOCAL COVER ART) ====================
+                // ==================== COLUMN 1 (MIDDLE: LOCAL COVER ART - FORCED TO absolute TOP Y!) ====================
                 ImGui::NextColumn();
+                ImGui::SetCursorPosY(inspectorTopY);
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("Локальная обложка:");
                 if (item.localTexture) {
@@ -1444,8 +1445,9 @@ void AppWindow::RunMessageLoop() {
                 }
                 ImGui::EndGroup();
 
-                // ==================== COLUMN 2 (RIGHT: ONLINE COVER ART) ====================
+                // ==================== COLUMN 2 (RIGHT: ONLINE COVER ART - FORCED TO absolute TOP Y!) ====================
                 ImGui::NextColumn();
+                ImGui::SetCursorPosY(inspectorTopY);
                 ImGui::BeginGroup();
                 ImGui::TextDisabled("CoverArtArchive:");
                 if (item.onlineTexture) {
