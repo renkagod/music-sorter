@@ -14,6 +14,7 @@
 #include <thread>
 #include <future>
 #include <mutex>
+#include <unordered_map>
 #include <sstream>
 #include <filesystem>
 #include <fstream>
@@ -28,6 +29,13 @@ extern std::string g_ToSortDir;
 extern std::string g_DeleteDir;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+struct AlbumMetadataCache {
+    std::string releaseGroupMbId;
+    std::vector<unsigned char> coverBytes;
+    bool isMatched = false;
+    bool isFetched = false;
+};
 
 static std::string CleanMetadataString(const std::string& str) {
     if (str.empty()) return "";
@@ -595,21 +603,39 @@ void AppWindow::RunMessageLoop() {
                     // Post immediate notification to show local UI instantly!
                     PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
 
-                    // HIGH-SPEED 16-THREAD PARALLEL MUSICBRAINZ LOOKUP WITH REAL-TIME LOGGING
+                    // ALBUM-LEVEL PARALLEL CACHING (Reduces 117 queries down to 10 album queries!)
+                    std::unordered_map<std::string, AlbumMetadataCache> albumCache;
+                    std::mutex cacheMutex;
+
                     const size_t numThreads = 16;
                     std::vector<std::thread> workers;
 
                     for (size_t t = 0; t < numThreads; ++t) {
-                        workers.emplace_back([this, t, numThreads, &files]() {
+                        workers.emplace_back([this, t, numThreads, &files, &albumCache, &cacheMutex]() {
                             for (size_t i = t; i < files.size(); i += numThreads) {
                                 auto& item = m_tagItems[i];
                                 std::string artistClean(item.artistBuf);
                                 std::string albumClean(item.albumBuf);
+                                std::string albumKey = artistClean + "___" + albumClean;
+
+                                std::string releaseGroupMbId;
+                                std::vector<unsigned char> coverData;
+                                bool isMatched = false;
+
+                                {
+                                    std::lock_guard<std::mutex> lock(cacheMutex);
+                                    if (albumCache.find(albumKey) != albumCache.end() && albumCache[albumKey].isFetched) {
+                                        auto& c = albumCache[albumKey];
+                                        item.isMusicBrainzMatched = c.isMatched;
+                                        item.onlineCoverBytes = c.coverBytes;
+                                        item.isFetchCompleted = true;
+                                        m_fetchedCount++;
+                                        continue;
+                                    }
+                                }
 
                                 size_t currentNum = ++m_fetchedCount;
                                 LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] Querying AcoustID & MusicBrainz for: " + artistClean + " - " + albumClean);
-
-                                std::string releaseGroupMbId;
 
                                 // 1. AcoustID Lookup
                                 auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(files[i]);
@@ -629,7 +655,7 @@ void AppWindow::RunMessageLoop() {
                                             size_t endPos = acoustRes.find("\"", idPos);
                                             if (endPos != std::string::npos) {
                                                 releaseGroupMbId = acoustRes.substr(idPos, endPos - idPos);
-                                                item.isMusicBrainzMatched = true;
+                                                isMatched = true;
                                             }
                                         }
                                     }
@@ -649,7 +675,7 @@ void AppWindow::RunMessageLoop() {
                                             size_t endPos = mbRes.find("\"", idPos);
                                             if (endPos != std::string::npos) {
                                                 releaseGroupMbId = mbRes.substr(idPos, endPos - idPos);
-                                                item.isMusicBrainzMatched = true;
+                                                isMatched = true;
                                             }
                                         }
                                     }
@@ -659,15 +685,22 @@ void AppWindow::RunMessageLoop() {
                                 if (!releaseGroupMbId.empty()) {
                                     LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive image...");
                                     std::wstring caaUrl = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-500");
-                                    item.onlineCoverBytes = HttpGetBytes(caaUrl);
-                                    if (!item.onlineCoverBytes.empty()) {
-                                        LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(item.onlineCoverBytes.size()) + " bytes cover art for " + albumClean);
+                                    coverData = HttpGetBytes(caaUrl);
+                                    if (!coverData.empty()) {
+                                        LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art for " + albumClean);
                                     }
                                 } else {
                                     LOG_INFO("[NICHE TRACK] MusicBrainz record not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
                                 }
 
+                                item.isMusicBrainzMatched = isMatched;
+                                item.onlineCoverBytes = coverData;
                                 item.isFetchCompleted = true;
+
+                                {
+                                    std::lock_guard<std::mutex> lock(cacheMutex);
+                                    albumCache[albumKey] = { releaseGroupMbId, coverData, isMatched, true };
+                                }
                             }
                         });
                     }
