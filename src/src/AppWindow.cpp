@@ -6,6 +6,7 @@
 #include "../include/Logger.hpp"
 
 #include "../third_party/imgui/imgui.h"
+#include "../third_party/imgui/imgui_internal.h"
 #include "../third_party/imgui/imgui_impl_win32.h"
 #include "../third_party/imgui/imgui_impl_dx11.h"
 
@@ -987,38 +988,30 @@ void AppWindow::RunMessageLoop() {
         ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
         ImGui::EndChild();
 
-        // Native High-Precision Log Console Panel with Native Win32 Clipboard Copying!
-        ImGui::BeginChild("LogConsole", ImVec2(0, 0), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-        ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
-        ImGui::SameLine();
-
-        auto logs = Logger::Instance().GetLogs();
-
-        if (ImGui::Button("Копировать весь лог в буфер обмена")) {
-            std::string full_log;
-            for (const auto& log : logs) full_log += log + "\n";
-            CopyToClipboardWin32(full_log);
-            LOG_INFO("Logs copied to Windows Clipboard.");
-        }
+        // Fully Selectable & Copyable Log Console Field with Native Auto-Scroll!
+        ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
+        ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ (Выделите любой текст мышью / Ctrl+C):");
         ImGui::Separator();
 
-        float scrollY = ImGui::GetScrollY();
-        float maxScrollY = ImGui::GetScrollMaxY();
-
-        if (scrollY >= maxScrollY - 20.0f || maxScrollY <= 0.0f) {
-            m_logAutoScroll = true;
-        } else if (scrollY < maxScrollY - 30.0f) {
-            m_logAutoScroll = false;
+        auto logs = Logger::Instance().GetLogs();
+        static std::string log_buffer;
+        log_buffer.clear();
+        for (const auto& log : logs) {
+            log_buffer += log + "\n";
         }
 
-        for (size_t idx = 0; idx < logs.size(); ++idx) {
-            ImGui::PushID((int)idx);
-            ImGui::TextUnformatted(logs[idx].c_str());
-            ImGui::PopID();
-        }
+        // Native Selectable MultiLine Text Box (Highlight with mouse + Ctrl+C!)
+        static size_t last_log_size = 0;
+        ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
 
-        if (m_logAutoScroll) {
-            ImGui::SetScrollHereY(1.0f);
+        // Auto-Scroll detection & triggering inside InputTextMultiline
+        if (logs.size() != last_log_size) {
+            last_log_size = logs.size();
+            ImGuiContext& g = *GImGui;
+            if (g.CurrentWindow) {
+                ImGuiWindow* child = g.CurrentWindow;
+                if (child) child->ScrollTarget.y = child->ScrollMax.y;
+            }
         }
 
         ImGui::EndChild();
