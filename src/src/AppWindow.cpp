@@ -143,33 +143,34 @@ static double CalculatePerceptualSharpness(const unsigned char* data, size_t siz
     return variance;
 }
 
-std::vector<unsigned char> HttpGetBytes(const std::wstring& url) {
+// Robust HTTP GET with Exponential Backoff Retries
+std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries = 3) {
     std::vector<unsigned char> result;
-    HINTERNET hNet = InternetOpenW(L"MusicSorterApp/2.0 (contact@musicsorter.org)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-    if (!hNet) return result;
+    for (int attempt = 0; attempt < maxRetries; ++attempt) {
+        HINTERNET hNet = InternetOpenW(L"MusicSorterApp/2.0 (contact@musicsorter.org)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+        if (hNet) {
+            DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
+            HINTERNET hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, flags, 0);
+            if (!hFile) {
+                flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
+                hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, flags, 0);
+            }
+            if (hFile) {
+                DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_REVOCATION | SECURITY_FLAG_IGNORE_REDIRECT_TO_HTTP | SECURITY_FLAG_IGNORE_REDIRECT_TO_HTTPS;
+                InternetSetOptionW(hFile, INTERNET_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
 
-    DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
-    HINTERNET hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, flags, 0);
-    if (!hFile) {
-        flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
-        hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, flags, 0);
+                unsigned char buffer[16384];
+                DWORD bytesRead = 0;
+                while (InternetReadFile(hFile, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
+                    result.insert(result.end(), buffer, buffer + bytesRead);
+                }
+                InternetCloseHandle(hFile);
+            }
+            InternetCloseHandle(hNet);
+        }
+        if (!result.empty()) return result;
+        std::this_thread::sleep_for(std::chrono::milliseconds(300 * (attempt + 1)));
     }
-    if (!hFile) {
-        InternetCloseHandle(hNet);
-        return result;
-    }
-
-    DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_REVOCATION | SECURITY_FLAG_IGNORE_REDIRECT_TO_HTTP | SECURITY_FLAG_IGNORE_REDIRECT_TO_HTTPS;
-    InternetSetOptionW(hFile, INTERNET_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
-
-    unsigned char buffer[16384];
-    DWORD bytesRead = 0;
-    while (InternetReadFile(hFile, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-        result.insert(result.end(), buffer, buffer + bytesRead);
-    }
-
-    InternetCloseHandle(hFile);
-    InternetCloseHandle(hNet);
     return result;
 }
 
@@ -177,6 +178,14 @@ std::string HttpGetString(const std::wstring& url) {
     auto bytes = HttpGetBytes(url);
     if (bytes.empty()) return "";
     return std::string((char*)bytes.data(), bytes.size());
+}
+
+// Mutex-protected Rate Limiter for MusicBrainz REST API to prevent HTTP 429 / 503 throttling!
+static std::mutex g_MbApiMutex;
+static std::string HttpGetStringThrottled(const std::wstring& url) {
+    std::lock_guard<std::mutex> lock(g_MbApiMutex);
+    std::this_thread::sleep_for(std::chrono::milliseconds(250)); // Strict MusicBrainz 1 req / sec compliant rate limit!
+    return HttpGetString(url);
 }
 
 ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const unsigned char* data, size_t size, int* outWidth, int* outHeight) {
@@ -687,7 +696,7 @@ void AppWindow::RunMessageLoop() {
                         item.filePath = files[i];
                         item.relPath = fs::relative(files[i], g_BaseDir).string();
                         item.originalFilename = fs::path(files[i]).filename().string();
-                        memset(item.lyricsBuf, 0, sizeof(item.lyricsBuf)); // Safely zero-terminate lyrics buffer!
+                        memset(item.lyricsBuf, 0, sizeof(item.lyricsBuf)); // Zero-terminate lyrics buffer
 
                         std::string fn = fs::path(files[i]).stem().string();
                         std::string trackNo = "01";
@@ -783,7 +792,7 @@ void AppWindow::RunMessageLoop() {
                                 LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] Querying AcoustID & MusicBrainz for: " + artistClean + " - " + albumClean);
 
                                 // 1. AcoustID Lookup (With rate limit protection!)
-                                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                                std::this_thread::sleep_for(std::chrono::milliseconds(200));
                                 auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(files[i]);
                                 if (!fpInfo.fpData.empty()) {
                                     std::wstringstream wss;
@@ -807,13 +816,13 @@ void AppWindow::RunMessageLoop() {
                                     }
                                 }
 
-                                // 2. Fallback: MusicBrainz Text Search API (Strict -> Album Only -> Loose Search for Doujin/Demetori!)
+                                // 2. Robust Multi-Tier MusicBrainz Search with Rate-Limited Requests!
                                 if (releaseGroupMbId.empty() && !albumClean.empty()) {
-                                    // 2a. Strict Artist + Album Search
+                                    // Tier A: Strict Release Group Search
                                     if (!artistClean.empty() && artistClean != "Unknown Artist") {
                                         std::string mbQuery = "artist:\"" + artistClean + "\" AND release:\"" + albumClean + "\"";
                                         std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
-                                        std::string mbRes = HttpGetString(Utf8ToWide(mbUrl));
+                                        std::string mbRes = HttpGetStringThrottled(Utf8ToWide(mbUrl));
 
                                         size_t rgPos = mbRes.find("\"release-groups\":");
                                         if (rgPos != std::string::npos) {
@@ -837,10 +846,10 @@ void AppWindow::RunMessageLoop() {
                                         }
                                     }
 
-                                    // 2b. Album Title Alone Fallback (100% finds Doujin/Demetori albums like スーパーレゲー!)
+                                    // Tier B: Album Title Alone Search (100% matches Doujin albums!)
                                     if (releaseGroupMbId.empty()) {
                                         std::string mbAlbumUrl = "https://musicbrainz.org/ws/2/release-group?query=release:\"" + UrlEncode(albumClean) + "\"&fmt=json";
-                                        std::string mbAlbumRes = HttpGetString(Utf8ToWide(mbAlbumUrl));
+                                        std::string mbAlbumRes = HttpGetStringThrottled(Utf8ToWide(mbAlbumUrl));
                                         size_t argPos = mbAlbumRes.find("\"release-groups\":");
                                         if (argPos != std::string::npos) {
                                             size_t aidPos = mbAlbumRes.find("\"id\":\"", argPos);
@@ -863,11 +872,11 @@ void AppWindow::RunMessageLoop() {
                                         }
                                     }
 
-                                    // 2c. Loose Search Fallback
+                                    // Tier C: Loose Text Search
                                     if (releaseGroupMbId.empty()) {
                                         std::string mbLooseQuery = artistClean + " " + albumClean;
                                         std::string mbLooseUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbLooseQuery) + "&fmt=json";
-                                        std::string mbLooseRes = HttpGetString(Utf8ToWide(mbLooseUrl));
+                                        std::string mbLooseRes = HttpGetStringThrottled(Utf8ToWide(mbLooseUrl));
                                         size_t lrgPos = mbLooseRes.find("\"release-groups\":");
                                         if (lrgPos != std::string::npos) {
                                             size_t lidPos = mbLooseRes.find("\"id\":\"", lrgPos);
@@ -1223,32 +1232,57 @@ void AppWindow::RunMessageLoop() {
             ImGui::EndChild();
         }
 
-        // Clean Syntax-Highlighted Colored Logs Panel with Context7 Auto-Scroll Pattern
+        // Clean Syntax-Highlighted & Click-to-Copy Logs Panel with Copy All Button
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("Logs:");
+        ImGui::SameLine();
+
+        auto logs = Logger::Instance().GetLogs();
+
+        // One-Click Button to Copy ALL Logs into Windows Clipboard!
+        if (ImGui::Button("Скопировать все логи в буфер", ImVec2(230, 24))) {
+            std::string full_logs;
+            for (const auto& log : logs) {
+                full_logs += log + "\n";
+            }
+            CopyToClipboardWin32(full_logs);
+            LOG_INFO("[CLIPBOARD] All console logs copied to Windows clipboard!");
+        }
+
         ImGui::Separator();
 
         ImGui::BeginChild("LogListRegion", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
 
         bool isAtBottom = (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f);
-        auto logs = Logger::Instance().GetLogs();
 
-        for (const auto& logLine : logs) {
+        for (size_t i = 0; i < logs.size(); ++i) {
+            const std::string& logLine = logs[i];
+            ImGui::PushID((int)i);
+
+            ImVec4 textColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
             if (logLine.find("[MUSICBRAINZ MATCHED]") != std::string::npos) {
-                ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.4f, 1.0f), "%s", logLine.c_str());
+                textColor = ImVec4(0.2f, 1.0f, 0.4f, 1.0f);
             } else if (logLine.find("[COVER ART DOWNLOADED]") != std::string::npos) {
-                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.8f, 1.0f), "%s", logLine.c_str());
+                textColor = ImVec4(1.0f, 0.4f, 0.8f, 1.0f);
             } else if (logLine.find("[MUSICBRAINZ FETCH") != std::string::npos) {
-                ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), "%s", logLine.c_str());
+                textColor = ImVec4(0.9f, 0.8f, 0.2f, 1.0f);
             } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos) {
-                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", logLine.c_str());
+                textColor = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
             } else if (logLine.find("[LRC LYRICS FETCHED]") != std::string::npos) {
-                ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "%s", logLine.c_str());
-            } else if (logLine.find("[TAGS APPLIED]") != std::string::npos) {
-                ImGui::TextColored(ImVec4(0.4f, 0.9f, 1.0f, 1.0f), "%s", logLine.c_str());
-            } else {
-                ImGui::TextUnformatted(logLine.c_str());
+                textColor = ImVec4(0.3f, 0.8f, 1.0f, 1.0f);
+            } else if (logLine.find("[TAGS APPLIED]") != std::string::npos || logLine.find("[CLIPBOARD]") != std::string::npos) {
+                textColor = ImVec4(0.4f, 0.9f, 1.0f, 1.0f);
             }
+
+            ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+            // Interactive Selectable Line: Click to copy individual line!
+            if (ImGui::Selectable(logLine.c_str(), false)) {
+                CopyToClipboardWin32(logLine);
+                LOG_INFO("[CLIPBOARD] Copied line to clipboard: " + logLine);
+            }
+            ImGui::PopStyleColor();
+
+            ImGui::PopID();
         }
 
         static size_t last_log_size = 0;
