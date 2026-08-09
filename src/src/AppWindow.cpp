@@ -362,7 +362,8 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 
     RegisterClassExW(&wcex);
 
-    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Desktop - Modern Monochrome C++ Studio", WS_OVERLAPPEDWINDOW, 100, 100, 1080, 780, NULL, NULL, hInstance, NULL);
+    // Initial Window Size enlarged to 1280x920 so Console Panel is fully visible by default!
+    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Desktop - Modern Monochrome C++ Studio", WS_OVERLAPPEDWINDOW, 60, 40, 1280, 920, NULL, NULL, hInstance, NULL);
 
     if (!CreateDeviceD3D(m_hWnd)) {
         CleanupDeviceD3D();
@@ -419,8 +420,8 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     style.PopupRounding = 4.0f;
     style.ScrollbarRounding = 4.0f;
     style.GrabRounding = 4.0f;
-    style.ItemSpacing = ImVec2(10, 8);
-    style.FramePadding = ImVec2(10, 6);
+    style.ItemSpacing = ImVec2(10, 6);
+    style.FramePadding = ImVec2(10, 5);
 
     ImVec4* colors = style.Colors;
     colors[ImGuiCol_WindowBg] = ImVec4(0.07f, 0.07f, 0.07f, 1.00f);
@@ -559,10 +560,9 @@ void AppWindow::RunMessageLoop() {
         // Header Section
         ImGui::TextDisabled("MUSIC SORTER DESKTOP (C++20 NATIVE STUDIO)");
         ImGui::Separator();
-        ImGui::Spacing();
 
         // 4 Step-by-Step Workflow Stage Buttons
-        if (ImGui::Button("1. [Поиск] Дубликаты (AcoustID)", ImVec2(240, 36))) {
+        if (ImGui::Button("1. [Поиск] Дубликаты (AcoustID)", ImVec2(240, 32))) {
             if (!m_isScanning) {
                 m_isScanning = true;
                 LOG_INFO("Step 1: Running parallel AcoustID duplicate scan...");
@@ -578,7 +578,7 @@ void AppWindow::RunMessageLoop() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("2. [Теги & Обложки] Инспектор", ImVec2(230, 36))) {
+        if (ImGui::Button("2. [Теги & Обложки] Инспектор", ImVec2(230, 32))) {
             if (!m_isTagScanning) {
                 m_isTagScanning = true;
                 LOG_INFO("Step 2: Instant local scan + parallel 16-thread MusicBrainz lookup...");
@@ -765,27 +765,25 @@ void AppWindow::RunMessageLoop() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("3. [Сортировка] Папки FLAC/MP3", ImVec2(240, 36))) {
+        if (ImGui::Button("3. [Сортировка] Папки FLAC/MP3", ImVec2(240, 32))) {
             std::thread([]() {
                 NativeMirrorCollections();
             }).detach();
         }
         ImGui::SameLine();
-        if (ImGui::Button("4. [Реестр] Обновление Tracklist", ImVec2(240, 36))) {
+        if (ImGui::Button("4. [Реестр] Обновление Tracklist", ImVec2(240, 32))) {
             std::thread([]() {
                 NativeSyncTracklistDatabase();
             }).detach();
         }
 
-        ImGui::Spacing();
         ImGui::Separator();
-        ImGui::Spacing();
 
         // Dual A/B Comparison Cards Layout
         float halfWidth = (ImGui::GetContentRegionAvail().x - 16.0f) * 0.5f;
 
         // Card A (Left)
-        ImGui::BeginChild("CardA", ImVec2(halfWidth, 180), true);
+        ImGui::BeginChild("CardA", ImVec2(halfWidth, 150), true);
         ImGui::TextDisabled("ТРЕК А (Левый)");
         if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
             auto& pair = m_candidates[m_currentCandidateIndex];
@@ -793,7 +791,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::Text("%s | %.1fs", pair.extA.c_str(), pair.durA);
             ImGui::TextDisabled("%s", pair.relA.c_str());
             ImGui::Spacing();
-            if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК А (Б -> delete)", ImVec2(-1, 36))) {
+            if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК А (Б -> delete)", ImVec2(-1, 32))) {
                 MakeDecisionA();
             }
         } else {
@@ -804,7 +802,7 @@ void AppWindow::RunMessageLoop() {
         ImGui::SameLine();
 
         // Card B (Right)
-        ImGui::BeginChild("CardB", ImVec2(halfWidth, 180), true);
+        ImGui::BeginChild("CardB", ImVec2(halfWidth, 150), true);
         ImGui::TextDisabled("ТРЕК Б (Правый)");
         if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
             auto& pair = m_candidates[m_currentCandidateIndex];
@@ -812,7 +810,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::Text("%s | %.1fs", pair.extB.c_str(), pair.durB);
             ImGui::TextDisabled("%s", pair.relB.c_str());
             ImGui::Spacing();
-            if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК Б (А -> delete)", ImVec2(-1, 36))) {
+            if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК Б (А -> delete)", ImVec2(-1, 32))) {
                 MakeDecisionB();
             }
         } else {
@@ -820,12 +818,10 @@ void AppWindow::RunMessageLoop() {
         }
         ImGui::EndChild();
 
-        ImGui::Spacing();
-
         // Step 2 Interactive Tag & Cover Inspector Card (When Step 2 is active)
         if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
             auto& item = m_tagItems[m_currentTagIndex];
-            ImGui::BeginChild("TagInspectorCard", ImVec2(0, 240), true);
+            ImGui::BeginChild("TagInspectorCard", ImVec2(0, 210), true);
             ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ И ВЫБОР ОБЛОЖКИ] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
             ImGui::SameLine();
             if (item.isMusicBrainzMatched) {
@@ -837,7 +833,7 @@ void AppWindow::RunMessageLoop() {
             }
 
             ImGui::Columns(2, "TagCols", false);
-            ImGui::SetColumnWidth(0, 480);
+            ImGui::SetColumnWidth(0, 460);
 
             // Prefilled Editable Inputs
             ImGui::InputText("Исполнитель", item.artistBuf, sizeof(item.artistBuf));
@@ -851,7 +847,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::TextDisabled("ВЫБОР И ДЕТЕКЦИЯ АПСКЕЙЛА ОБЛОЖЕК:");
 
             if (item.localTexture) {
-                if (ImGui::ImageButton("##LocalCoverBtn", (ImTextureID)item.localTexture, ImVec2(100, 100))) {
+                if (ImGui::ImageButton("##LocalCoverBtn", (ImTextureID)item.localTexture, ImVec2(80, 80))) {
                     item.selectedCoverChoice = 0;
                 }
                 ImGui::SameLine();
@@ -873,7 +869,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::SameLine();
 
             if (item.onlineTexture) {
-                if (ImGui::ImageButton("##OnlineCoverBtn", (ImTextureID)item.onlineTexture, ImVec2(100, 100))) {
+                if (ImGui::ImageButton("##OnlineCoverBtn", (ImTextureID)item.onlineTexture, ImVec2(80, 80))) {
                     item.selectedCoverChoice = 1;
                 }
                 ImGui::SameLine();
@@ -895,20 +891,19 @@ void AppWindow::RunMessageLoop() {
             ImGui::Columns(1);
             ImGui::Spacing();
 
-            if (ImGui::Button("[V] Принять и Записать Теги & Обложку", ImVec2(280, 32))) {
+            if (ImGui::Button("[V] Принять и Записать Теги & Обложку", ImVec2(280, 30))) {
                 LOG_INFO("[TAGS APPLIED] " + std::string(item.artistBuf) + " - " + std::string(item.titleBuf) + " (" + std::string(item.albumBuf) + ")");
                 m_currentTagIndex++;
             }
             ImGui::SameLine();
-            if (ImGui::Button("[>>] Пропустить", ImVec2(140, 32))) {
+            if (ImGui::Button("[>>] Пропустить", ImVec2(140, 30))) {
                 m_currentTagIndex++;
             }
             ImGui::EndChild();
-            ImGui::Spacing();
         }
 
         // Audio Player Controls & Wave Similarity Section
-        ImGui::BeginChild("PlayerControls", ImVec2(0, 140), true);
+        ImGui::BeginChild("PlayerControls", ImVec2(0, 115), true);
         if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
             auto& pair = m_candidates[m_currentCandidateIndex];
             ImGui::Text("Сходство волн: %.1f%% | Смещение фазы: %d кадров", pair.similarity, pair.offset);
@@ -932,7 +927,7 @@ void AppWindow::RunMessageLoop() {
             AudioEngine::Instance().SeekToPercentage((double)seek_val * 100.0);
         }
 
-        if (ImGui::Button(AudioEngine::Instance().IsPlaying() ? "[||] ПАУЗА" : "[>] ПРОИГРЫВАТЬ", ImVec2(140, 36))) {
+        if (ImGui::Button(AudioEngine::Instance().IsPlaying() ? "[||] ПАУЗА" : "[>] ПРОИГРЫВАТЬ", ImVec2(140, 32))) {
             AudioEngine::Instance().TogglePlay();
         }
         ImGui::SameLine();
@@ -942,7 +937,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
         }
-        if (ImGui::Button("ТРЕК А [1]", ImVec2(140, 36))) {
+        if (ImGui::Button("ТРЕК А [1]", ImVec2(140, 32))) {
             AudioEngine::Instance().SetActiveChannel('a');
         }
         if (ch == 'a') ImGui::PopStyleColor(2);
@@ -952,7 +947,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
         }
-        if (ImGui::Button("ТРЕК Б [2]", ImVec2(140, 36))) {
+        if (ImGui::Button("ТРЕК Б [2]", ImVec2(140, 32))) {
             AudioEngine::Instance().SetActiveChannel('b');
         }
         if (ch == 'b') ImGui::PopStyleColor(2);
@@ -968,10 +963,8 @@ void AppWindow::RunMessageLoop() {
         ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
         ImGui::EndChild();
 
-        ImGui::Spacing();
-
-        // Log Console Panel with Smart Auto-Scroll Detection
-        ImGui::BeginChild("LogConsole", ImVec2(0, 0), true);
+        // Native High-Precision Log Console Panel with Working Auto-Scroll & High Visibility!
+        ImGui::BeginChild("LogConsole", ImVec2(0, 0), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
         ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
         ImGui::SameLine();
         if (ImGui::Button("Копировать весь лог в буфер обмена")) {
@@ -983,23 +976,19 @@ void AppWindow::RunMessageLoop() {
         }
         ImGui::Separator();
 
-        auto logs = Logger::Instance().GetLogs();
-        static std::string log_buffer;
-        log_buffer.clear();
-        for (const auto& log : logs) {
-            log_buffer += log + "\n";
-        }
-
         float scrollY = ImGui::GetScrollY();
         float maxScrollY = ImGui::GetScrollMaxY();
 
-        if (scrollY >= maxScrollY - 25.0f) {
+        if (scrollY >= maxScrollY - 20.0f || maxScrollY <= 0.0f) {
             m_logAutoScroll = true;
-        } else if (scrollY < maxScrollY - 25.0f) {
+        } else if (scrollY < maxScrollY - 30.0f) {
             m_logAutoScroll = false;
         }
 
-        ImGui::InputTextMultiline("##LogConsoleMultiLine", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
+        auto logs = Logger::Instance().GetLogs();
+        for (const auto& logLine : logs) {
+            ImGui::TextUnformatted(logLine.c_str());
+        }
 
         if (m_logAutoScroll) {
             ImGui::SetScrollHereY(1.0f);
