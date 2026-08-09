@@ -19,14 +19,18 @@ struct TagReviewItem {
     std::string embeddedAlbum;
     std::string embeddedTitle;
     std::string embeddedTrackNo;
+    std::string embeddedYear;
 
     char artistBuf[256] = {0};
     char albumBuf[256] = {0};
     char titleBuf[256] = {0};
     char trackNoBuf[32] = {0};
+    char yearBuf[32] = {0};
+    char lyricsBuf[1024] = {0};
 
     bool isMusicBrainzMatched = false;
     bool isFetchCompleted = false;
+    bool hasLyrics = false;
 
     std::string localCoverPath;
     std::string onlineCoverUrl;

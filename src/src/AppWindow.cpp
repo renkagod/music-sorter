@@ -33,6 +33,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 
 struct AlbumMetadataCache {
     std::string releaseGroupMbId;
+    std::string firstReleaseDate;
     std::vector<unsigned char> coverBytes;
     bool isMatched = false;
     bool isFetched = false;
@@ -67,6 +68,15 @@ static std::string CleanMetadataString(const std::string& str) {
     std::string s = std::regex_replace(str, std::regex(R"(\[[^\]]*\]|\{[^\}]*\}|\([^\)]*\)|\d{4}\.\d{2}\.\d{2})"), "");
     s = std::regex_replace(s, std::regex(R"(^\s+|\s+$)"), "");
     return s.empty() ? str : s;
+}
+
+static std::string ExtractYearFromString(const std::string& str) {
+    std::regex year_regex(R"((19\d\d|20\d\d))");
+    std::smatch match;
+    if (std::regex_search(str, match, year_regex)) {
+        return match[1].str();
+    }
+    return "";
 }
 
 static std::string NormalizeKey(const std::string& text) {
@@ -211,6 +221,43 @@ ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const un
     if (outWidth) *outWidth = width;
     if (outHeight) *outHeight = height;
     return out_srv;
+}
+
+// Fetch Synced & Romanized LRC Lyrics via LrcLib REST API
+static std::string FetchLrcLibSyncedLyrics(const std::string& artist, const std::string& title, const std::string& album) {
+    if (artist.empty() || title.empty()) return "";
+    std::string url = "https://lrclib.net/api/get?artist_name=" + UrlEncode(artist) + "&track_name=" + UrlEncode(title);
+    if (!album.empty()) url += "&album_name=" + UrlEncode(album);
+
+    std::string json = HttpGetString(Utf8ToWide(url));
+    if (json.empty()) return "";
+
+    size_t sPos = json.find("\"syncedLyrics\":\"");
+    if (sPos != std::string::npos) {
+        sPos += 16;
+        size_t endPos = json.find("\"", sPos);
+        if (endPos != std::string::npos) {
+            std::string lyrics = json.substr(sPos, endPos - sPos);
+            // Replace escaped newlines \n
+            lyrics = std::regex_replace(lyrics, std::regex(R"(\\n)"), "\n");
+            lyrics = std::regex_replace(lyrics, std::regex(R"(\\r)"), "");
+            return lyrics;
+        }
+    }
+
+    size_t pPos = json.find("\"plainLyrics\":\"");
+    if (pPos != std::string::npos) {
+        pPos += 15;
+        size_t endPos = json.find("\"", pPos);
+        if (endPos != std::string::npos) {
+            std::string lyrics = json.substr(pPos, endPos - pPos);
+            lyrics = std::regex_replace(lyrics, std::regex(R"(\\n)"), "\n");
+            lyrics = std::regex_replace(lyrics, std::regex(R"(\\r)"), "");
+            return lyrics;
+        }
+    }
+
+    return "";
 }
 
 // Stage 3: Pure Native C++20 FLAC / MP3 Mirroring
@@ -638,6 +685,7 @@ void AppWindow::RunMessageLoop() {
                         std::string title = fn;
                         std::string artistRaw = fs::path(files[i]).parent_path().parent_path().filename().string();
                         std::string albumRaw = fs::path(files[i]).parent_path().filename().string();
+                        std::string yearStr = ExtractYearFromString(files[i]);
 
                         std::regex num_regex(R"(^(\d{1,2})[\.\s_\-]+(.+)$)");
                         std::smatch match;
@@ -657,11 +705,13 @@ void AppWindow::RunMessageLoop() {
                         item.embeddedAlbum = albumClean;
                         item.embeddedTitle = title;
                         item.embeddedTrackNo = trackNo;
+                        item.embeddedYear = yearStr;
 
                         strncpy_s(item.artistBuf, artistClean.c_str(), sizeof(item.artistBuf) - 1);
                         strncpy_s(item.albumBuf, albumClean.c_str(), sizeof(item.albumBuf) - 1);
                         strncpy_s(item.titleBuf, title.c_str(), sizeof(item.titleBuf) - 1);
                         strncpy_s(item.trackNoBuf, trackNo.c_str(), sizeof(item.trackNoBuf) - 1);
+                        strncpy_s(item.yearBuf, yearStr.c_str(), sizeof(item.yearBuf) - 1);
 
                         // Look for local cover image
                         fs::path folderPath = fs::path(files[i]).parent_path();
@@ -697,9 +747,11 @@ void AppWindow::RunMessageLoop() {
                                 auto& item = m_tagItems[i];
                                 std::string artistClean(item.artistBuf);
                                 std::string albumClean(item.albumBuf);
+                                std::string titleClean(item.titleBuf);
                                 std::string albumKey = artistClean + "___" + albumClean;
 
                                 std::string releaseGroupMbId;
+                                std::string firstReleaseDate;
                                 std::vector<unsigned char> coverData;
                                 bool isMatched = false;
 
@@ -709,6 +761,9 @@ void AppWindow::RunMessageLoop() {
                                         auto& c = albumCache[albumKey];
                                         item.isMusicBrainzMatched = c.isMatched;
                                         item.onlineCoverBytes = c.coverBytes;
+                                        if (!c.firstReleaseDate.empty()) {
+                                            strncpy_s(item.yearBuf, c.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
+                                        }
                                         item.isFetchCompleted = true;
                                         m_fetchedCount++;
                                         continue;
@@ -759,6 +814,14 @@ void AppWindow::RunMessageLoop() {
                                                 isMatched = true;
                                             }
                                         }
+                                        size_t datePos = mbRes.find("\"first-release-date\":\"", rgPos);
+                                        if (datePos != std::string::npos) {
+                                            datePos += 22;
+                                            size_t dendPos = mbRes.find("\"", datePos);
+                                            if (dendPos != std::string::npos) {
+                                                firstReleaseDate = mbRes.substr(datePos, dendPos - datePos);
+                                            }
+                                        }
                                     }
 
                                     // Loose Search Fallback if strict search returned 0 items
@@ -777,6 +840,14 @@ void AppWindow::RunMessageLoop() {
                                                     isMatched = true;
                                                 }
                                             }
+                                            size_t datePos = mbLooseRes.find("\"first-release-date\":\"", lrgPos);
+                                            if (datePos != std::string::npos) {
+                                                datePos += 22;
+                                                size_t dendPos = mbLooseRes.find("\"", datePos);
+                                                if (dendPos != std::string::npos) {
+                                                    firstReleaseDate = mbLooseRes.substr(datePos, dendPos - datePos);
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -793,13 +864,25 @@ void AppWindow::RunMessageLoop() {
                                     LOG_INFO("[NICHE TRACK] MusicBrainz record not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
                                 }
 
+                                // 4. Fetch Synced Romanized LRC Lyrics via LrcLib REST API
+                                std::string lrcLyrics = FetchLrcLibSyncedLyrics(artistClean, titleClean, albumClean);
+                                if (!lrcLyrics.empty()) {
+                                    item.hasLyrics = true;
+                                    strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+                                    LOG_INFO("[LRC LYRICS FETCHED] Found synced lyrics for " + artistClean + " - " + titleClean);
+                                }
+
+                                if (!firstReleaseDate.empty()) {
+                                    strncpy_s(item.yearBuf, firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
+                                }
+
                                 item.isMusicBrainzMatched = isMatched;
                                 item.onlineCoverBytes = coverData;
                                 item.isFetchCompleted = true;
 
                                 {
                                     std::lock_guard<std::mutex> lock(cacheMutex);
-                                    albumCache[albumKey] = { releaseGroupMbId, coverData, isMatched, true };
+                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, isMatched, true };
                                 }
                             }
                         });
@@ -871,8 +954,8 @@ void AppWindow::RunMessageLoop() {
         // Step 2 Interactive Tag & Cover Inspector Card (When Step 2 is active)
         if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
             auto& item = m_tagItems[m_currentTagIndex];
-            ImGui::BeginChild("TagInspectorCard", ImVec2(0, 240), true);
-            ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ И ВЫБОР ОБЛОЖКИ] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
+            ImGui::BeginChild("TagInspectorCard", ImVec2(0, 270), true);
+            ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ ПРИОРИТЕТА 1, ОБЛОЖЕК И ЛИРИКИ] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
             ImGui::SameLine();
             if (item.isMusicBrainzMatched) {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "[MUSICBRAINZ MATCHED]");
@@ -890,13 +973,25 @@ void AppWindow::RunMessageLoop() {
             ImGui::TextDisabled("| Вшитые теги: %s - %s [%s]", item.embeddedArtist.c_str(), item.embeddedTitle.c_str(), item.embeddedAlbum.c_str());
 
             ImGui::Columns(2, "TagCols", false);
-            ImGui::SetColumnWidth(0, 460);
+            ImGui::SetColumnWidth(0, 520);
 
-            // Prefilled Editable Inputs
+            // Priority 1 Input Fields
             ImGui::InputText("Исполнитель", item.artistBuf, sizeof(item.artistBuf));
             ImGui::InputText("Альбом", item.albumBuf, sizeof(item.albumBuf));
             ImGui::InputText("Название", item.titleBuf, sizeof(item.titleBuf));
-            ImGui::InputText("Номер", item.trackNoBuf, sizeof(item.trackNoBuf));
+
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputText("Номер трека", item.trackNoBuf, sizeof(item.trackNoBuf));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(140);
+            ImGui::InputText("Год релиза", item.yearBuf, sizeof(item.yearBuf));
+
+            // Synced LRC Lyrics Box
+            if (item.hasLyrics || strlen(item.lyricsBuf) > 0) {
+                ImGui::InputTextMultiline("Синхронный текст (LRC)", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 55));
+            } else {
+                ImGui::InputTextMultiline("Синхронный текст (LRC)", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 45));
+            }
 
             ImGui::NextColumn();
 
@@ -949,7 +1044,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::Spacing();
 
             if (ImGui::Button("[V] Принять и Записать Теги & Обложку", ImVec2(280, 30))) {
-                LOG_INFO("[TAGS APPLIED] " + std::string(item.artistBuf) + " - " + std::string(item.titleBuf) + " (" + std::string(item.albumBuf) + ")");
+                LOG_INFO("[TAGS APPLIED] " + std::string(item.artistBuf) + " - " + std::string(item.titleBuf) + " (" + std::string(item.albumBuf) + ") [" + std::string(item.yearBuf) + "]");
                 m_currentTagIndex++;
             }
             ImGui::SameLine();
