@@ -646,7 +646,9 @@ static void NativeMirrorCollections() {
         }
     }
 
-    // 2. FLAC -> mp3/ 320kbps conversion & cover.jpg mirroring
+    // 2. FLAC -> mp3/ 320kbps multi-threaded parallel conversion & cover.jpg mirroring
+    std::vector<std::pair<fs::path, fs::path>> conversionTasks;
+
     if (fs::exists(flacRoot)) {
         for (auto& entry : fs::recursive_directory_iterator(flacRoot)) {
             if (entry.is_directory()) {
@@ -672,20 +674,45 @@ static void NativeMirrorCollections() {
 
                     if (!fs::exists(mp3TargetFile) || fs::file_size(mp3TargetFile) == 0) {
                         fs::create_directories(mp3TargetFile.parent_path());
-                        LOG_INFO("[MP3 CONVERTING] Encoding 320kbps MP3: " + rel.string() + " ...");
-                        if (ConvertFlacToMp3(entry.path().string(), mp3TargetFile.string())) {
-                            convertedMp3s++;
-                            LOG_INFO("[MP3 MIRRORED] Created 320kbps MP3: " + fs::relative(mp3TargetFile, g_BaseDir).string());
-                        } else {
-                            LOG_INFO("[CONVERT ERROR] Failed FFmpeg conversion for: " + rel.string());
-                        }
+                        conversionTasks.push_back({ entry.path(), mp3TargetFile });
                     }
                 }
             }
         }
     }
 
-    LOG_INFO("Step 3 Complete: Native C++ mirroring finished. Created " + std::to_string(createdDirs) + " folders, converted " + std::to_string(convertedMp3s) + " MP3s, copied " + std::to_string(copiedFallbacks) + " MP3 fallbacks.");
+    if (!conversionTasks.empty()) {
+        unsigned int numThreads = std::thread::hardware_concurrency();
+        if (numThreads == 0) numThreads = 6;
+        LOG_INFO("[PARALLEL CONVERSION] Launching " + std::to_string(conversionTasks.size()) + " FLAC->MP3 tasks across " + std::to_string(numThreads) + " CPU threads (Core i5-12400F)...");
+
+        std::atomic<size_t> taskIdx{ 0 };
+        std::atomic<size_t> completedCount{ 0 };
+        std::vector<std::thread> workers;
+
+        for (unsigned int t = 0; t < numThreads; ++t) {
+            workers.emplace_back([&]() {
+                while (true) {
+                    size_t idx = taskIdx.fetch_add(1);
+                    if (idx >= conversionTasks.size()) break;
+
+                    const auto& task = conversionTasks[idx];
+                    if (ConvertFlacToMp3(task.first.string(), task.second.string())) {
+                        size_t currentDone = completedCount.fetch_add(1) + 1;
+                        LOG_INFO("[MP3 MIRRORED " + std::to_string(currentDone) + "/" + std::to_string(conversionTasks.size()) + "] Created 320kbps MP3: " + fs::relative(task.second, g_BaseDir).string());
+                    }
+                }
+            });
+        }
+
+        for (auto& w : workers) {
+            if (w.joinable()) w.join();
+        }
+
+        convertedMp3s = completedCount.load();
+    }
+
+    LOG_INFO("Step 3 Complete: Native C++ parallel mirroring finished. Created " + std::to_string(createdDirs) + " folders, converted " + std::to_string(convertedMp3s) + " MP3s across " + std::to_string(std::thread::hardware_concurrency()) + " threads, copied " + std::to_string(copiedFallbacks) + " MP3 fallbacks.");
 }
 
 // Stage 4: Pure Native C++20 Tracklist Database Checkbox Sync
