@@ -826,7 +826,10 @@ static void NativeSyncTracklistDatabase() {
                     std::string ext = entry.path().extension().string();
                     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                     if (ext == ".flac" || ext == ".mp3" || ext == ".wav" || ext == ".m4a") {
-                        scannedNormKeys.push_back(NormalizeKey(entry.path().filename().string()));
+                        std::string k = NormalizeKey(entry.path().filename().string());
+                        if (!k.empty()) {
+                            scannedNormKeys.push_back(k);
+                        }
                     }
                 }
             }
@@ -834,28 +837,31 @@ static void NativeSyncTracklistDatabase() {
     }
 
     std::ifstream inFile(tracklistPath);
+    if (!inFile.is_open()) return;
+
     std::string line;
     std::vector<std::string> lines;
     size_t checkedCount = 0;
 
     while (std::getline(inFile, line)) {
-        std::regex track_regex(R"(^\s*-\s*\[\s*\]\s*(.+)$)");
-        std::smatch match;
-        if (std::regex_search(line, match, track_regex)) {
-            std::string content = match[1].str();
+        size_t boxPos = line.find("- [ ]");
+        if (boxPos != std::string::npos) {
+            std::string content = line.substr(boxPos + 5);
             std::string normContent = NormalizeKey(content);
 
-            bool found = false;
-            for (const auto& key : scannedNormKeys) {
-                if (!key.empty() && normContent.find(key) != std::string::npos || key.find(normContent) != std::string::npos) {
-                    found = true;
-                    break;
+            if (!normContent.empty()) {
+                bool found = false;
+                for (const auto& key : scannedNormKeys) {
+                    if (!key.empty() && (normContent.find(key) != std::string::npos || key.find(normContent) != std::string::npos)) {
+                        found = true;
+                        break;
+                    }
                 }
-            }
 
-            if (found) {
-                line = std::regex_replace(line, std::regex(R"(-\s*\[\s*\])"), "- [x]");
-                checkedCount++;
+                if (found) {
+                    line.replace(boxPos, 5, "- [x]");
+                    checkedCount++;
+                }
             }
         }
         lines.push_back(line);
@@ -863,10 +869,12 @@ static void NativeSyncTracklistDatabase() {
     inFile.close();
 
     std::ofstream outFile(tracklistPath);
-    for (const auto& l : lines) {
-        outFile << l << "\n";
+    if (outFile.is_open()) {
+        for (const auto& l : lines) {
+            outFile << l << "\n";
+        }
+        outFile.close();
     }
-    outFile.close();
 
     LOG_INFO("Step 4 Complete: Native C++ tracklist sync finished. Checked off " + std::to_string(checkedCount) + " tracks in tracklist.md.");
 }
