@@ -641,8 +641,9 @@ void AppWindow::RunMessageLoop() {
         ImGui::TextDisabled("MUSIC SORTER DESKTOP (C++20 NATIVE STUDIO)");
         ImGui::Separator();
 
-        // Dynamic Stage Switcher Buttons (Active Tab Styling)
-        if (m_activeStageTab == 0) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
+        // Dynamic Stage Switcher Buttons (Safe Push/Pop Color Logic)
+        bool pushed0 = (m_activeStageTab == 0);
+        if (pushed0) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
         if (ImGui::Button("1. [Поиск] Дубликаты (AcoustID)", ImVec2(240, 32))) {
             m_activeStageTab = 0;
             if (!m_isScanning) {
@@ -659,11 +660,12 @@ void AppWindow::RunMessageLoop() {
                 }).detach();
             }
         }
-        if (m_activeStageTab == 0) ImGui::PopStyleColor();
+        if (pushed0) ImGui::PopStyleColor();
 
         ImGui::SameLine();
 
-        if (m_activeStageTab == 1) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
+        bool pushed1 = (m_activeStageTab == 1);
+        if (pushed1) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
         if (ImGui::Button("2. [Теги & Обложки] Инспектор", ImVec2(230, 32))) {
             m_activeStageTab = 1;
             if (!m_isTagScanning && m_tagItems.empty()) {
@@ -912,29 +914,31 @@ void AppWindow::RunMessageLoop() {
                 }).detach();
             }
         }
-        if (m_activeStageTab == 1) ImGui::PopStyleColor();
+        if (pushed1) ImGui::PopStyleColor();
 
         ImGui::SameLine();
 
-        if (m_activeStageTab == 2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
+        bool pushed2 = (m_activeStageTab == 2);
+        if (pushed2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
         if (ImGui::Button("3. [Сортировка] Папки FLAC/MP3", ImVec2(240, 32))) {
             m_activeStageTab = 2;
             std::thread([]() {
                 NativeMirrorCollections();
             }).detach();
         }
-        if (m_activeStageTab == 2) ImGui::PopStyleColor();
+        if (pushed2) ImGui::PopStyleColor();
 
         ImGui::SameLine();
 
-        if (m_activeStageTab == 3) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
+        bool pushed3 = (m_activeStageTab == 3);
+        if (pushed3) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
         if (ImGui::Button("4. [Реестр] Обновление Tracklist", ImVec2(240, 32))) {
             m_activeStageTab = 3;
             std::thread([]() {
                 NativeSyncTracklistDatabase();
             }).detach();
         }
-        if (m_activeStageTab == 3) ImGui::PopStyleColor();
+        if (pushed3) ImGui::PopStyleColor();
 
         ImGui::Separator();
 
