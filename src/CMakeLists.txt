@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(MusicSorterCore CXX)
+project(MusicSorterCore C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,7 +12,9 @@ include_directories(
 
 file(GLOB_RECURSE SOURCES
     "src/*.cpp"
+    "src/*.c"
     "third_party/imgui/*.cpp"
+    "third_party/sqlite3.c"
 )
 
 add_executable(MusicSorterApp WIN32 ${SOURCES})

@@ -3,6 +3,7 @@
 
 #include "../include/AppWindow.hpp"
 #include "../include/AudioEngine.hpp"
+#include "../include/DatabaseManager.hpp"
 #include "../include/Logger.hpp"
 
 #include "../third_party/imgui/imgui.h"
@@ -1514,10 +1515,13 @@ void AppWindow::RunMessageLoop() {
 
         bool pushed3 = (m_activeStageTab == 3);
         if (pushed3) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
-        if (ImGui::Button("4. Tracklist.md", ImVec2(160, 32))) {
+        if (ImGui::Button("4. База данных & Tracklist", ImVec2(220, 32))) {
             m_activeStageTab = 3;
             std::thread([]() {
-                NativeSyncTracklistDatabase();
+                std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
+                DatabaseManager::GetInstance().InitDatabase(dbPath);
+                DatabaseManager::GetInstance().ImportFromTracklistMarkdown((fs::path(g_BaseDir) / "tracklist.md").string());
+                DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir);
             }).detach();
         }
         if (pushed3) ImGui::PopStyleColor();
@@ -1889,8 +1893,114 @@ void AppWindow::RunMessageLoop() {
             ImGui::TextUnformatted("Этап 3: Нативный C++20 поиск и зеркалирование папок FLAC и MP3 активен.");
             ImGui::EndChild();
         } else if (m_activeStageTab == 3) {
-            ImGui::BeginChild("Stage4Child", ImVec2(0, 150), true);
-            ImGui::TextUnformatted("Этап 4: Нативное C++20 сканирование и обновление галочек [x] в tracklist.md активно.");
+            ImGui::BeginChild("Stage4DBChild", ImVec2(0, 270), true);
+            
+            // Auto-initialize DB on first view
+            std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
+            DatabaseManager::GetInstance().InitDatabase(dbPath);
+
+            int totalCount = DatabaseManager::GetInstance().GetTotalTracksCount();
+            int dlCount = DatabaseManager::GetInstance().GetDownloadedCount();
+            int missCount = DatabaseManager::GetInstance().GetMissingCount();
+
+            ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "SQLite База данных коллекции (music_database.db)");
+            ImGui::SameLine();
+            ImGui::TextDisabled("|  Всего треков: %d  |  Скачано [x]: %d  |  Ожидают [ ]: %d", totalCount, dlCount, missCount);
+
+            ImGui::Separator();
+
+            // Controls Row: Search & Filters & Actions
+            static char searchBuf[128] = "";
+            static int filterStatus = 0; // 0 = Все, 1 = [x] Скачано, 2 = [ ] Ожидают
+            static int filterFormat = 0; // 0 = Все, 1 = FLAC, 2 = MP3
+
+            ImGui::PushItemWidth(200);
+            ImGui::InputText("Поиск##DBSearch", searchBuf, sizeof(searchBuf));
+            ImGui::PopItemWidth();
+
+            ImGui::SameLine();
+            if (ImGui::Button(filterStatus == 0 ? "[Все статусы]" : (filterStatus == 1 ? "[x] Скачано" : "[ ] Ожидают"))) {
+                filterStatus = (filterStatus + 1) % 3;
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button(filterFormat == 0 ? "[Все форматы]" : (filterFormat == 1 ? "FLAC" : "MP3"))) {
+                filterFormat = (filterFormat + 1) % 3;
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("🔄 Скан диска")) {
+                std::thread([]() {
+                    std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
+                    DatabaseManager::GetInstance().InitDatabase(dbPath);
+                    DatabaseManager::GetInstance().ImportFromTracklistMarkdown((fs::path(g_BaseDir) / "tracklist.md").string());
+                    DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir);
+                }).detach();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("📄 Экспорт в tracklist.md")) {
+                std::thread([]() {
+                    std::string tracklistPath = (fs::path(g_BaseDir) / "tracklist.md").string();
+                    DatabaseManager::GetInstance().ExportToCleanTracklistMarkdown(tracklistPath);
+                }).detach();
+            }
+
+            ImGui::Separator();
+
+            // Database ImGui Table
+            std::vector<TrackRecord> records = DatabaseManager::GetInstance().QueryTracks(filterStatus, filterFormat, searchBuf);
+
+            if (ImGui::BeginTable("DBTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable, ImVec2(0, 160))) {
+                ImGui::TableSetupColumn("Статус", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+                ImGui::TableSetupColumn("Исполнитель", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+                ImGui::TableSetupColumn("Альбом", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+                ImGui::TableSetupColumn("Название трека", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Формат", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Путь на диске", ImGuiTableColumnFlags_WidthFixed, 220.0f);
+                ImGui::TableHeadersRow();
+
+                for (const auto& rec : records) {
+                    ImGui::TableNextRow();
+                    
+                    // Status
+                    ImGui::TableSetColumnIndex(0);
+                    if (rec.status == 1) {
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "[x]");
+                    } else {
+                        ImGui::TextDisabled("[ ]");
+                    }
+
+                    // Artist
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(rec.artist.c_str());
+
+                    // Album
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::TextUnformatted(rec.album.c_str());
+
+                    // Title
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::TextUnformatted(rec.title.c_str());
+
+                    // Format
+                    ImGui::TableSetColumnIndex(4);
+                    if (rec.format == "FLAC") {
+                        ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "FLAC");
+                    } else if (rec.format == "MP3") {
+                        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "MP3 320k");
+                    } else {
+                        ImGui::TextDisabled("—");
+                    }
+
+                    // Path
+                    ImGui::TableSetColumnIndex(5);
+                    ImGui::TextDisabled("%s", rec.relPath.c_str());
+                }
+
+                ImGui::EndTable();
+            }
+
             ImGui::EndChild();
         }
 
