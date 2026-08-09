@@ -710,8 +710,8 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 
     RegisterClassExW(&wcex);
 
-    // Initial Window Size adjusted to 1220x950 to perfectly fit all 4 columns and end right after CoverArtArchive!
-    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Studio", WS_OVERLAPPEDWINDOW, 40, 20, 1220, 950, NULL, NULL, hInstance, NULL);
+    // Initial Window Size adjusted to 940x950 to perfectly fit 3-column layout and end right after CoverArtArchive!
+    m_hWnd = CreateWindowW(wcex.lpszClassName, L"MusicSorter Studio", WS_OVERLAPPEDWINDOW, 40, 20, 940, 950, NULL, NULL, hInstance, NULL);
 
     if (!CreateDeviceD3D(m_hWnd)) {
         CleanupDeviceD3D();
@@ -1369,31 +1369,14 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
                 ImGui::Separator();
 
-                // Main 4-Column Layout: Proposed Tags (Col 0) | Original Tags (Col 1) | Local Cover (Col 2) | Online Cover (Col 3)
-                ImGui::Columns(4, "MainTagInspector4Columns", false);
-                ImGui::SetColumnWidth(0, 320.0f);
-                ImGui::SetColumnWidth(1, 320.0f);
+                // Main 3-Column Layout: Column 0 = Stacked Original + Proposed Tags | Column 1 = Local Cover | Column 2 = Online Cover
+                ImGui::Columns(3, "MainTagInspector3Columns", false);
+                ImGui::SetColumnWidth(0, 340.0f);
+                ImGui::SetColumnWidth(1, 280.0f);
                 ImGui::SetColumnWidth(2, 280.0f);
-                ImGui::SetColumnWidth(3, 280.0f);
 
-                // ==================== COLUMN 0 (PROPOSED NEW TAGS - FAR LEFT) ====================
-                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
-                ImGui::PushItemWidth(190);
-                ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
-                ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
-                ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
-                ImGui::PopItemWidth();
-
-                ImGui::PushItemWidth(65);
-                ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
-                ImGui::SameLine();
-                ImGui::PushItemWidth(95);
-                ImGui::InputText("Год/Дата##New", item.yearBuf, sizeof(item.yearBuf));
-                ImGui::PopItemWidth();
-                ImGui::PopItemWidth();
-
-                // ==================== COLUMN 1 (ORIGINAL TAGS) ====================
-                ImGui::NextColumn();
+                // ==================== COLUMN 0 (STACKED TAGS: ORIGINAL ON TOP, PROPOSED UNDERNEATH) ====================
+                // 1. TOP BLOCK: ORIGINAL EMBEDDED TAGS
                 ImGui::TextDisabled("Исходные теги в файле");
                 ImGui::PushItemWidth(190);
 
@@ -1417,7 +1400,27 @@ void AppWindow::RunMessageLoop() {
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
 
-                // ==================== COLUMN 2 (LOCAL COVER ART) ====================
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                // 2. BOTTOM BLOCK: PROPOSED FETCHED TAGS (DIRECTLY UNDER ORIGINAL TAGS!)
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
+                ImGui::PushItemWidth(190);
+                ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
+                ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
+                ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
+                ImGui::PopItemWidth();
+
+                ImGui::PushItemWidth(65);
+                ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
+                ImGui::SameLine();
+                ImGui::PushItemWidth(95);
+                ImGui::InputText("Год/Дата##New", item.yearBuf, sizeof(item.yearBuf));
+                ImGui::PopItemWidth();
+                ImGui::PopItemWidth();
+
+                // ==================== COLUMN 1 (LOCAL COVER ART) ====================
                 ImGui::NextColumn();
                 ImGui::TextDisabled("Локальная обложка:");
                 if (item.localTexture) {
@@ -1435,7 +1438,7 @@ void AppWindow::RunMessageLoop() {
                     ImGui::TextDisabled("[Обложка отсутствует]");
                 }
 
-                // ==================== COLUMN 3 (ONLINE COVER ART - ENDS RIGHT AT EDGE!) ====================
+                // ==================== COLUMN 2 (ONLINE COVER ART - ENDS RIGHT AT EDGE!) ====================
                 ImGui::NextColumn();
                 ImGui::TextDisabled("CoverArtArchive:");
                 if (item.onlineTexture) {
