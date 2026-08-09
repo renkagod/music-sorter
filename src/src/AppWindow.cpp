@@ -424,6 +424,25 @@ static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::strin
     return true;
 }
 
+static bool ConvertFlacToMp3(const std::string& inputFlac, const std::string& outputMp3) {
+    std::string cmd = "ffmpeg -v quiet -y -i \"" + inputFlac + "\" -ab 320k \"" + outputMp3 + "\"";
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    ZeroMemory(&pi, sizeof(pi));
+
+    if (CreateProcessA(NULL, (char*)cmd.c_str(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return fs::exists(outputMp3) && fs::file_size(outputMp3) > 0;
+    }
+    return false;
+}
+
 // Robust HTTP POST for AcoustID Fingerprint Lookup (Fixes HTTP 414 Request-URI Too Long!)
 static std::string AcoustIdHttpPost(const std::string& postData) {
     std::vector<unsigned char> result;
@@ -1551,46 +1570,94 @@ void AppWindow::RunMessageLoop() {
                         std::string ext = srcFile.extension().string();
                         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-                        fs::path targetFolder = (ext == ".flac") ? (fs::path(g_BaseDir) / "flac" / newArtist / newAlbum) : (fs::path(g_BaseDir) / "mp3" / newArtist / newAlbum);
-                        fs::create_directories(targetFolder);
+                        fs::path flacDir = fs::path(g_BaseDir) / "flac" / newArtist / newAlbum;
+                        fs::path mp3Dir  = fs::path(g_BaseDir) / "mp3" / newArtist / newAlbum;
+                        fs::create_directories(flacDir);
+                        fs::create_directories(mp3Dir);
 
-                        std::string newFileName = newTrackNo + ". " + newTitle + ext;
-                        fs::path dstFile = targetFolder / newFileName;
+                        std::string baseTrackName = newTrackNo + ". " + newTitle;
 
-                        // EMBED METADATA TAGS & COVER ART DIRECTLY INTO FLAC / MP3 FILE HEADER ASYNCHRONOUSLY!
-                        bool embeddedOk = false;
                         if (ext == ".flac") {
-                            embeddedOk = WriteFlacTagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
-                        } else if (ext == ".mp3") {
-                            embeddedOk = WriteMp3TagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
-                        }
+                            fs::path flacFile = flacDir / (baseTrackName + ".flac");
+                            fs::path mp3File  = mp3Dir / (baseTrackName + ".mp3");
 
-                        if (embeddedOk) {
-                            LOG_INFO("[TAGS EMBEDDED] Embedded full VorbisComment/ID3v2 tags (Date: " + newYear + ") & cover art into file header!");
-                        } else {
-                            LOG_INFO("[TAG EMBED WARN] Direct tag header embedding returned false for: " + origFilename);
-                        }
+                            // 1. Embed tags & picture into FLAC header
+                            bool embeddedOk = WriteFlacTagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
+                            if (embeddedOk) {
+                                LOG_INFO("[TAGS EMBEDDED] VorbisComment tags & cover art written to: " + origFilename);
+                            }
 
-                        // Move audio file to sorted target folder
-                        try {
-                            if (fs::exists(dstFile)) fs::remove(dstFile);
-                            fs::rename(srcFile, dstFile);
-                            LOG_INFO("[TAGS APPLIED & FILE MOVED] Written tags & moved to: " + fs::relative(dstFile, g_BaseDir).string());
+                            // Move FLAC to flac/Artist/Album/
+                            try {
+                                if (fs::exists(flacFile)) fs::remove(flacFile);
+                                fs::rename(srcFile, flacFile);
+                                LOG_INFO("[FLAC MOVED] " + fs::relative(flacFile, g_BaseDir).string());
+                            } catch (const std::exception& ex) {
+                                LOG_INFO("[MOVE ERROR] Failed moving FLAC: " + std::string(ex.what()));
+                                return;
+                            }
 
-                            // Save chosen cover art to folder once per album
+                            // 2. Convert FLAC -> MP3 320kbps in mp3/Artist/Album/
+                            LOG_INFO("[CONVERTING MP3] Encoding 320kbps MP3 for: " + baseTrackName + ".mp3 ...");
+                            if (ConvertFlacToMp3(flacFile.string(), mp3File.string())) {
+                                WriteMp3TagsAndPicture(mp3File.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
+                                LOG_INFO("[MP3 MIRRORED] Created 320kbps MP3: " + fs::relative(mp3File, g_BaseDir).string());
+                            } else {
+                                LOG_INFO("[CONVERT WARN] FFmpeg conversion failed for: " + baseTrackName);
+                            }
+
+                            // Save cover.jpg in both flac/ and mp3/
                             if (!chosenCover.empty()) {
-                                fs::path coverDst = targetFolder / "cover.jpg";
-                                if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
-                                    std::ofstream cOut(coverDst, std::ios::binary);
-                                    if (cOut.is_open()) {
-                                        cOut.write((const char*)chosenCover.data(), chosenCover.size());
-                                        cOut.close();
-                                        LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                                for (const auto& dir : { flacDir, mp3Dir }) {
+                                    fs::path coverDst = dir / "cover.jpg";
+                                    if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
+                                        std::ofstream cOut(coverDst, std::ios::binary);
+                                        if (cOut.is_open()) {
+                                            cOut.write((const char*)chosenCover.data(), chosenCover.size());
+                                            cOut.close();
+                                            LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                                        }
                                     }
                                 }
                             }
-                        } catch (const std::exception& ex) {
-                            LOG_INFO("[WRITE ERROR] Failed to move/write file: " + std::string(ex.what()));
+                        } else if (ext == ".mp3") {
+                            fs::path mp3File  = mp3Dir / (baseTrackName + ".mp3");
+                            fs::path flacFallback = flacDir / (baseTrackName + ".mp3"); // Fallback rule: MP3 in flac/ folder!
+
+                            // 1. Embed ID3v2.4 tags & picture into MP3 header
+                            bool embeddedOk = WriteMp3TagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
+                            if (embeddedOk) {
+                                LOG_INFO("[TAGS EMBEDDED] ID3v2.4 tags & cover art written to: " + origFilename);
+                            }
+
+                            // Move MP3 to mp3/Artist/Album/
+                            try {
+                                if (fs::exists(mp3File)) fs::remove(mp3File);
+                                fs::rename(srcFile, mp3File);
+                                LOG_INFO("[MP3 MOVED] " + fs::relative(mp3File, g_BaseDir).string());
+
+                                // FLAC Fallback Rule: Copy MP3 into flac/ folder!
+                                fs::copy_file(mp3File, flacFallback, fs::copy_options::overwrite_existing);
+                                LOG_INFO("[FLAC FALLBACK] Copied MP3 fallback into: " + fs::relative(flacFallback, g_BaseDir).string());
+                            } catch (const std::exception& ex) {
+                                LOG_INFO("[MOVE ERROR] Failed moving MP3: " + std::string(ex.what()));
+                                return;
+                            }
+
+                            // Save cover.jpg in both mp3/ and flac/
+                            if (!chosenCover.empty()) {
+                                for (const auto& dir : { mp3Dir, flacDir }) {
+                                    fs::path coverDst = dir / "cover.jpg";
+                                    if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
+                                        std::ofstream cOut(coverDst, std::ios::binary);
+                                        if (cOut.is_open()) {
+                                            cOut.write((const char*)chosenCover.data(), chosenCover.size());
+                                            cOut.close();
+                                            LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }).detach();
 
