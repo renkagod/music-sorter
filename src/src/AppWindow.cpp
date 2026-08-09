@@ -1275,17 +1275,15 @@ void AppWindow::RunMessageLoop() {
             ImGui::EndChild();
         }
 
-        // Clean Syntax-Highlighted & Click-to-Copy Logs Panel (Tall 320px Height + Sleek Copy Button)
+        // Clean Syntax-Highlighted & Click-to-Copy Logs Panel with Left-Aligned 'Скопировать' Button
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("Logs:");
         ImGui::SameLine();
 
         auto logs = Logger::Instance().GetLogs();
 
-        // Sleek Right-Aligned Copy All Logs Button
-        float availW = ImGui::GetContentRegionAvail().x;
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + availW - 200.0f);
-        if (ImGui::Button("[ 📋 Скопировать логи ]", ImVec2(190, 24))) {
+        // Clean Compact 'Скопировать' Button Placed Immediately on the Left
+        if (ImGui::Button("Скопировать", ImVec2(110, 24))) {
             std::string full_logs;
             for (const auto& log : logs) {
                 full_logs += log + "\n";
@@ -1311,7 +1309,7 @@ void AppWindow::RunMessageLoop() {
                 textColor = ImVec4(1.0f, 0.4f, 0.8f, 1.0f);
             } else if (logLine.find("[MUSICBRAINZ FETCH") != std::string::npos || logLine.find("[MUSICBRAINZ TIER") != std::string::npos || logLine.find("[ACOUSTID FINGERPRINT]") != std::string::npos) {
                 textColor = ImVec4(0.9f, 0.8f, 0.2f, 1.0f);
-            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos || logLine.find("[HTTP 429") != std::string::npos || logLine.find("[HTTP ERROR") != std::string::npos || logLine.find("[COVER ART MISSING]") != std::string::npos) {
+            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos || logLine.find("[HTTP 429") != std::string::npos || logLine.find("[HTTP 503") != std::string::npos || logLine.find("[HTTP ERROR") != std::string::npos || logLine.find("[COVER ART MISSING]") != std::string::npos) {
                 textColor = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
             } else if (logLine.find("[LRC LYRICS FETCHED]") != std::string::npos) {
                 textColor = ImVec4(0.3f, 0.8f, 1.0f, 1.0f);
