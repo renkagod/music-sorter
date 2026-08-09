@@ -109,7 +109,7 @@ static std::string UrlEncode(const std::string& str) {
     return escaped.str();
 }
 
-// Mathematical Laplacian High-Frequency Sharpness Analysis (Detects fake upscaled / blurry images!)
+// Mathematical Laplacian High-Frequency Sharpness Analysis
 static double CalculatePerceptualSharpness(const unsigned char* data, size_t size) {
     if (!data || size == 0) return 0.0;
     int width = 0, height = 0, channels = 0;
@@ -141,6 +141,264 @@ static double CalculatePerceptualSharpness(const unsigned char* data, size_t siz
     double mean = sum / count;
     double variance = (sumSq / count) - (mean * mean);
     return variance;
+}
+
+// Helper: Endian Conversions & Vector Writing
+static void WriteUint32LE(std::vector<unsigned char>& buf, uint32_t val) {
+    buf.push_back((unsigned char)(val & 0xFF));
+    buf.push_back((unsigned char)((val >> 8) & 0xFF));
+    buf.push_back((unsigned char)((val >> 16) & 0xFF));
+    buf.push_back((unsigned char)((val >> 24) & 0xFF));
+}
+
+static void WriteUint32BE(std::vector<unsigned char>& buf, uint32_t val) {
+    buf.push_back((unsigned char)((val >> 24) & 0xFF));
+    buf.push_back((unsigned char)((val >> 16) & 0xFF));
+    buf.push_back((unsigned char)((val >> 8) & 0xFF));
+    buf.push_back((unsigned char)(val & 0xFF));
+}
+
+// Native FLAC Vorbis Comment & Picture Block Metadata Inserter
+static bool WriteFlacTagsAndPicture(const std::string& filePath, const std::string& artist, const std::string& album, const std::string& title, const std::string& trackNo, const std::string& dateStr, const std::string& lyrics, const std::vector<unsigned char>& coverBytes) {
+    std::ifstream fIn(filePath, std::ios::binary);
+    if (!fIn.is_open()) return false;
+
+    std::vector<unsigned char> flacData((std::istreambuf_iterator<char>(fIn)), std::istreambuf_iterator<char>());
+    fIn.close();
+
+    if (flacData.size() < 4 || flacData[0] != 'f' || flacData[1] != 'L' || flacData[2] != 'a' || flacData[3] != 'C') {
+        return false;
+    }
+
+    // Parse existing FLAC blocks to find audio data offset and preserve STREAMINFO/CUESHEET/SEEKTABLE
+    size_t offset = 4;
+    bool isLast = false;
+    std::vector<unsigned char> streamInfoBlock;
+    std::vector<unsigned char> seekTableBlock;
+
+    while (offset < flacData.size() && !isLast) {
+        unsigned char bHeader = flacData[offset];
+        isLast = (bHeader & 0x80) != 0;
+        unsigned char blockType = bHeader & 0x7F;
+
+        uint32_t blockLen = ((uint32_t)flacData[offset + 1] << 16) | ((uint32_t)flacData[offset + 2] << 8) | (uint32_t)flacData[offset + 3];
+        size_t blockStart = offset;
+        offset += 4 + blockLen;
+
+        if (blockType == 0) { // STREAMINFO
+            streamInfoBlock.assign(flacData.begin() + blockStart + 4, flacData.begin() + offset);
+        } else if (blockType == 3) { // SEEKTABLE
+            seekTableBlock.assign(flacData.begin() + blockStart + 4, flacData.begin() + offset);
+        }
+    }
+
+    size_t audioDataOffset = offset;
+
+    // Build VORBIS_COMMENT Block (Type 4)
+    std::vector<unsigned char> vcPayload;
+    std::string vendor = "MusicSorter Studio 2.0";
+    WriteUint32LE(vcPayload, (uint32_t)vendor.length());
+    vcPayload.insert(vcPayload.end(), vendor.begin(), vendor.end());
+
+    std::vector<std::string> comments;
+    if (!artist.empty()) comments.push_back("ARTIST=" + artist);
+    if (!album.empty()) comments.push_back("ALBUM=" + album);
+    if (!title.empty()) comments.push_back("TITLE=" + title);
+    if (!trackNo.empty()) comments.push_back("TRACKNUMBER=" + trackNo);
+    if (!dateStr.empty()) {
+        comments.push_back("DATE=" + dateStr); // Full release date YYYY-MM-DD!
+        std::string yr = ExtractYearFromString(dateStr);
+        if (!yr.empty()) comments.push_back("YEAR=" + yr); // Legacy year
+    }
+    if (!lyrics.empty()) comments.push_back("LYRICS=" + lyrics);
+
+    WriteUint32LE(vcPayload, (uint32_t)comments.size());
+    for (const auto& c : comments) {
+        WriteUint32LE(vcPayload, (uint32_t)c.length());
+        vcPayload.insert(vcPayload.end(), c.begin(), c.end());
+    }
+
+    // Build PICTURE Block (Type 6) if cover image exists
+    std::vector<unsigned char> picPayload;
+    if (!coverBytes.empty()) {
+        WriteUint32BE(picPayload, 3); // 3 = Cover Front
+        std::string mime = "image/jpeg";
+        WriteUint32BE(picPayload, (uint32_t)mime.length());
+        picPayload.insert(picPayload.end(), mime.begin(), mime.end());
+        WriteUint32BE(picPayload, 0); // Empty description
+        WriteUint32BE(picPayload, 500); // Width
+        WriteUint32BE(picPayload, 500); // Height
+        WriteUint32BE(picPayload, 24);  // Depth
+        WriteUint32BE(picPayload, 0);   // Colors
+        WriteUint32BE(picPayload, (uint32_t)coverBytes.size());
+        picPayload.insert(picPayload.end(), coverBytes.begin(), coverBytes.end());
+    }
+
+    // Assemble new FLAC File
+    std::vector<unsigned char> outFlac;
+    outFlac.push_back('f'); outFlac.push_back('L'); outFlac.push_back('a'); outFlac.push_back('C');
+
+    // 1. STREAMINFO (isLast = false)
+    outFlac.push_back(0x00);
+    uint32_t sLen = (uint32_t)streamInfoBlock.size();
+    outFlac.push_back((unsigned char)((sLen >> 16) & 0xFF));
+    outFlac.push_back((unsigned char)((sLen >> 8) & 0xFF));
+    outFlac.push_back((unsigned char)(sLen & 0xFF));
+    outFlac.insert(outFlac.end(), streamInfoBlock.begin(), streamInfoBlock.end());
+
+    // 2. SEEKTABLE if present (isLast = false)
+    if (!seekTableBlock.empty()) {
+        outFlac.push_back(0x03);
+        uint32_t kLen = (uint32_t)seekTableBlock.size();
+        outFlac.push_back((unsigned char)((kLen >> 16) & 0xFF));
+        outFlac.push_back((unsigned char)((kLen >> 8) & 0xFF));
+        outFlac.push_back((unsigned char)(kLen & 0xFF));
+        outFlac.insert(outFlac.end(), seekTableBlock.begin(), seekTableBlock.end());
+    }
+
+    // 3. VORBIS_COMMENT (isLast = picPayload.empty())
+    bool vcIsLast = picPayload.empty();
+    outFlac.push_back(vcIsLast ? 0x84 : 0x04);
+    uint32_t vcLen = (uint32_t)vcPayload.size();
+    outFlac.push_back((unsigned char)((vcLen >> 16) & 0xFF));
+    outFlac.push_back((unsigned char)((vcLen >> 8) & 0xFF));
+    outFlac.push_back((unsigned char)(vcLen & 0xFF));
+    outFlac.insert(outFlac.end(), vcPayload.begin(), vcPayload.end());
+
+    // 4. PICTURE if present (isLast = true)
+    if (!picPayload.empty()) {
+        outFlac.push_back(0x86); // isLast = 1, type = 6
+        uint32_t pLen = (uint32_t)picPayload.size();
+        outFlac.push_back((unsigned char)((pLen >> 16) & 0xFF));
+        outFlac.push_back((unsigned char)((pLen >> 8) & 0xFF));
+        outFlac.push_back((unsigned char)(pLen & 0xFF));
+        outFlac.insert(outFlac.end(), picPayload.begin(), picPayload.end());
+    }
+
+    // 5. Append raw audio stream
+    outFlac.insert(outFlac.end(), flacData.begin() + audioDataOffset, flacData.end());
+
+    std::ofstream fOut(filePath, std::ios::binary);
+    if (!fOut.is_open()) return false;
+    fOut.write((const char*)outFlac.data(), outFlac.size());
+    fOut.close();
+
+    return true;
+}
+
+// Native MP3 ID3v2.4 Tag & Picture Inserter
+static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::string& artist, const std::string& album, const std::string& title, const std::string& trackNo, const std::string& dateStr, const std::string& lyrics, const std::vector<unsigned char>& coverBytes) {
+    std::ifstream fIn(filePath, std::ios::binary);
+    if (!fIn.is_open()) return false;
+
+    std::vector<unsigned char> mp3Data((std::istreambuf_iterator<char>(fIn)), std::istreambuf_iterator<char>());
+    fIn.close();
+
+    // Skip old ID3v2 header if present
+    size_t audioOffset = 0;
+    if (mp3Data.size() >= 10 && mp3Data[0] == 'I' && mp3Data[1] == 'D' && mp3Data[2] == '3') {
+        uint32_t tagSize = ((uint32_t)(mp3Data[6] & 0x7F) << 21) | ((uint32_t)(mp3Data[7] & 0x7F) << 14) | ((uint32_t)(mp3Data[8] & 0x7F) << 7) | (uint32_t)(mp3Data[9] & 0x7F);
+        audioOffset = 10 + tagSize;
+    }
+
+    // Construct ID3v2.4 frames
+    std::vector<unsigned char> frames;
+
+    auto AddTextFrame = [&](const char* frameID, const std::string& val) {
+        if (val.empty()) return;
+        frames.push_back(frameID[0]); frames.push_back(frameID[1]); frames.push_back(frameID[2]); frames.push_back(frameID[3]);
+        uint32_t len = (uint32_t)val.length() + 1; // +1 for encoding byte 0x03 (UTF-8)
+        frames.push_back((unsigned char)((len >> 21) & 0x7F));
+        frames.push_back((unsigned char)((len >> 14) & 0x7F));
+        frames.push_back((unsigned char)((len >> 7) & 0x7F));
+        frames.push_back((unsigned char)(len & 0x7F));
+        frames.push_back(0x00); frames.push_back(0x00); // Flags
+        frames.push_back(0x03); // UTF-8 encoding
+        frames.insert(frames.end(), val.begin(), val.end());
+    };
+
+    AddTextFrame("TPE1", artist);
+    AddTextFrame("TALB", album);
+    AddTextFrame("TIT2", title);
+    AddTextFrame("TRCK", trackNo);
+    AddTextFrame("TDRC", dateStr); // Full release date YYYY-MM-DD!
+    std::string yr = ExtractYearFromString(dateStr);
+    if (!yr.empty()) AddTextFrame("TYER", yr); // Legacy year
+
+    // APIC Frame for Cover Art
+    if (!coverBytes.empty()) {
+        std::vector<unsigned char> apicPayload;
+        apicPayload.push_back(0x03); // UTF-8
+        std::string mime = "image/jpeg";
+        apicPayload.insert(apicPayload.end(), mime.begin(), mime.end());
+        apicPayload.push_back(0x00); // Null term mime
+        apicPayload.push_back(0x03); // Picture type 3 = Cover Front
+        apicPayload.push_back(0x00); // Description null term
+        apicPayload.insert(apicPayload.end(), coverBytes.begin(), coverBytes.end());
+
+        frames.push_back('A'); frames.push_back('P'); frames.push_back('I'); frames.push_back('C');
+        uint32_t pLen = (uint32_t)apicPayload.size();
+        frames.push_back((unsigned char)((pLen >> 21) & 0x7F));
+        frames.push_back((unsigned char)((pLen >> 14) & 0x7F));
+        frames.push_back((unsigned char)((pLen >> 7) & 0x7F));
+        frames.push_back((unsigned char)(pLen & 0x7F));
+        frames.push_back(0x00); frames.push_back(0x00);
+        frames.insert(frames.end(), apicPayload.begin(), apicPayload.end());
+    }
+
+    // Assemble ID3v2.4 Tag
+    std::vector<unsigned char> outMp3;
+    outMp3.push_back('I'); outMp3.push_back('D'); outMp3.push_back('3');
+    outMp3.push_back(0x04); outMp3.push_back(0x00); // Version 2.4
+    outMp3.push_back(0x00); // Flags
+
+    uint32_t fSize = (uint32_t)frames.size();
+    outMp3.push_back((unsigned char)((fSize >> 21) & 0x7F));
+    outMp3.push_back((unsigned char)((fSize >> 14) & 0x7F));
+    outMp3.push_back((unsigned char)((fSize >> 7) & 0x7F));
+    outMp3.push_back((unsigned char)(fSize & 0x7F));
+
+    outMp3.insert(outMp3.end(), frames.begin(), frames.end());
+
+    // Append audio stream
+    outMp3.insert(outMp3.end(), mp3Data.begin() + audioOffset, mp3Data.end());
+
+    std::ofstream fOut(filePath, std::ios::binary);
+    if (!fOut.is_open()) return false;
+    fOut.write((const char*)outMp3.data(), outMp3.size());
+    fOut.close();
+
+    return true;
+}
+
+// Robust HTTP POST for AcoustID Fingerprint Lookup (Fixes HTTP 414 Request-URI Too Long!)
+static std::string AcoustIdHttpPost(const std::string& postData) {
+    std::vector<unsigned char> result;
+    HINTERNET hNet = InternetOpenW(L"MusicSorterApp/2.0 (contact@musicsorter.org)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (!hNet) return "";
+
+    HINTERNET hConnect = InternetConnectW(hNet, L"api.acoustid.org", INTERNET_DEFAULT_HTTPS_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
+    if (hConnect) {
+        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
+        HINTERNET hRequest = HttpOpenRequestW(hConnect, L"POST", L"/v2/lookup", NULL, NULL, NULL, flags, 0);
+        if (hRequest) {
+            std::wstring headers = L"Content-Type: application/x-www-form-urlencoded\r\n";
+            BOOL sent = HttpSendRequestW(hRequest, headers.c_str(), (DWORD)headers.length(), (LPVOID)postData.c_str(), (DWORD)postData.length());
+            if (sent) {
+                unsigned char buffer[16384];
+                DWORD bytesRead = 0;
+                while (InternetReadFile(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
+                    result.insert(result.end(), buffer, buffer + bytesRead);
+                }
+            } else {
+                LOG_INFO("[ACOUSTID POST ERROR] HttpSendRequest failed with error: " + std::to_string(GetLastError()));
+            }
+            InternetCloseHandle(hRequest);
+        }
+        InternetCloseHandle(hConnect);
+    }
+    InternetCloseHandle(hNet);
+    return std::string((char*)result.data(), result.size());
 }
 
 // Robust HTTP GET with Ultra-Detailed Step-by-Step Logging & Rate Limit Backoff
@@ -196,36 +454,6 @@ std::string HttpGetString(const std::wstring& url) {
     auto bytes = HttpGetBytes(url);
     if (bytes.empty()) return "";
     return std::string((char*)bytes.data(), bytes.size());
-}
-
-// Robust HTTP POST for AcoustID Fingerprint Lookup (Fixes HTTP 414 Request-URI Too Long!)
-static std::string AcoustIdHttpPost(const std::string& postData) {
-    std::vector<unsigned char> result;
-    HINTERNET hNet = InternetOpenW(L"MusicSorterApp/2.0 (contact@musicsorter.org)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-    if (!hNet) return "";
-
-    HINTERNET hConnect = InternetConnectW(hNet, L"api.acoustid.org", INTERNET_DEFAULT_HTTPS_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
-    if (hConnect) {
-        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
-        HINTERNET hRequest = HttpOpenRequestW(hConnect, L"POST", L"/v2/lookup", NULL, NULL, NULL, flags, 0);
-        if (hRequest) {
-            std::wstring headers = L"Content-Type: application/x-www-form-urlencoded\r\n";
-            BOOL sent = HttpSendRequestW(hRequest, headers.c_str(), (DWORD)headers.length(), (LPVOID)postData.c_str(), (DWORD)postData.length());
-            if (sent) {
-                unsigned char buffer[16384];
-                DWORD bytesRead = 0;
-                while (InternetReadFile(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-                    result.insert(result.end(), buffer, buffer + bytesRead);
-                }
-            } else {
-                LOG_INFO("[ACOUSTID POST ERROR] HttpSendRequest failed with error: " + std::to_string(GetLastError()));
-            }
-            InternetCloseHandle(hRequest);
-        }
-        InternetCloseHandle(hConnect);
-    }
-    InternetCloseHandle(hNet);
-    return std::string((char*)result.data(), result.size());
 }
 
 ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const unsigned char* data, size_t size, int* outWidth, int* outHeight) {
@@ -882,7 +1110,7 @@ void AppWindow::RunMessageLoop() {
                                         size_t dendPos = mbRes.find("\"", datePos);
                                         if (dendPos != std::string::npos) {
                                             firstReleaseDate = mbRes.substr(datePos, dendPos - datePos);
-                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found date: " + firstReleaseDate);
+                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + firstReleaseDate);
                                         }
                                     }
                                 }
@@ -911,7 +1139,7 @@ void AppWindow::RunMessageLoop() {
                                         size_t dendPos = mbAlbumRes.find("\"", datePos);
                                         if (dendPos != std::string::npos) {
                                             firstReleaseDate = mbAlbumRes.substr(datePos, dendPos - datePos);
-                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found date: " + firstReleaseDate);
+                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + firstReleaseDate);
                                         }
                                     }
                                 }
@@ -941,7 +1169,7 @@ void AppWindow::RunMessageLoop() {
                                         size_t dendPos = mbLooseRes.find("\"", datePos);
                                         if (dendPos != std::string::npos) {
                                             firstReleaseDate = mbLooseRes.substr(datePos, dendPos - datePos);
-                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found date: " + firstReleaseDate);
+                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + firstReleaseDate);
                                         }
                                     }
                                 }
@@ -1166,7 +1394,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::InputText("№##Orig", origTrack, sizeof(origTrack), ImGuiInputTextFlags_ReadOnly);
                 ImGui::SameLine();
                 ImGui::PushItemWidth(100);
-                ImGui::InputText("Год##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
+                ImGui::InputText("Год/Дата##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
                 ImGui::EndGroup();
@@ -1233,7 +1461,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
                 ImGui::SameLine();
                 ImGui::PushItemWidth(100);
-                ImGui::InputText("Год##New", item.yearBuf, sizeof(item.yearBuf));
+                ImGui::InputText("Год/Дата##New", item.yearBuf, sizeof(item.yearBuf));
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
                 ImGui::EndGroup();
@@ -1255,6 +1483,7 @@ void AppWindow::RunMessageLoop() {
                     std::string newTitle(item.titleBuf);
                     std::string newTrackNo(item.trackNoBuf);
                     std::string newYear(item.yearBuf);
+                    std::string newLyrics(item.lyricsBuf);
 
                     fs::path srcFile(item.filePath);
                     std::string ext = srcFile.extension().string();
@@ -1266,19 +1495,34 @@ void AppWindow::RunMessageLoop() {
                     std::string newFileName = newTrackNo + ". " + newTitle + ext;
                     fs::path dstFile = targetFolder / newFileName;
 
-                    // Move/copy audio file to sorted target folder
+                    const auto& chosenCover = (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) ? item.onlineCoverBytes : item.localCoverBytes;
+
+                    // EMBED METADATA TAGS & COVER ART DIRECTLY INTO FLAC / MP3 FILE HEADER!
+                    bool embeddedOk = false;
+                    if (ext == ".flac") {
+                        embeddedOk = WriteFlacTagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
+                    } else if (ext == ".mp3") {
+                        embeddedOk = WriteMp3TagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
+                    }
+
+                    if (embeddedOk) {
+                        LOG_INFO("[TAGS EMBEDDED] Embedded full VorbisComment/ID3v2 tags (Date: " + newYear + ") & cover art into file header!");
+                    } else {
+                        LOG_INFO("[TAG EMBED WARN] Direct tag header embedding returned false for: " + srcFile.filename().string());
+                    }
+
+                    // Move audio file to sorted target folder
                     try {
                         if (fs::exists(dstFile)) fs::remove(dstFile);
                         fs::rename(srcFile, dstFile);
                         LOG_INFO("[TAGS APPLIED & FILE MOVED] Written tags & moved to: " + fs::relative(dstFile, g_BaseDir).string());
 
                         // Save chosen cover art to folder
-                        const auto& coverBytes = (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) ? item.onlineCoverBytes : item.localCoverBytes;
-                        if (!coverBytes.empty()) {
+                        if (!chosenCover.empty()) {
                             fs::path coverDst = targetFolder / "cover.jpg";
                             std::ofstream cOut(coverDst, std::ios::binary);
                             if (cOut.is_open()) {
-                                cOut.write((const char*)coverBytes.data(), coverBytes.size());
+                                cOut.write((const char*)chosenCover.data(), chosenCover.size());
                                 cOut.close();
                                 LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
                             }
@@ -1338,7 +1582,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::PushID((int)i);
 
             ImVec4 textColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
-            if (logLine.find("[MUSICBRAINZ MATCHED]") != std::string::npos || logLine.find("[ACOUSTID MATCHED]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER A SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER B SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER C SUCCESS]") != std::string::npos) {
+            if (logLine.find("[MUSICBRAINZ MATCHED]") != std::string::npos || logLine.find("[ACOUSTID MATCHED]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER A SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER B SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER C SUCCESS]") != std::string::npos || logLine.find("[TAGS EMBEDDED]") != std::string::npos) {
                 textColor = ImVec4(0.2f, 1.0f, 0.4f, 1.0f);
             } else if (logLine.find("[COVER ART DOWNLOADED]") != std::string::npos || logLine.find("[COVER SAVED]") != std::string::npos) {
                 textColor = ImVec4(1.0f, 0.4f, 0.8f, 1.0f);
