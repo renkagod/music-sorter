@@ -1369,14 +1369,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
                 ImGui::Separator();
 
-                // Main 3-Column Layout: Column 0 = Stacked Original + Proposed Tags | Column 1 = Local Cover | Column 2 = Online Cover
-                ImGui::Columns(3, "MainTagInspector3Columns", false);
-                ImGui::SetColumnWidth(0, 340.0f);
-                ImGui::SetColumnWidth(1, 280.0f);
-                ImGui::SetColumnWidth(2, 280.0f);
-
-                // ==================== COLUMN 0 (STACKED TAGS: ORIGINAL ON TOP, PROPOSED UNDERNEATH) ====================
-                // 1. TOP BLOCK: ORIGINAL EMBEDDED TAGS
+                // ==================== ROW 1 (TOP LEFT): ORIGINAL TAGS ====================
                 ImGui::TextDisabled("Исходные теги в файле");
                 ImGui::PushItemWidth(190);
 
@@ -1404,7 +1397,13 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                // 2. BOTTOM BLOCK: PROPOSED FETCHED TAGS (DIRECTLY UNDER ORIGINAL TAGS!)
+                // ==================== ROW 2 (BOTTOM): 3 COLUMNS (PROPOSED TAGS | LOCAL COVER | ONLINE COVER) ====================
+                ImGui::Columns(3, "InspectorBottomRow3Columns", false);
+                ImGui::SetColumnWidth(0, 340.0f);
+                ImGui::SetColumnWidth(1, 280.0f);
+                ImGui::SetColumnWidth(2, 280.0f);
+
+                // 1. Bottom-Left: Proposed Fetched Tags (directly under Original Tags!)
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
                 ImGui::PushItemWidth(190);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
@@ -1420,7 +1419,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::PopItemWidth();
                 ImGui::PopItemWidth();
 
-                // ==================== COLUMN 1 (LOCAL COVER ART) ====================
+                // 2. Bottom-Center: Local Cover Art
                 ImGui::NextColumn();
                 ImGui::TextDisabled("Локальная обложка:");
                 if (item.localTexture) {
@@ -1438,7 +1437,7 @@ void AppWindow::RunMessageLoop() {
                     ImGui::TextDisabled("[Обложка отсутствует]");
                 }
 
-                // ==================== COLUMN 2 (ONLINE COVER ART - ENDS RIGHT AT EDGE!) ====================
+                // 3. Bottom-Right: CoverArtArchive Cover Art
                 ImGui::NextColumn();
                 ImGui::TextDisabled("CoverArtArchive:");
                 if (item.onlineTexture) {
