@@ -135,7 +135,7 @@ static double CalculatePerceptualSharpness(const unsigned char* data, size_t siz
 
 std::vector<unsigned char> HttpGetBytes(const std::wstring& url) {
     std::vector<unsigned char> result;
-    HINTERNET hNet = InternetOpenW(L"MusicSorter/2.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    HINTERNET hNet = InternetOpenW(L"MusicSorterApp/2.0 (contact@musicsorter.org)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hNet) return result;
 
     DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
@@ -631,6 +631,7 @@ void AppWindow::RunMessageLoop() {
                         auto& item = m_tagItems[i];
                         item.filePath = files[i];
                         item.relPath = fs::relative(files[i], g_BaseDir).string();
+                        item.originalFilename = fs::path(files[i]).filename().string();
 
                         std::string fn = fs::path(files[i]).stem().string();
                         std::string trackNo = "01";
@@ -651,6 +652,11 @@ void AppWindow::RunMessageLoop() {
                             artistClean = "Unknown Artist";
                         }
                         std::string albumClean = CleanMetadataString(albumRaw);
+
+                        item.embeddedArtist = artistClean;
+                        item.embeddedAlbum = albumClean;
+                        item.embeddedTitle = title;
+                        item.embeddedTrackNo = trackNo;
 
                         strncpy_s(item.artistBuf, artistClean.c_str(), sizeof(item.artistBuf) - 1);
                         strncpy_s(item.albumBuf, albumClean.c_str(), sizeof(item.albumBuf) - 1);
@@ -736,7 +742,7 @@ void AppWindow::RunMessageLoop() {
                                     }
                                 }
 
-                                // 2. Fallback: MusicBrainz Text Search API (Demetori / Doujin support!)
+                                // 2. Fallback: MusicBrainz Text Search API (Strict + Loose search for Doujin/Demetori!)
                                 if (releaseGroupMbId.empty() && !artistClean.empty() && artistClean != "Unknown Artist" && !albumClean.empty()) {
                                     std::string mbQuery = "artist:\"" + artistClean + "\" AND release:\"" + albumClean + "\"";
                                     std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
@@ -751,6 +757,25 @@ void AppWindow::RunMessageLoop() {
                                             if (endPos != std::string::npos) {
                                                 releaseGroupMbId = mbRes.substr(idPos, endPos - idPos);
                                                 isMatched = true;
+                                            }
+                                        }
+                                    }
+
+                                    // Loose Search Fallback if strict search returned 0 items
+                                    if (releaseGroupMbId.empty()) {
+                                        std::string mbLooseQuery = artistClean + " " + albumClean;
+                                        std::string mbLooseUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbLooseQuery) + "&fmt=json";
+                                        std::string mbLooseRes = HttpGetString(Utf8ToWide(mbLooseUrl));
+                                        size_t lrgPos = mbLooseRes.find("\"release-groups\":");
+                                        if (lrgPos != std::string::npos) {
+                                            size_t lidPos = mbLooseRes.find("\"id\":\"", lrgPos);
+                                            if (lidPos != std::string::npos) {
+                                                lidPos += 6;
+                                                size_t lendPos = mbLooseRes.find("\"", lidPos);
+                                                if (lendPos != std::string::npos) {
+                                                    releaseGroupMbId = mbLooseRes.substr(lidPos, lendPos - lidPos);
+                                                    isMatched = true;
+                                                }
                                             }
                                         }
                                     }
@@ -846,7 +871,7 @@ void AppWindow::RunMessageLoop() {
         // Step 2 Interactive Tag & Cover Inspector Card (When Step 2 is active)
         if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
             auto& item = m_tagItems[m_currentTagIndex];
-            ImGui::BeginChild("TagInspectorCard", ImVec2(0, 210), true);
+            ImGui::BeginChild("TagInspectorCard", ImVec2(0, 240), true);
             ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ И ВЫБОР ОБЛОЖКИ] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
             ImGui::SameLine();
             if (item.isMusicBrainzMatched) {
@@ -856,6 +881,13 @@ void AppWindow::RunMessageLoop() {
             } else {
                 ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "[NICHE TRACK - LEVEL 3 PREFILLED]");
             }
+
+            // Display Original Filename & Embedded File Tags
+            ImGui::TextDisabled("Файл:");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(item.originalFilename.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("| Вшитые теги: %s - %s [%s]", item.embeddedArtist.c_str(), item.embeddedTitle.c_str(), item.embeddedAlbum.c_str());
 
             ImGui::Columns(2, "TagCols", false);
             ImGui::SetColumnWidth(0, 460);
@@ -988,46 +1020,44 @@ void AppWindow::RunMessageLoop() {
         ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
         ImGui::EndChild();
 
-        // 100% Reliable Native Auto-Scroll & Right-Click Copy Console Panel
+        // 100% Selectable Mouse Drag Log Console Field with Working Auto-Scroll
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
         ImGui::Separator();
 
-        if (ImGui::BeginChild("LogConsoleScrollingRegion", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
-            float scrollY = ImGui::GetScrollY();
-            float maxScrollY = ImGui::GetScrollMaxY();
-
-            // Track scroll position BEFORE rendering new lines
-            if (maxScrollY == 0.0f || scrollY >= maxScrollY - 20.0f) {
-                m_logAutoScroll = true;  // Turn ON when user is at the bottom
-            } else if (scrollY < maxScrollY - 30.0f) {
-                m_logAutoScroll = false; // Turn OFF when user scrolls UP to read logs!
-            }
-
-            auto logs = Logger::Instance().GetLogs();
-            for (size_t idx = 0; idx < logs.size(); ++idx) {
-                ImGui::PushID((int)idx);
-                ImGui::TextUnformatted(logs[idx].c_str());
-                ImGui::PopID();
-            }
-
-            // Execute 100% reliable native ImGui auto-scroll
-            if (m_logAutoScroll) {
-                ImGui::SetScrollHereY(1.0f);
-            }
-
-            // Right-Click Context Menu to copy full log directly to Windows Clipboard!
-            if (ImGui::BeginPopupContextWindow("LogContextMenu")) {
-                if (ImGui::MenuItem("Копировать весь лог")) {
-                    std::string full_log;
-                    for (const auto& log : logs) full_log += log + "\n";
-                    CopyToClipboardWin32(full_log);
-                }
-                ImGui::EndPopup();
-            }
-
-            ImGui::EndChild();
+        auto logs = Logger::Instance().GetLogs();
+        static std::string log_buffer;
+        log_buffer.clear();
+        for (const auto& log : logs) {
+            log_buffer += log + "\n";
         }
+
+        static size_t last_log_size = 0;
+        ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
+
+        ImGuiContext& g = *GImGui;
+        ImGuiWindow* childWindow = ImGui::FindWindowByName("##LogConsoleMultiLineSelectable_01");
+        if (!childWindow) childWindow = g.CurrentWindow;
+
+        if (childWindow) {
+            float scrollY = childWindow->Scroll.y;
+            float maxScrollY = childWindow->ScrollMax.y;
+
+            if (maxScrollY > 0.0f) {
+                if (scrollY >= maxScrollY - 25.0f) {
+                    m_logAutoScroll = true;  // Turned ON when scrolled to the very bottom
+                } else if (scrollY < maxScrollY - 40.0f) {
+                    m_logAutoScroll = false; // Frozen/Turned OFF when user scrolls UP to read history!
+                }
+            } else {
+                m_logAutoScroll = true;
+            }
+
+            if (m_logAutoScroll && logs.size() != last_log_size) {
+                childWindow->ScrollTarget.y = childWindow->ScrollMax.y + 1000.0f; // Scroll to bottom on new logs if autoScroll ON
+            }
+        }
+        last_log_size = logs.size();
 
         ImGui::EndChild();
 

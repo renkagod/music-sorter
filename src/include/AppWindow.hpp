@@ -13,10 +13,18 @@
 struct TagReviewItem {
     std::string filePath;
     std::string relPath;
+    std::string originalFilename;
+
+    std::string embeddedArtist;
+    std::string embeddedAlbum;
+    std::string embeddedTitle;
+    std::string embeddedTrackNo;
+
     char artistBuf[256] = {0};
     char albumBuf[256] = {0};
     char titleBuf[256] = {0};
     char trackNoBuf[32] = {0};
+
     bool isMusicBrainzMatched = false;
     bool isFetchCompleted = false;
 
