@@ -988,7 +988,7 @@ void AppWindow::RunMessageLoop() {
         ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
         ImGui::EndChild();
 
-        // Fully Selectable & Copyable Log Console Field with Native Auto-Scroll!
+        // Fully Selectable & Copyable Log Console Field with Exact User Auto-Scroll Logic!
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ (Выделите любой текст мышью / Ctrl+C):");
         ImGui::Separator();
@@ -1000,19 +1000,32 @@ void AppWindow::RunMessageLoop() {
             log_buffer += log + "\n";
         }
 
-        // Native Selectable MultiLine Text Box (Highlight with mouse + Ctrl+C!)
         static size_t last_log_size = 0;
         ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
 
-        // Auto-Scroll detection & triggering inside InputTextMultiline
-        if (logs.size() != last_log_size) {
-            last_log_size = logs.size();
-            ImGuiContext& g = *GImGui;
-            if (g.CurrentWindow) {
-                ImGuiWindow* child = g.CurrentWindow;
-                if (child) child->ScrollTarget.y = child->ScrollMax.y;
+        ImGuiContext& g = *GImGui;
+        ImGuiWindow* childWindow = ImGui::FindWindowByName("##LogConsoleMultiLineSelectable_01");
+        if (!childWindow) childWindow = g.CurrentWindow;
+
+        if (childWindow) {
+            float scrollY = childWindow->Scroll.y;
+            float maxScrollY = childWindow->ScrollMax.y;
+
+            if (maxScrollY > 0.0f) {
+                if (scrollY >= maxScrollY - 25.0f) {
+                    m_logAutoScroll = true;  // Turned ON when scrolled to the very bottom
+                } else if (scrollY < maxScrollY - 40.0f) {
+                    m_logAutoScroll = false; // Frozen/Turned OFF when user scrolls UP to read history!
+                }
+            } else {
+                m_logAutoScroll = true;
+            }
+
+            if (m_logAutoScroll && logs.size() != last_log_size) {
+                childWindow->ScrollTarget.y = childWindow->ScrollMax.y + 1000.0f; // Scroll to bottom on new logs if autoScroll ON
             }
         }
+        last_log_size = logs.size();
 
         ImGui::EndChild();
 
