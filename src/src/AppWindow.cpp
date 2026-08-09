@@ -77,15 +77,28 @@ static std::string CleanMetadataString(const std::string& str) {
         if (bLevel == 0) res.push_back(c);
     }
 
-    // Clean semicolons ;;;;5 and trailing noise from old metadata
-    size_t semiPos = res.find(';');
-    if (semiPos != std::string::npos) {
-        res = res.substr(0, semiPos);
-    }
-
-    size_t first = res.find_first_not_of(" \t\r\n;-_*#");
+    size_t first = res.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return "";
-    size_t last = res.find_last_not_of(" \t\r\n;-_*#");
+    size_t last = res.find_last_not_of(" \t\r\n");
+    return res.substr(first, (last - first + 1));
+}
+
+static std::string EscapeLuceneQuery(const std::string& str) {
+    std::string res;
+    res.reserve(str.size() * 2);
+    for (char c : str) {
+        if (c == ';' || c == '+' || c == '-' || c == '&' || c == '|' || c == '!' || 
+            c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']' || 
+            c == '^' || c == '"' || c == '~' || c == '*' || c == '?' || c == ':' || 
+            c == '\\' || c == '/') {
+            res.push_back(' ');
+        } else {
+            res.push_back(c);
+        }
+    }
+    size_t first = res.find_first_not_of(" \t");
+    if (first == std::string::npos) return "";
+    size_t last = res.find_last_not_of(" \t");
     return res.substr(first, (last - first + 1));
 }
 
@@ -1377,7 +1390,9 @@ void AppWindow::RunMessageLoop() {
                         if (releaseGroupMbId.empty() && !albumClean.empty()) {
                             // Tier A: Strict Release Group Search
                             if (!artistClean.empty() && artistClean != "Unknown Artist") {
-                                std::string mbQuery = "artist:\"" + artistClean + "\" AND release:\"" + albumClean + "\"";
+                                std::string artistLucene = EscapeLuceneQuery(artistClean);
+                                std::string albumLucene = EscapeLuceneQuery(albumClean);
+                                std::string mbQuery = "artist:\"" + artistLucene + "\" AND release:\"" + albumLucene + "\"";
                                 std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
                                 LOG_INFO("[MUSICBRAINZ TIER A] Querying: " + mbQuery);
                                 std::string mbRes = HttpGetString(Utf8ToWide(mbUrl));
@@ -1443,7 +1458,7 @@ void AppWindow::RunMessageLoop() {
 
                             // Tier C: Loose Text Search
                             if (releaseGroupMbId.empty()) {
-                                std::string mbLooseQuery = artistClean + " " + albumClean;
+                                std::string mbLooseQuery = EscapeLuceneQuery(artistClean) + " " + EscapeLuceneQuery(albumClean);
                                 std::string mbLooseUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbLooseQuery) + "&fmt=json";
                                 LOG_INFO("[MUSICBRAINZ TIER C LOOSE] Querying: " + mbLooseQuery);
                                 std::string mbLooseRes = HttpGetString(Utf8ToWide(mbLooseUrl));
