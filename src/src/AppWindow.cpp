@@ -66,26 +66,60 @@ static void CopyToClipboardWin32(const std::string& text) {
 
 static std::string CleanMetadataString(const std::string& str) {
     if (str.empty()) return "";
-    std::string s = std::regex_replace(str, std::regex(R"(\[[^\]]*\]|\{[^\}]*\}|\([^\)]*\)|\d{4}\.\d{2}\.\d{2})"), "");
-    s = std::regex_replace(s, std::regex(R"(^\s+|\s+$)"), "");
-    return s.empty() ? str : s;
+    std::string res;
+    res.reserve(str.size());
+    int bLevel = 0;
+    for (size_t i = 0; i < str.size(); ++i) {
+        char c = str[i];
+        if (c == '[' || c == '(' || c == '{') { bLevel++; continue; }
+        if (c == ']' || c == ')' || c == '}') { if (bLevel > 0) bLevel--; continue; }
+        if (bLevel == 0) res.push_back(c);
+    }
+    size_t first = res.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return str;
+    size_t last = res.find_last_not_of(" \t\r\n");
+    return res.substr(first, (last - first + 1));
 }
 
 static std::string ExtractYearFromString(const std::string& str) {
-    std::regex year_regex(R"((19\d\d|20\d\d))");
-    std::smatch match;
-    if (std::regex_search(str, match, year_regex)) {
-        return match[1].str();
+    if (str.size() < 4) return "";
+    for (size_t i = 0; i <= str.size() - 4; ++i) {
+        if (std::isdigit((unsigned char)str[i]) &&
+            std::isdigit((unsigned char)str[i + 1]) &&
+            std::isdigit((unsigned char)str[i + 2]) &&
+            std::isdigit((unsigned char)str[i + 3])) {
+            int y = std::stoi(str.substr(i, 4));
+            if (y >= 1900 && y <= 2099) {
+                return str.substr(i, 4);
+            }
+        }
     }
     return "";
 }
 
 static std::string NormalizeKey(const std::string& text) {
     if (text.empty()) return "";
-    std::string s = std::regex_replace(text, std::regex(R"(\[[^\]]*\]|\{[^\}]*\}|\([^\)]*\))"), "");
-    s = std::regex_replace(s, std::regex(R"([\s\-_/\\,.\u2044\u2215\u3013\uFF5E]+)"), "");
-    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-    return s;
+    std::string result;
+    result.reserve(text.size());
+
+    int bLevel = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '[' || c == '(' || c == '{') { bLevel++; continue; }
+        if (c == ']' || c == ')' || c == '}') { if (bLevel > 0) bLevel--; continue; }
+        if (bLevel > 0) continue;
+
+        if (c <= 32 || c == '-' || c == '_' || c == '/' || c == '\\' || c == ',' || c == '.' || c == '~') continue;
+
+        if (c == 0xEF && i + 2 < text.size() && (unsigned char)text[i + 1] == 0xBD && (unsigned char)text[i + 2] == 0x9E) {
+            i += 2;
+            continue;
+        }
+
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+        result.push_back((char)c);
+    }
+    return result;
 }
 
 static std::wstring Utf8ToWide(const std::string& str) {
@@ -1234,12 +1268,16 @@ void AppWindow::RunMessageLoop() {
                         std::string albumRaw = fs::path(files[i]).parent_path().filename().string();
                         std::string yearStr = ExtractYearFromString(files[i]);
 
-                        std::regex num_regex(R"(^(\d{1,2})[\.\s_\-]+(.+)$)");
-                        std::smatch match;
-                        if (std::regex_search(fn, match, num_regex)) {
-                            trackNo = match[1].str();
+                        size_t dotPos = fn.find(". ");
+                        if (dotPos == std::string::npos) dotPos = fn.find("- ");
+                        if (dotPos == std::string::npos) dotPos = fn.find("_");
+                        if (dotPos != std::string::npos && dotPos <= 4 && std::isdigit((unsigned char)fn[0])) {
+                            trackNo = fn.substr(0, dotPos);
+                            while (!trackNo.empty() && !std::isdigit((unsigned char)trackNo.back())) trackNo.pop_back();
                             if (trackNo.length() == 1) trackNo = "0" + trackNo;
-                            title = match[2].str();
+                            title = fn.substr(dotPos + 1);
+                            size_t first = title.find_first_not_of(" \t.-_");
+                            if (first != std::string::npos) title = title.substr(first);
                         }
 
                         std::string artistClean = CleanMetadataString(artistRaw);
