@@ -1472,54 +1472,58 @@ void AppWindow::RunMessageLoop() {
                     std::string newTrackNo(item.trackNoBuf);
                     std::string newYear(item.yearBuf);
                     std::string newLyrics(item.lyricsBuf);
+                    std::string srcFilePath = item.filePath;
+                    std::string origFilename = item.originalFilename;
 
-                    fs::path srcFile(item.filePath);
-                    std::string ext = srcFile.extension().string();
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    const auto chosenCover = (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) ? item.onlineCoverBytes : item.localCoverBytes;
 
-                    fs::path targetFolder = (ext == ".flac") ? (fs::path(g_BaseDir) / "flac" / newArtist / newAlbum) : (fs::path(g_BaseDir) / "mp3" / newArtist / newAlbum);
-                    fs::create_directories(targetFolder);
+                    std::thread([newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, srcFilePath, origFilename, chosenCover]() {
+                        fs::path srcFile(srcFilePath);
+                        std::string ext = srcFile.extension().string();
+                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-                    std::string newFileName = newTrackNo + ". " + newTitle + ext;
-                    fs::path dstFile = targetFolder / newFileName;
+                        fs::path targetFolder = (ext == ".flac") ? (fs::path(g_BaseDir) / "flac" / newArtist / newAlbum) : (fs::path(g_BaseDir) / "mp3" / newArtist / newAlbum);
+                        fs::create_directories(targetFolder);
 
-                    const auto& chosenCover = (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) ? item.onlineCoverBytes : item.localCoverBytes;
+                        std::string newFileName = newTrackNo + ". " + newTitle + ext;
+                        fs::path dstFile = targetFolder / newFileName;
 
-                    // EMBED METADATA TAGS & COVER ART DIRECTLY INTO FLAC / MP3 FILE HEADER!
-                    bool embeddedOk = false;
-                    if (ext == ".flac") {
-                        embeddedOk = WriteFlacTagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
-                    } else if (ext == ".mp3") {
-                        embeddedOk = WriteMp3TagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
-                    }
+                        // EMBED METADATA TAGS & COVER ART DIRECTLY INTO FLAC / MP3 FILE HEADER ASYNCHRONOUSLY!
+                        bool embeddedOk = false;
+                        if (ext == ".flac") {
+                            embeddedOk = WriteFlacTagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
+                        } else if (ext == ".mp3") {
+                            embeddedOk = WriteMp3TagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
+                        }
 
-                    if (embeddedOk) {
-                        LOG_INFO("[TAGS EMBEDDED] Embedded full VorbisComment/ID3v2 tags (Date: " + newYear + ") & cover art into file header!");
-                    } else {
-                        LOG_INFO("[TAG EMBED WARN] Direct tag header embedding returned false for: " + srcFile.filename().string());
-                    }
+                        if (embeddedOk) {
+                            LOG_INFO("[TAGS EMBEDDED] Embedded full VorbisComment/ID3v2 tags (Date: " + newYear + ") & cover art into file header!");
+                        } else {
+                            LOG_INFO("[TAG EMBED WARN] Direct tag header embedding returned false for: " + origFilename);
+                        }
 
-                    // Move audio file to sorted target folder
-                    try {
-                        if (fs::exists(dstFile)) fs::remove(dstFile);
-                        fs::rename(srcFile, dstFile);
-                        LOG_INFO("[TAGS APPLIED & FILE MOVED] Written tags & moved to: " + fs::relative(dstFile, g_BaseDir).string());
+                        // Move audio file to sorted target folder
+                        try {
+                            if (fs::exists(dstFile)) fs::remove(dstFile);
+                            fs::rename(srcFile, dstFile);
+                            LOG_INFO("[TAGS APPLIED & FILE MOVED] Written tags & moved to: " + fs::relative(dstFile, g_BaseDir).string());
 
-                        // Save chosen cover art to folder once per album
-                        if (!chosenCover.empty()) {
-                            fs::path coverDst = targetFolder / "cover.jpg";
-                            if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
-                                std::ofstream cOut(coverDst, std::ios::binary);
-                                if (cOut.is_open()) {
-                                    cOut.write((const char*)chosenCover.data(), chosenCover.size());
-                                    cOut.close();
-                                    LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                            // Save chosen cover art to folder once per album
+                            if (!chosenCover.empty()) {
+                                fs::path coverDst = targetFolder / "cover.jpg";
+                                if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
+                                    std::ofstream cOut(coverDst, std::ios::binary);
+                                    if (cOut.is_open()) {
+                                        cOut.write((const char*)chosenCover.data(), chosenCover.size());
+                                        cOut.close();
+                                        LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                                    }
                                 }
                             }
+                        } catch (const std::exception& ex) {
+                            LOG_INFO("[WRITE ERROR] Failed to move/write file: " + std::string(ex.what()));
                         }
-                    } catch (const std::exception& ex) {
-                        LOG_INFO("[WRITE ERROR] Failed to move/write file: " + std::string(ex.what()));
-                    }
+                    }).detach();
 
                     m_currentTagIndex++;
                 }
