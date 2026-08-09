@@ -1039,7 +1039,7 @@ void AppWindow::RunMessageLoop() {
             if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
                 auto& item = m_tagItems[m_currentTagIndex];
                 
-                // Set height to fit perfectly without any inner scrollbar!
+                // Height set to 395px with NoScrollbar flag to fit perfectly on screen!
                 ImGui::BeginChild("TagInspectorCardPerfectFit", ImVec2(0, 395), true, ImGuiWindowFlags_NoScrollbar);
                 ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ И ОБЛОЖЕК] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
                 ImGui::SameLine();
@@ -1172,43 +1172,50 @@ void AppWindow::RunMessageLoop() {
             ImGui::EndChild();
         }
 
-        // 100% Reliable Native ImGui Auto-Scrolling Console Region
+        // Fully Selectable & Mouse Drag Copyable Log Console Field with Working Auto-Scroll
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
         ImGui::Separator();
 
-        if (ImGui::BeginChild("LogConsoleLinesChild", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
-            float scrollY = ImGui::GetScrollY();
-            float maxScrollY = ImGui::GetScrollMaxY();
-
-            if (maxScrollY == 0.0f || scrollY >= maxScrollY - 20.0f) {
-                m_logAutoScroll = true;  // Turn ON when user is at bottom
-            } else if (scrollY < maxScrollY - 35.0f) {
-                m_logAutoScroll = false; // Turn OFF when user scrolls UP!
-            }
-
-            auto logs = Logger::Instance().GetLogs();
-            for (size_t idx = 0; idx < logs.size(); ++idx) {
-                ImGui::PushID((int)idx);
-                ImGui::TextUnformatted(logs[idx].c_str());
-                ImGui::PopID();
-            }
-
-            if (m_logAutoScroll) {
-                ImGui::SetScrollHereY(1.0f); // 100% guaranteed ImGui core auto-scroll
-            }
-
-            if (ImGui::BeginPopupContextWindow("LogContextMenuMain")) {
-                if (ImGui::MenuItem("Копировать весь лог в буфер обмена")) {
-                    std::string full_log;
-                    for (const auto& log : logs) full_log += log + "\n";
-                    CopyToClipboardWin32(full_log);
-                }
-                ImGui::EndPopup();
-            }
-
-            ImGui::EndChild();
+        auto logs = Logger::Instance().GetLogs();
+        static std::string log_buffer;
+        log_buffer.clear();
+        for (const auto& log : logs) {
+            log_buffer += log + "\n";
         }
+
+        static size_t last_log_size = 0;
+
+        ImGuiContext& g = *GImGui;
+        ImGuiID input_id = ImGui::GetID("##LogConsoleMultiLineSelectable");
+        ImGuiWindow* childWindow = ImGui::FindWindowByName("##LogConsoleMultiLineSelectable_01");
+        if (!childWindow) childWindow = g.CurrentWindow;
+
+        if (childWindow) {
+            float scrollY = childWindow->Scroll.y;
+            float maxScrollY = childWindow->ScrollMax.y;
+
+            if (maxScrollY > 0.0f) {
+                if (scrollY >= maxScrollY - 30.0f) {
+                    m_logAutoScroll = true;  // Turned ON when scrolled to the very bottom
+                } else if (scrollY < maxScrollY - 50.0f) {
+                    m_logAutoScroll = false; // Frozen/Turned OFF when user scrolls UP to read history!
+                }
+            } else {
+                m_logAutoScroll = true;
+            }
+
+            if (m_logAutoScroll && logs.size() != last_log_size) {
+                childWindow->Scroll.y = childWindow->ScrollMax.y;
+                childWindow->ScrollTarget.y = childWindow->ScrollMax.y + 1000.0f;
+                if (g.InputTextState.ID == input_id) {
+                    g.InputTextState.Scroll.y = childWindow->ScrollMax.y;
+                }
+            }
+        }
+        last_log_size = logs.size();
+
+        ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
 
         ImGui::EndChild();
 
