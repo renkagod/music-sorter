@@ -74,6 +74,40 @@ static std::string UrlEncode(const std::string& str) {
     return escaped.str();
 }
 
+// Mathematical Laplacian High-Frequency Sharpness Analysis (Detects fake upscaled / blurry images!)
+static double CalculatePerceptualSharpness(const unsigned char* data, size_t size) {
+    if (!data || size == 0) return 0.0;
+    int width = 0, height = 0, channels = 0;
+    unsigned char* gray = stbi_load_from_memory(data, (int)size, &width, &height, &channels, 1);
+    if (!gray || width < 4 || height < 4) return 0.0;
+
+    double sum = 0.0;
+    double sumSq = 0.0;
+    size_t count = 0;
+
+    for (int y = 1; y < height - 1; y += 2) {
+        for (int x = 1; x < width - 1; x += 2) {
+            int center = gray[y * width + x];
+            int top    = gray[(y - 1) * width + x];
+            int bottom = gray[(y + 1) * width + x];
+            int left   = gray[y * width + (x - 1)];
+            int right  = gray[y * width + (x + 1)];
+
+            double lap = (double)(top + bottom + left + right - 4 * center);
+            sum += lap;
+            sumSq += lap * lap;
+            count++;
+        }
+    }
+
+    stbi_image_free(gray);
+
+    if (count == 0) return 0.0;
+    double mean = sum / count;
+    double variance = (sumSq / count) - (mean * mean);
+    return variance;
+}
+
 std::vector<unsigned char> HttpGetBytes(const std::wstring& url) {
     std::vector<unsigned char> result;
     HINTERNET hNet = InternetOpenW(L"MusicSorter/2.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
@@ -433,20 +467,23 @@ void AppWindow::RunMessageLoop() {
         }
         if (done) break;
 
-        // Dynamic Texture Creation & Mathematical Cover Quality Evaluation
+        // Dynamic Texture Creation & Mathematical Perceptual Sharpness Evaluation
         for (auto& item : m_tagItems) {
             if (item.localTexture == NULL && !item.localCoverBytes.empty()) {
                 item.localTexture = CreateTextureFromMemory(m_pd3dDevice, item.localCoverBytes.data(), item.localCoverBytes.size(), &item.localWidth, &item.localHeight);
                 if (item.localTexture) {
-                    item.localScore = (long long)item.localWidth * item.localHeight * (item.localCoverBytes.size() / 1024 + 1);
+                    double sharpness = CalculatePerceptualSharpness(item.localCoverBytes.data(), item.localCoverBytes.size());
+                    item.localScore = (long long)(sharpness * item.localWidth * item.localHeight);
                 }
             }
 
             if (item.isFetchCompleted && !item.onlineCoverBytes.empty() && item.onlineTexture == NULL) {
                 item.onlineTexture = CreateTextureFromMemory(m_pd3dDevice, item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), &item.onlineWidth, &item.onlineHeight);
                 if (item.onlineTexture) {
-                    item.onlineScore = (long long)item.onlineWidth * item.onlineHeight * (item.onlineCoverBytes.size() / 1024 + 1);
-                    // Automatically select mathematically higher quality cover art!
+                    double sharpness = CalculatePerceptualSharpness(item.onlineCoverBytes.data(), item.onlineCoverBytes.size());
+                    item.onlineScore = (long long)(sharpness * item.onlineWidth * item.onlineHeight);
+                    
+                    // Automatically select mathematically sharper & true higher quality cover art!
                     if (item.onlineScore > item.localScore) {
                         item.selectedCoverChoice = 1;
                     } else {
@@ -811,7 +848,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::NextColumn();
 
             // Side-by-Side Cover Art Choice & Mathematical Quality Comparison
-            ImGui::TextDisabled("ВЫБОР И КАЧЕСТВО ОБЛОЖЕК:");
+            ImGui::TextDisabled("ВЫБОР И ДЕТЕКЦИЯ АПСКЕЙЛА ОБЛОЖЕК:");
 
             if (item.localTexture) {
                 if (ImGui::ImageButton("##LocalCoverBtn", (ImTextureID)item.localTexture, ImVec2(100, 100))) {
@@ -822,7 +859,9 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Text(item.selectedCoverChoice == 0 ? "[X] Локальный скан" : "   Локальный скан");
                 ImGui::TextDisabled("%dx%d px | %zu KB", item.localWidth, item.localHeight, item.localCoverBytes.size() / 1024);
                 if (item.localScore >= item.onlineScore) {
-                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
+                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ НАСТОЯЩЕЕ КАЧЕСТВО");
+                } else if (item.localWidth >= 1000 && item.localScore < item.onlineScore / 3) {
+                    ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ/МЫЛО");
                 }
                 ImGui::EndGroup();
             } else {
@@ -842,7 +881,9 @@ void AppWindow::RunMessageLoop() {
                 ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
                 ImGui::TextDisabled("%dx%d px | %zu KB", item.onlineWidth, item.onlineHeight, item.onlineCoverBytes.size() / 1024);
                 if (item.onlineScore > item.localScore) {
-                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
+                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ НАСТОЯЩЕЕ КАЧЕСТВО");
+                } else if (item.onlineWidth >= 1000 && item.onlineScore < item.localScore / 3) {
+                    ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ/МЫЛО");
                 }
                 ImGui::EndGroup();
             } else if (m_isTagScanning && !item.isFetchCompleted) {
@@ -1037,13 +1078,15 @@ void AppWindow::HandleTagScanFinished() {
         if (!item.localCoverBytes.empty() && item.localTexture == NULL) {
             item.localTexture = CreateTextureFromMemory(m_pd3dDevice, item.localCoverBytes.data(), item.localCoverBytes.size(), &item.localWidth, &item.localHeight);
             if (item.localTexture) {
-                item.localScore = (long long)item.localWidth * item.localHeight * (item.localCoverBytes.size() / 1024 + 1);
+                double sharpness = CalculatePerceptualSharpness(item.localCoverBytes.data(), item.localCoverBytes.size());
+                item.localScore = (long long)(sharpness * item.localWidth * item.localHeight);
             }
         }
         if (!item.onlineCoverBytes.empty() && item.onlineTexture == NULL) {
             item.onlineTexture = CreateTextureFromMemory(m_pd3dDevice, item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), &item.onlineWidth, &item.onlineHeight);
             if (item.onlineTexture) {
-                item.onlineScore = (long long)item.onlineWidth * item.onlineHeight * (item.onlineCoverBytes.size() / 1024 + 1);
+                double sharpness = CalculatePerceptualSharpness(item.onlineCoverBytes.data(), item.onlineCoverBytes.size());
+                item.onlineScore = (long long)(sharpness * item.onlineWidth * item.onlineHeight);
             }
         }
     }
