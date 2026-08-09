@@ -1205,7 +1205,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::EndChild();
         }
 
-        // 100% Reliable InputTextMultiline Auto-Scroll via ImGui::SetNextWindowScroll
+        // 100% Bulletproof Auto-Scroll Control with Manual Scroll Interruption Detection!
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
         ImGui::Separator();
@@ -1224,27 +1224,27 @@ void AppWindow::RunMessageLoop() {
         if (!childWindow) childWindow = g.CurrentWindow;
 
         if (childWindow) {
-            float scrollY = childWindow->Scroll.y;
-            float maxScrollY = childWindow->ScrollMax.y;
+            bool isLogWindowHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+            float mouseWheelDelta = ImGui::GetIO().MouseWheel;
 
-            if (maxScrollY > 0.0f) {
-                if (scrollY >= maxScrollY - 30.0f) {
-                    m_logAutoScroll = true;  // Turned ON when scrolled to the very bottom
-                } else if (scrollY < maxScrollY - 50.0f) {
-                    m_logAutoScroll = false; // Frozen/Turned OFF when user scrolls UP to read history!
-                }
-            } else {
+            // 1. If user rolls mouse wheel UP while over the log panel -> Immediately STOP auto-scrolling!
+            if (isLogWindowHovered && mouseWheelDelta > 0.0f) {
+                m_logAutoScroll = false;
+            }
+            // 2. If user manually scrolls down to the bottom -> Re-enable auto-scrolling!
+            else if (childWindow->Scroll.y >= childWindow->ScrollMax.y - 20.0f) {
                 m_logAutoScroll = true;
             }
         }
 
-        if (m_logAutoScroll) {
+        // Apply auto-scroll ONLY if m_logAutoScroll is active!
+        if (m_logAutoScroll && logs.size() != last_log_size) {
             ImGui::SetNextWindowScroll(ImVec2(0.0f, 999999.0f));
         }
 
         ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
 
-        if (m_logAutoScroll && childWindow) {
+        if (m_logAutoScroll && logs.size() != last_log_size && childWindow) {
             childWindow->Scroll.y = childWindow->ScrollMax.y;
             childWindow->ScrollTarget.y = childWindow->ScrollMax.y;
         }
