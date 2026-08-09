@@ -16,6 +16,7 @@
 #include <future>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <sstream>
 #include <filesystem>
 #include <fstream>
@@ -842,6 +843,7 @@ static void NativeSyncTracklistDatabase() {
     std::string line;
     std::vector<std::string> lines;
     size_t checkedCount = 0;
+    std::unordered_set<std::string> matchedKeys;
 
     while (std::getline(inFile, line)) {
         size_t boxPos = line.find("- [ ]");
@@ -850,23 +852,54 @@ static void NativeSyncTracklistDatabase() {
             std::string normContent = NormalizeKey(content);
 
             if (!normContent.empty()) {
-                bool found = false;
+                std::string hitKey = "";
                 for (const auto& key : scannedNormKeys) {
                     if (!key.empty() && (normContent.find(key) != std::string::npos || key.find(normContent) != std::string::npos)) {
-                        found = true;
+                        hitKey = key;
                         break;
                     }
                 }
 
-                if (found) {
+                if (!hitKey.empty()) {
                     line.replace(boxPos, 5, "- [x]");
                     checkedCount++;
+                    matchedKeys.insert(hitKey);
+                }
+            }
+        } else {
+            // Also record existing checked off keys
+            size_t checkedBoxPos = line.find("- [x]");
+            if (checkedBoxPos != std::string::npos) {
+                std::string content = line.substr(checkedBoxPos + 5);
+                std::string normContent = NormalizeKey(content);
+                if (!normContent.empty()) {
+                    matchedKeys.insert(normContent);
                 }
             }
         }
         lines.push_back(line);
     }
     inFile.close();
+
+    // Auto-append brand new tracks found on disk that were NOT in tracklist.md!
+    size_t addedCount = 0;
+    std::vector<std::string> newEntries;
+    for (const auto& key : scannedNormKeys) {
+        if (!key.empty() && matchedKeys.find(key) == matchedKeys.end()) {
+            newEntries.push_back("- [x] **" + key + "**");
+            matchedKeys.insert(key);
+            addedCount++;
+        }
+    }
+
+    if (!newEntries.empty()) {
+        lines.push_back("");
+        lines.push_back("### 💿 Unlisted New Additions");
+        lines.push_back("");
+        for (const auto& ne : newEntries) {
+            lines.push_back(ne);
+        }
+    }
 
     std::ofstream outFile(tracklistPath);
     if (outFile.is_open()) {
@@ -876,7 +909,7 @@ static void NativeSyncTracklistDatabase() {
         outFile.close();
     }
 
-    LOG_INFO("Step 4 Complete: Native C++ tracklist sync finished. Checked off " + std::to_string(checkedCount) + " tracks in tracklist.md.");
+    LOG_INFO("Step 4 Complete: Native C++ tracklist sync finished. Checked off " + std::to_string(checkedCount) + " tracks, auto-appended " + std::to_string(addedCount) + " new tracks to tracklist.md.");
 }
 
 bool AppWindow::CreateDeviceD3D(HWND hWnd) {
