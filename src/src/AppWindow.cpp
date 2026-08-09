@@ -31,15 +31,6 @@ extern std::string g_DeleteDir;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-static bool g_logAutoScrollActive = true;
-
-static int LogInputTextCallback(ImGuiInputTextCallbackData* data) {
-    if (g_logAutoScrollActive) {
-        data->CursorPos = data->BufTextLen;
-    }
-    return 0;
-}
-
 struct AlbumMetadataCache {
     std::string releaseGroupMbId;
     std::string firstReleaseDate;
@@ -942,7 +933,7 @@ void AppWindow::RunMessageLoop() {
 
         ImGui::Separator();
 
-        // DYNAMIC WORKFLOW INTERFACE SWITCHING (Only show active stage controls!)
+        // DYNAMIC WORKFLOW INTERFACE SWITCHING
         if (m_activeStageTab == 0) {
             // Stage 1 Interface: Dual A/B Comparison Cards Layout
             float halfWidth = (ImGui::GetContentRegionAvail().x - 16.0f) * 0.5f;
@@ -1044,10 +1035,12 @@ void AppWindow::RunMessageLoop() {
             ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
             ImGui::EndChild();
         } else if (m_activeStageTab == 1) {
-            // Stage 2 Dedicated Full-Height Interface (No A/B cards cluttering!)
+            // Stage 2 Clean 2-Column Layout (Old Tags + Local Cover on Left | New Tags + Online Cover on Right)
             if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
                 auto& item = m_tagItems[m_currentTagIndex];
-                ImGui::BeginChild("TagInspectorCardFull", ImVec2(0, 360), true);
+                
+                // Set height to fit perfectly without any inner scrollbar!
+                ImGui::BeginChild("TagInspectorCardPerfectFit", ImVec2(0, 395), true, ImGuiWindowFlags_NoScrollbar);
                 ImGui::TextDisabled("[ИНСПЕКТОР ТЕГОВ И ОБЛОЖЕК] (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
                 ImGui::SameLine();
                 if (item.isMusicBrainzMatched) {
@@ -1059,28 +1052,13 @@ void AppWindow::RunMessageLoop() {
                 }
 
                 ImGui::SameLine();
-                ImGui::TextDisabled("| Исходный файл: %s", item.originalFilename.c_str());
+                ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
 
-                // 2-Column Side-by-Side Tag Comparison + Horizontal Cover Art Previews
-                ImGui::Columns(2, "TagInspectorMainCols", false);
-                ImGui::SetColumnWidth(0, 580);
+                // Perfect 2-Column Layout (Left = Old File State | Right = Proposed New State)
+                ImGui::Columns(2, "TagInspectorPerfectCols", false);
 
-                // Column 1: New Proposed Tags (Editable)
-                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "[НОВЫЕ ПРЕДЛАГАЕМЫЕ ТЕГИ]");
-                ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
-                ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
-                ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
-
-                ImGui::SetNextItemWidth(120);
-                ImGui::InputText("№ Трека##New", item.trackNoBuf, sizeof(item.trackNoBuf));
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(140);
-                ImGui::InputText("Год##New", item.yearBuf, sizeof(item.yearBuf));
-
-                ImGui::NextColumn();
-
-                // Column 2: Original File Tags (Read-Only)
-                ImGui::TextDisabled("[ИСХОДНЫЕ ТЕГИ В ФАЙЛЕ]");
+                // COLUMN 1 (LEFT): OLD FILE STATE (Tags + Local Cover)
+                ImGui::TextDisabled("[ИСХОДНЫЕ ДАННЫЕ ИЗ ФАЙЛА]");
 
                 char origArtist[256], origAlbum[256], origTitle[256], origTrack[32], origYear[32];
                 strncpy_s(origArtist, item.embeddedArtist.c_str(), sizeof(origArtist) - 1);
@@ -1093,21 +1071,17 @@ void AppWindow::RunMessageLoop() {
                 ImGui::InputText("Альбом##Orig", origAlbum, sizeof(origAlbum), ImGuiInputTextFlags_ReadOnly);
                 ImGui::InputText("Название##Orig", origTitle, sizeof(origTitle), ImGuiInputTextFlags_ReadOnly);
 
-                ImGui::SetNextItemWidth(120);
+                ImGui::SetNextItemWidth(100);
                 ImGui::InputText("№ Трека##Orig", origTrack, sizeof(origTrack), ImGuiInputTextFlags_ReadOnly);
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(140);
+                ImGui::SetNextItemWidth(120);
                 ImGui::InputText("Год##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
 
-                ImGui::Columns(1);
-                ImGui::Separator();
+                ImGui::Spacing();
+                ImGui::TextDisabled("Локальная обложка:");
 
-                // HORIZONTAL Side-by-Side Cover Art Choice Section
-                ImGui::TextDisabled("ВЫБОР ОБЛОЖКИ (Кликните по левой или правой обложке):");
-
-                // Local Cover (Left)
                 if (item.localTexture) {
-                    if (ImGui::ImageButton("##LocalCoverBtnH", (ImTextureID)item.localTexture, ImVec2(90, 90))) {
+                    if (ImGui::ImageButton("##LocalCoverBtnLeft", (ImTextureID)item.localTexture, ImVec2(80, 80))) {
                         item.selectedCoverChoice = 0;
                     }
                     ImGui::SameLine();
@@ -1115,22 +1089,34 @@ void AppWindow::RunMessageLoop() {
                     ImGui::Text(item.selectedCoverChoice == 0 ? "[X] Локальный скан" : "   Локальный скан");
                     ImGui::TextDisabled("%dx%d px | %zu KB", item.localWidth, item.localHeight, item.localCoverBytes.size() / 1024);
                     if (item.localScore >= item.onlineScore) {
-                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ НАСТОЯЩЕЕ КАЧЕСТВО");
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
                     } else if (item.localWidth >= 1000 && item.localScore < item.onlineScore / 3) {
-                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ/МЫЛО");
+                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ");
                     }
                     ImGui::EndGroup();
                 } else {
-                    ImGui::TextDisabled("[Локальная обложка отсутствует]");
+                    ImGui::TextDisabled("[Обложка отсутствует]");
                 }
 
-                ImGui::SameLine();
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 40.0f);
-                ImGui::SameLine();
+                ImGui::NextColumn();
 
-                // Online CoverArtArchive (Right - HORIZONTAL!)
+                // COLUMN 2 (RIGHT): NEW PROPOSED STATE (Tags + Online Cover)
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "[НОВЫЕ ПРЕДЛАГАЕМЫЕ ДАННЫЕ]");
+                ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
+                ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
+                ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
+
+                ImGui::SetNextItemWidth(100);
+                ImGui::InputText("№ Трека##New", item.trackNoBuf, sizeof(item.trackNoBuf));
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(120);
+                ImGui::InputText("Год##New", item.yearBuf, sizeof(item.yearBuf));
+
+                ImGui::Spacing();
+                ImGui::TextDisabled("Онлайн обложка MusicBrainz:");
+
                 if (item.onlineTexture) {
-                    if (ImGui::ImageButton("##OnlineCoverBtnH", (ImTextureID)item.onlineTexture, ImVec2(90, 90))) {
+                    if (ImGui::ImageButton("##OnlineCoverBtnRight", (ImTextureID)item.onlineTexture, ImVec2(80, 80))) {
                         item.selectedCoverChoice = 1;
                     }
                     ImGui::SameLine();
@@ -1138,25 +1124,26 @@ void AppWindow::RunMessageLoop() {
                     ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
                     ImGui::TextDisabled("%dx%d px | %zu KB", item.onlineWidth, item.onlineHeight, item.onlineCoverBytes.size() / 1024);
                     if (item.onlineScore > item.localScore) {
-                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ НАСТОЯЩЕЕ КАЧЕСТВО");
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
                     } else if (item.onlineWidth >= 1000 && item.onlineScore < item.localScore / 3) {
-                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ/МЫЛО");
+                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ");
                     }
                     ImGui::EndGroup();
                 } else if (m_isTagScanning && !item.isFetchCompleted) {
                     ImGui::TextDisabled("[Загрузка онлайн обложки...]");
                 } else {
-                    ImGui::TextDisabled("[Онлайн обложка отсутствует]");
+                    ImGui::TextDisabled("[Обложка отсутствует]");
                 }
 
-                ImGui::Spacing();
+                ImGui::Columns(1);
+                ImGui::Separator();
 
-                // Synced LRC Lyrics Input Box (Cleaned UI & No Truncation)
+                // Synced LRC Lyrics Input Box
                 ImGui::TextDisabled("Синхронный текст песни (LRC / Romaji):");
                 if (strlen(item.lyricsBuf) == 0) {
-                    ImGui::InputTextMultiline("##LyricsMultiLineFull", (char*)"[Текст песни не найден или отсутствует]", 40, ImVec2(-1, 45), ImGuiInputTextFlags_ReadOnly);
+                    ImGui::InputTextMultiline("##LyricsMultiLinePerfect", (char*)"[Текст песни не найден или отсутствует]", 40, ImVec2(-1, 40), ImGuiInputTextFlags_ReadOnly);
                 } else {
-                    ImGui::InputTextMultiline("##LyricsMultiLineFull", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 55));
+                    ImGui::InputTextMultiline("##LyricsMultiLinePerfect", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 45));
                 }
 
                 ImGui::Spacing();
@@ -1185,44 +1172,43 @@ void AppWindow::RunMessageLoop() {
             ImGui::EndChild();
         }
 
-        // 100% Selectable Mouse Drag Log Console Field with Guaranteed Auto-Scroll
+        // 100% Reliable Native ImGui Auto-Scrolling Console Region
         ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
         ImGui::TextDisabled("ПОШАГОВЫЙ КОНСОЛЬНЫЙ ЖУРНАЛ СОБЫТИЙ:");
         ImGui::Separator();
 
-        auto logs = Logger::Instance().GetLogs();
-        static std::string log_buffer;
-        log_buffer.clear();
-        for (const auto& log : logs) {
-            log_buffer += log + "\n";
-        }
+        if (ImGui::BeginChild("LogConsoleLinesChild", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
+            float scrollY = ImGui::GetScrollY();
+            float maxScrollY = ImGui::GetScrollMaxY();
 
-        static size_t last_log_size = 0;
-
-        ImGuiContext& g = *GImGui;
-        ImGuiWindow* childWindow = ImGui::FindWindowByName("##LogConsoleMultiLineSelectable_01");
-        if (!childWindow) childWindow = g.CurrentWindow;
-
-        if (childWindow) {
-            float scrollY = childWindow->Scroll.y;
-            float maxScrollY = childWindow->ScrollMax.y;
-
-            if (maxScrollY > 0.0f) {
-                if (scrollY >= maxScrollY - 30.0f) {
-                    m_logAutoScroll = true;  // Turned ON when scrolled to the very bottom
-                } else if (scrollY < maxScrollY - 50.0f) {
-                    m_logAutoScroll = false; // Frozen/Turned OFF when user scrolls UP to read history!
-                }
-            } else {
-                m_logAutoScroll = true;
+            if (maxScrollY == 0.0f || scrollY >= maxScrollY - 20.0f) {
+                m_logAutoScroll = true;  // Turn ON when user is at bottom
+            } else if (scrollY < maxScrollY - 35.0f) {
+                m_logAutoScroll = false; // Turn OFF when user scrolls UP!
             }
+
+            auto logs = Logger::Instance().GetLogs();
+            for (size_t idx = 0; idx < logs.size(); ++idx) {
+                ImGui::PushID((int)idx);
+                ImGui::TextUnformatted(logs[idx].c_str());
+                ImGui::PopID();
+            }
+
+            if (m_logAutoScroll) {
+                ImGui::SetScrollHereY(1.0f); // 100% guaranteed ImGui core auto-scroll
+            }
+
+            if (ImGui::BeginPopupContextWindow("LogContextMenuMain")) {
+                if (ImGui::MenuItem("Копировать весь лог в буфер обмена")) {
+                    std::string full_log;
+                    for (const auto& log : logs) full_log += log + "\n";
+                    CopyToClipboardWin32(full_log);
+                }
+                ImGui::EndPopup();
+            }
+
+            ImGui::EndChild();
         }
-
-        g_logAutoScrollActive = m_logAutoScroll;
-
-        ImGui::InputTextMultiline("##LogConsoleMultiLineSelectable", log_buffer.data(), log_buffer.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CallbackAlways, LogInputTextCallback);
-
-        last_log_size = logs.size();
 
         ImGui::EndChild();
 
