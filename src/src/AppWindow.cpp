@@ -1505,14 +1505,16 @@ void AppWindow::RunMessageLoop() {
                         fs::rename(srcFile, dstFile);
                         LOG_INFO("[TAGS APPLIED & FILE MOVED] Written tags & moved to: " + fs::relative(dstFile, g_BaseDir).string());
 
-                        // Save chosen cover art to folder
+                        // Save chosen cover art to folder once per album
                         if (!chosenCover.empty()) {
                             fs::path coverDst = targetFolder / "cover.jpg";
-                            std::ofstream cOut(coverDst, std::ios::binary);
-                            if (cOut.is_open()) {
-                                cOut.write((const char*)chosenCover.data(), chosenCover.size());
-                                cOut.close();
-                                LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                            if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
+                                std::ofstream cOut(coverDst, std::ios::binary);
+                                if (cOut.is_open()) {
+                                    cOut.write((const char*)chosenCover.data(), chosenCover.size());
+                                    cOut.close();
+                                    LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                                }
                             }
                         }
                     } catch (const std::exception& ex) {
