@@ -1600,8 +1600,9 @@ void AppWindow::RunMessageLoop() {
         }
         if (done) break;
 
-        // Dynamic Texture Creation & Mathematical Perceptual Sharpness Evaluation
-        for (auto& item : m_tagItems) {
+        // Lazy Texture Creation — only for the currently displayed item to avoid UI freezes
+        if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
+            auto& item = m_tagItems[m_currentTagIndex];
             if (item.localTexture == NULL && !item.localCoverBytes.empty()) {
                 item.localTexture = CreateTextureFromMemory(m_pd3dDevice, item.localCoverBytes.data(), item.localCoverBytes.size(), &item.localWidth, &item.localHeight);
                 if (item.localTexture) {
@@ -1613,8 +1614,7 @@ void AppWindow::RunMessageLoop() {
                 item.onlineTexture = CreateTextureFromMemory(m_pd3dDevice, item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), &item.onlineWidth, &item.onlineHeight);
                 if (item.onlineTexture) {
                     item.onlineScore = CalculateImageQualityScore(item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), item.onlineWidth, item.onlineHeight);
-                    
-                    // Automatically select mathematically sharper & true higher quality cover art!
+
                     if (item.onlineScore > item.localScore) {
                         item.selectedCoverChoice = 1;
                     } else {
@@ -2940,20 +2940,7 @@ void AppWindow::HandleScanFinished() {
 void AppWindow::HandleTagScanFinished() {
     LOG_INFO("Step 2 Tagging & Cover Art inspection initialized. Loaded " + std::to_string(m_tagItems.size()) + " items into Inspector.");
 
-    for (auto& item : m_tagItems) {
-        if (!item.localCoverBytes.empty() && item.localTexture == NULL) {
-            item.localTexture = CreateTextureFromMemory(m_pd3dDevice, item.localCoverBytes.data(), item.localCoverBytes.size(), &item.localWidth, &item.localHeight);
-            if (item.localTexture) {
-                item.localScore = CalculateImageQualityScore(item.localCoverBytes.data(), item.localCoverBytes.size(), item.localWidth, item.localHeight);
-            }
-        }
-        if (!item.onlineCoverBytes.empty() && item.onlineTexture == NULL) {
-            item.onlineTexture = CreateTextureFromMemory(m_pd3dDevice, item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), &item.onlineWidth, &item.onlineHeight);
-            if (item.onlineTexture) {
-                item.onlineScore = CalculateImageQualityScore(item.onlineCoverBytes.data(), item.onlineCoverBytes.size(), item.onlineWidth, item.onlineHeight);
-            }
-        }
-    }
+    // Textures are now created lazily in the render loop for the current item only
 
     if (!m_tagItems.empty()) {
         m_currentTagIndex = 0;
