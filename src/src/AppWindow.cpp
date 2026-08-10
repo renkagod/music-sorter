@@ -1558,14 +1558,22 @@ void AppWindow::RunMessageLoop() {
                             }
                         }
 
-                        // 3. Fetch Cover Art from CoverArtArchive.org if Release ID was found
+                        // 3. Fetch Cover Art from CoverArtArchive.org if Release ID was found (Prioritize Original Ultra-High Res /front)
                         if (!releaseGroupMbId.empty()) {
-                            LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive image...");
-                            std::wstring caaUrl = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-500");
+                            LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive original full-res image...");
+                            std::wstring caaUrl = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front");
                             coverData = HttpGetBytes(caaUrl);
                             if (coverData.empty()) {
-                                std::wstring caaRelUrl = Utf8ToWide("https://coverartarchive.org/release/" + releaseGroupMbId + "/front-500");
+                                std::wstring caaRelUrl = Utf8ToWide("https://coverartarchive.org/release/" + releaseGroupMbId + "/front");
                                 coverData = HttpGetBytes(caaRelUrl);
+                            }
+                            if (coverData.empty()) {
+                                std::wstring caaUrl500 = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-500");
+                                coverData = HttpGetBytes(caaUrl500);
+                            }
+                            if (coverData.empty()) {
+                                std::wstring caaRelUrl500 = Utf8ToWide("https://coverartarchive.org/release/" + releaseGroupMbId + "/front-500");
+                                coverData = HttpGetBytes(caaRelUrl500);
                             }
 
                             if (!coverData.empty()) {
