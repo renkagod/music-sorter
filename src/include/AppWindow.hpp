@@ -100,4 +100,11 @@ private:
 
     // Console Log Auto-Scroll State
     bool m_logAutoScroll = true;
+
+    // Folder Settings Buffers
+    char m_toSortBuf[512] = {0};
+    char m_outputBuf[512] = {0};
+    char m_flacBuf[512] = {0};
+    char m_mp3Buf[512] = {0};
+    bool m_foldersInited = false;
 };

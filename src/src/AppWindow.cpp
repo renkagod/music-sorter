@@ -12,6 +12,7 @@
 #include "../third_party/imgui/imgui_impl_dx11.h"
 
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <wininet.h>
 #include <thread>
 #include <future>
@@ -30,8 +31,96 @@ namespace fs = std::filesystem;
 extern std::string g_BaseDir;
 extern std::string g_ToSortDir;
 extern std::string g_DeleteDir;
+extern std::string g_OutputDir;
+extern std::string g_FlacDir;
+extern std::string g_Mp3Dir;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+static std::string WideToUtf8Str(const wchar_t* wstr) {
+    if (!wstr) return "";
+    int len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
+    if (len <= 0) return "";
+    std::string result(len - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wstr, -1, result.data(), len, NULL, NULL);
+    return result;
+}
+
+static std::string BrowseFolderDialog(HWND owner, const std::string& title) {
+    HRESULT hrCo = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    bool needCoUninit = (hrCo == S_OK || hrCo == S_FALSE);
+
+    IFileDialog* pfd = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pfd));
+    if (FAILED(hr) || !pfd) {
+        if (needCoUninit) CoUninitialize();
+        return "";
+    }
+
+    DWORD flags = 0;
+    pfd->GetOptions(&flags);
+    pfd->SetOptions(flags | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+
+    if (!title.empty()) {
+        std::wstring wtitle(title.begin(), title.end());
+        pfd->SetTitle(wtitle.c_str());
+    }
+
+    hr = pfd->Show(owner);
+    if (FAILED(hr)) { pfd->Release(); if (needCoUninit) CoUninitialize(); return ""; }
+
+    IShellItem* psi = nullptr;
+    hr = pfd->GetResult(&psi);
+    if (FAILED(hr) || !psi) { pfd->Release(); if (needCoUninit) CoUninitialize(); return ""; }
+
+    PWSTR path = nullptr;
+    hr = psi->GetDisplayName(SIGDN_FILESYSPATH, &path);
+    std::string result;
+    if (SUCCEEDED(hr) && path) {
+        result = WideToUtf8Str(path);
+        CoTaskMemFree(path);
+    }
+    psi->Release();
+    pfd->Release();
+    if (needCoUninit) CoUninitialize();
+    return result;
+}
+
+static void SaveFolderSettings() {
+    fs::path cfgPath = fs::path(g_BaseDir) / "folders.cfg";
+    std::ofstream out(cfgPath);
+    if (!out.is_open()) return;
+    out << "tosort=" << g_ToSortDir << "\n";
+    out << "output=" << g_OutputDir << "\n";
+    out << "flac=" << g_FlacDir << "\n";
+    out << "mp3=" << g_Mp3Dir << "\n";
+    out.close();
+    LOG_INFO("[FOLDERS] Settings saved to folders.cfg");
+}
+
+static void LoadFolderSettings() {
+    fs::path cfgPath = fs::path(g_BaseDir) / "folders.cfg";
+    if (!fs::exists(cfgPath)) return;
+    std::ifstream in(cfgPath);
+    if (!in.is_open()) return;
+    std::string line;
+    while (std::getline(in, line)) {
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+        if (key == "tosort" && !val.empty()) g_ToSortDir = val;
+        else if (key == "output" && !val.empty()) g_OutputDir = val;
+        else if (key == "flac" && !val.empty()) g_FlacDir = val;
+        else if (key == "mp3" && !val.empty()) g_Mp3Dir = val;
+    }
+    in.close();
+    LOG_INFO("[FOLDERS] Loaded settings from folders.cfg");
+    LOG_INFO("[FOLDERS] TO SORT: " + g_ToSortDir);
+    LOG_INFO("[FOLDERS] Output: " + g_OutputDir);
+    LOG_INFO("[FOLDERS] FLAC: " + g_FlacDir);
+    LOG_INFO("[FOLDERS] MP3: " + g_Mp3Dir);
+}
 
 struct MBTrackEntry {
     int position = 0;
@@ -1039,8 +1128,8 @@ static std::string FetchLrcLibSyncedLyrics(const std::string& artist, const std:
 // Stage 3: Pure Native C++20 FLAC / MP3 Mirroring
 static void NativeMirrorCollections() {
     LOG_INFO("Step 3: Running native C++20 collection mirroring...");
-    fs::path flacRoot = fs::path(g_BaseDir) / "flac";
-    fs::path mp3Root = fs::path(g_BaseDir) / "mp3";
+    fs::path flacRoot = fs::path(g_FlacDir);
+    fs::path mp3Root = fs::path(g_Mp3Dir);
 
     fs::create_directories(flacRoot);
     fs::create_directories(mp3Root);
@@ -1237,8 +1326,8 @@ static void NativeSyncTracklistDatabase() {
     }
 
     std::vector<std::string> scannedNormKeys;
-    for (const auto& sub : { "flac", "mp3", "TO SORT", "review" }) {
-        fs::path dir = fs::path(g_BaseDir) / sub;
+    std::vector<fs::path> scanDirs = { fs::path(g_FlacDir), fs::path(g_Mp3Dir), fs::path(g_ToSortDir), fs::path(g_BaseDir) / "review" };
+    for (const auto& dir : scanDirs) {
         if (fs::exists(dir)) {
             for (auto& entry : fs::recursive_directory_iterator(dir)) {
                 if (entry.is_regular_file()) {
@@ -1347,6 +1436,8 @@ void AppWindow::CleanupRenderTarget() {
 
 bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     m_hInstance = hInstance;
+
+    LoadFolderSettings();
 
     WNDCLASSEXW wcex = { sizeof(WNDCLASSEXW) };
     wcex.style = CS_CLASSDC;
@@ -1552,6 +1643,79 @@ void AppWindow::RunMessageLoop() {
 
         // Header Section
         ImGui::TextDisabled("MusicSorter Studio");
+        ImGui::Separator();
+
+        // Folder Settings Panel
+        if (!m_foldersInited) {
+            strncpy_s(m_toSortBuf, g_ToSortDir.c_str(), sizeof(m_toSortBuf) - 1);
+            strncpy_s(m_outputBuf, g_OutputDir.c_str(), sizeof(m_outputBuf) - 1);
+            strncpy_s(m_flacBuf, g_FlacDir.c_str(), sizeof(m_flacBuf) - 1);
+            strncpy_s(m_mp3Buf, g_Mp3Dir.c_str(), sizeof(m_mp3Buf) - 1);
+            m_foldersInited = true;
+        }
+
+        if (ImGui::CollapsingHeader("Папки")) {
+            ImGui::PushItemWidth(420);
+
+            ImGui::Text("TO SORT (вход):");
+            ImGui::InputText("##ToSortPath", m_toSortBuf, sizeof(m_toSortBuf));
+            ImGui::SameLine();
+            if (ImGui::Button("Обзор##ToSortBrowse")) {
+                std::string picked = BrowseFolderDialog(m_hWnd, "Выберите папку TO SORT");
+                if (!picked.empty()) {
+                    strncpy_s(m_toSortBuf, picked.c_str(), sizeof(m_toSortBuf) - 1);
+                }
+            }
+
+            ImGui::Text("Вывод (базовая):");
+            ImGui::InputText("##OutputPath", m_outputBuf, sizeof(m_outputBuf));
+            ImGui::SameLine();
+            if (ImGui::Button("Обзор##OutputBrowse")) {
+                std::string picked = BrowseFolderDialog(m_hWnd, "Выберите папку вывода");
+                if (!picked.empty()) {
+                    strncpy_s(m_outputBuf, picked.c_str(), sizeof(m_outputBuf) - 1);
+                    strncpy_s(m_flacBuf, (fs::path(picked) / "flac").string().c_str(), sizeof(m_flacBuf) - 1);
+                    strncpy_s(m_mp3Buf, (fs::path(picked) / "mp3").string().c_str(), sizeof(m_mp3Buf) - 1);
+                }
+            }
+
+            ImGui::Text("FLAC вывод:");
+            ImGui::InputText("##FlacPath", m_flacBuf, sizeof(m_flacBuf));
+            ImGui::SameLine();
+            if (ImGui::Button("Обзор##FlacBrowse")) {
+                std::string picked = BrowseFolderDialog(m_hWnd, "Выберите папку FLAC");
+                if (!picked.empty()) {
+                    strncpy_s(m_flacBuf, picked.c_str(), sizeof(m_flacBuf) - 1);
+                }
+            }
+
+            ImGui::Text("MP3 вывод:");
+            ImGui::InputText("##Mp3Path", m_mp3Buf, sizeof(m_mp3Buf));
+            ImGui::SameLine();
+            if (ImGui::Button("Обзор##Mp3Browse")) {
+                std::string picked = BrowseFolderDialog(m_hWnd, "Выберите папку MP3");
+                if (!picked.empty()) {
+                    strncpy_s(m_mp3Buf, picked.c_str(), sizeof(m_mp3Buf) - 1);
+                }
+            }
+
+            ImGui::PopItemWidth();
+
+            if (ImGui::Button("Сохранить пути")) {
+                g_ToSortDir = std::string(m_toSortBuf);
+                g_OutputDir = std::string(m_outputBuf);
+                g_FlacDir = std::string(m_flacBuf);
+                g_Mp3Dir = std::string(m_mp3Buf);
+                SaveFolderSettings();
+            }
+        }
+
+        // Sync buffers to globals every frame so all stages use live paths
+        g_ToSortDir = std::string(m_toSortBuf);
+        g_OutputDir = std::string(m_outputBuf);
+        g_FlacDir = std::string(m_flacBuf);
+        g_Mp3Dir = std::string(m_mp3Buf);
+
         ImGui::Separator();
 
         // Clean Non-Cringe Stage Switcher Buttons
@@ -2068,7 +2232,7 @@ void AppWindow::RunMessageLoop() {
                 std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
                 DatabaseManager::GetInstance().InitDatabase(dbPath);
                 DatabaseManager::GetInstance().ImportFromTracklistMarkdown((fs::path(g_BaseDir) / "tracklist.md").string());
-                DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir);
+                DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir, g_FlacDir, g_Mp3Dir, g_ToSortDir);
             }).detach();
         }
         if (pushed3) ImGui::PopStyleColor();
@@ -2331,8 +2495,8 @@ void AppWindow::RunMessageLoop() {
                         std::string ext = srcFile.extension().string();
                         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-                        fs::path flacDir = fs::path(g_BaseDir) / "flac" / newArtist / newAlbum;
-                        fs::path mp3Dir  = fs::path(g_BaseDir) / "mp3" / newArtist / newAlbum;
+                        fs::path flacDir = fs::path(g_FlacDir) / newArtist / newAlbum;
+                        fs::path mp3Dir  = fs::path(g_Mp3Dir) / newArtist / newAlbum;
                         fs::create_directories(flacDir);
                         fs::create_directories(mp3Dir);
 
@@ -2481,7 +2645,7 @@ void AppWindow::RunMessageLoop() {
                     std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
                     DatabaseManager::GetInstance().InitDatabase(dbPath);
                     DatabaseManager::GetInstance().ImportFromTracklistMarkdown((fs::path(g_BaseDir) / "tracklist.md").string());
-                    DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir);
+                    DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir, g_FlacDir, g_Mp3Dir, g_ToSortDir);
                 }).detach();
             }
 

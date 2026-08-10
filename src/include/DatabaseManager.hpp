@@ -25,7 +25,7 @@ public:
     void CloseDatabase();
 
     bool ImportFromTracklistMarkdown(const std::string& tracklistPath);
-    void SyncCollectionWithDisk(const std::string& baseDir);
+    void SyncCollectionWithDisk(const std::string& baseDir, const std::string& flacDir, const std::string& mp3Dir, const std::string& toSortDir);
 
     std::vector<TrackRecord> QueryTracks(int filterStatus, int filterFormat, const std::string& searchQuery);
     bool ExportToCleanTracklistMarkdown(const std::string& tracklistPath);

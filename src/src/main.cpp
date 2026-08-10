@@ -12,6 +12,9 @@ namespace fs = std::filesystem;
 std::string g_BaseDir;
 std::string g_ToSortDir;
 std::string g_DeleteDir;
+std::string g_OutputDir;
+std::string g_FlacDir;
+std::string g_Mp3Dir;
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     char exe_path[MAX_PATH];
@@ -26,12 +29,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (fs::exists(fpcalcBin)) g_BaseDir = p.parent_path().parent_path().string();
     }
 
+    g_OutputDir = g_BaseDir;
     g_ToSortDir = (fs::path(g_BaseDir) / "TO SORT").string();
     g_DeleteDir = (fs::path(g_BaseDir) / "delete").string();
+    g_FlacDir = (fs::path(g_OutputDir) / "flac").string();
+    g_Mp3Dir = (fs::path(g_OutputDir) / "mp3").string();
 
     LOG_INFO("=== Starting MusicSorter Native ImGui C++ Studio ===");
     LOG_INFO("Base Directory: " + g_BaseDir);
+    LOG_INFO("Output Directory: " + g_OutputDir);
     LOG_INFO("TO SORT Directory: " + g_ToSortDir);
+    LOG_INFO("FLAC Output: " + g_FlacDir);
+    LOG_INFO("MP3 Output: " + g_Mp3Dir);
     LOG_INFO("fpcalc Binary: " + fpcalcBin);
 
     AcousticAnalyzer::Instance().SetFpcalcPath(fpcalcBin);

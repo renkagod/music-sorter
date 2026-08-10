@@ -170,7 +170,7 @@ bool DatabaseManager::ImportFromTracklistMarkdown(const std::string& tracklistPa
     return true;
 }
 
-void DatabaseManager::SyncCollectionWithDisk(const std::string& baseDir) {
+void DatabaseManager::SyncCollectionWithDisk(const std::string& baseDir, const std::string& flacDir, const std::string& mp3Dir, const std::string& toSortDir) {
     if (!m_db) return;
 
     sqlite3_exec((sqlite3*)m_db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
@@ -186,52 +186,58 @@ void DatabaseManager::SyncCollectionWithDisk(const std::string& baseDir) {
 
     int diskSyncCount = 0;
 
-    for (const auto& sub : { "flac", "mp3", "TO SORT", "review" }) {
-        fs::path dir = fs::path(baseDir) / sub;
-        if (fs::exists(dir)) {
-            for (auto& entry : fs::recursive_directory_iterator(dir)) {
-                if (entry.is_regular_file()) {
-                    std::string ext = entry.path().extension().string();
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if (ext == ".flac" || ext == ".mp3") {
-                        std::string album = entry.path().parent_path().filename().string();
-                        std::string artist = entry.path().parent_path().parent_path().filename().string();
-                        std::string filename = entry.path().stem().string();
-                        std::string trackNo = "";
-                        std::string title = filename;
+    struct ScanEntry { fs::path dir; std::string label; bool isToSort; };
+    std::vector<ScanEntry> scanDirs;
+    if (!flacDir.empty()) scanDirs.push_back({ fs::path(flacDir), "flac", false });
+    if (!mp3Dir.empty()) scanDirs.push_back({ fs::path(mp3Dir), "mp3", false });
+    if (!toSortDir.empty()) scanDirs.push_back({ fs::path(toSortDir), "TO SORT", true });
+    scanDirs.push_back({ fs::path(baseDir) / "review", "review", false });
 
-                        size_t dotPos = filename.find(". ");
-                        if (dotPos == std::string::npos) dotPos = filename.find("- ");
-                        if (dotPos != std::string::npos && dotPos <= 4 && !filename.empty() && std::isdigit((unsigned char)filename[0])) {
-                            trackNo = filename.substr(0, dotPos);
-                            title = filename.substr(dotPos + 2);
-                        }
+    for (const auto& se : scanDirs) {
+        if (!fs::exists(se.dir)) continue;
+        for (auto& entry : fs::recursive_directory_iterator(se.dir)) {
+            if (entry.is_regular_file()) {
+                std::string ext = entry.path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".flac" || ext == ".mp3") {
+                    std::string album = entry.path().parent_path().filename().string();
+                    std::string artist = entry.path().parent_path().parent_path().filename().string();
+                    std::string filename = entry.path().stem().string();
+                    std::string trackNo = "";
+                    std::string title = filename;
 
-                        if (artist.empty() || artist == "TO SORT" || artist == "media" || artist == "music") {
-                            artist = "Unknown Artist";
-                        }
-                        if (album.empty() || album == "TO SORT") {
-                            album = "Unknown Album";
-                        }
-
-                        std::string fmt = (ext == ".flac") ? "FLAC" : "MP3";
-                        int bitrate = (ext == ".flac") ? 1411 : 320;
-                        std::string relP = fs::relative(entry.path(), baseDir).string();
-
-                        sqlite3_bind_text(stmt, 1, artist.c_str(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(stmt, 2, album.c_str(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(stmt, 4, trackNo.c_str(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(stmt, 5, "", -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_int(stmt, 6, 0);
-                        sqlite3_bind_text(stmt, 7, fmt.c_str(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_int(stmt, 8, bitrate);
-                        sqlite3_bind_text(stmt, 9, relP.c_str(), -1, SQLITE_TRANSIENT);
-
-                        sqlite3_step(stmt);
-                        sqlite3_reset(stmt);
-                        diskSyncCount++;
+                    size_t dotPos = filename.find(". ");
+                    if (dotPos == std::string::npos) dotPos = filename.find("- ");
+                    if (dotPos != std::string::npos && dotPos <= 4 && !filename.empty() && std::isdigit((unsigned char)filename[0])) {
+                        trackNo = filename.substr(0, dotPos);
+                        title = filename.substr(dotPos + 2);
                     }
+
+                    if (artist.empty() || artist == "TO SORT" || artist == "media" || artist == "music" || se.label == "TO SORT") {
+                        artist = "Unknown Artist";
+                    }
+                    if (album.empty() || album == "TO SORT" || se.label == "TO SORT") {
+                        album = "Unknown Album";
+                    }
+
+                    std::string fmt = (ext == ".flac") ? "FLAC" : "MP3";
+                    int bitrate = (ext == ".flac") ? 1411 : 320;
+                    std::string relP = (se.label == "review") ? fs::relative(entry.path(), baseDir).string()
+                                                              : (se.label + "/" + fs::relative(entry.path(), se.dir).string());
+
+                    sqlite3_bind_text(stmt, 1, artist.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(stmt, 2, album.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(stmt, 4, trackNo.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(stmt, 5, "", -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int(stmt, 6, 0);
+                    sqlite3_bind_text(stmt, 7, fmt.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int(stmt, 8, bitrate);
+                    sqlite3_bind_text(stmt, 9, relP.c_str(), -1, SQLITE_TRANSIENT);
+
+                    sqlite3_step(stmt);
+                    sqlite3_reset(stmt);
+                    diskSyncCount++;
                 }
             }
         }

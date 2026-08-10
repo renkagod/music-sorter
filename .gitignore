@@ -32,3 +32,5 @@ CMakeFiles/
 .system_generated/
 .user_uploaded/
 .agents/
+folders.cfg
+imgui.ini
