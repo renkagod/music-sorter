@@ -86,6 +86,16 @@ static std::string BrowseFolderDialog(HWND owner, const std::string& title) {
     return result;
 }
 
+static void LaunchBrowseThread(HWND hwnd, int target, const std::string& title) {
+    std::thread([hwnd, target, title]() {
+        std::string result = BrowseFolderDialog(hwnd, title);
+        if (!result.empty()) {
+            std::string* pStr = new std::string(result);
+            PostMessageW(hwnd, WM_BROWSE_RESULT, (WPARAM)target, (LPARAM)pStr);
+        }
+    }).detach();
+}
+
 static void SaveFolderSettings() {
     fs::path cfgPath = fs::path(g_BaseDir) / "folders.cfg";
     std::ofstream out(cfgPath);
@@ -1661,42 +1671,28 @@ void AppWindow::RunMessageLoop() {
             ImGui::InputText("##ToSortPath", m_toSortBuf, sizeof(m_toSortBuf));
             ImGui::SameLine();
             if (ImGui::Button("Обзор##ToSortBrowse")) {
-                std::string picked = BrowseFolderDialog(m_hWnd, "Выберите папку TO SORT");
-                if (!picked.empty()) {
-                    strncpy_s(m_toSortBuf, picked.c_str(), sizeof(m_toSortBuf) - 1);
-                }
+                LaunchBrowseThread(m_hWnd, 0, "Выберите папку TO SORT");
             }
 
             ImGui::Text("Вывод (базовая):");
             ImGui::InputText("##OutputPath", m_outputBuf, sizeof(m_outputBuf));
             ImGui::SameLine();
             if (ImGui::Button("Обзор##OutputBrowse")) {
-                std::string picked = BrowseFolderDialog(m_hWnd, "Выберите папку вывода");
-                if (!picked.empty()) {
-                    strncpy_s(m_outputBuf, picked.c_str(), sizeof(m_outputBuf) - 1);
-                    strncpy_s(m_flacBuf, (fs::path(picked) / "flac").string().c_str(), sizeof(m_flacBuf) - 1);
-                    strncpy_s(m_mp3Buf, (fs::path(picked) / "mp3").string().c_str(), sizeof(m_mp3Buf) - 1);
-                }
+                LaunchBrowseThread(m_hWnd, 1, "Выберите папку вывода");
             }
 
             ImGui::Text("FLAC вывод:");
             ImGui::InputText("##FlacPath", m_flacBuf, sizeof(m_flacBuf));
             ImGui::SameLine();
             if (ImGui::Button("Обзор##FlacBrowse")) {
-                std::string picked = BrowseFolderDialog(m_hWnd, "Выберите папку FLAC");
-                if (!picked.empty()) {
-                    strncpy_s(m_flacBuf, picked.c_str(), sizeof(m_flacBuf) - 1);
-                }
+                LaunchBrowseThread(m_hWnd, 2, "Выберите папку FLAC");
             }
 
             ImGui::Text("MP3 вывод:");
             ImGui::InputText("##Mp3Path", m_mp3Buf, sizeof(m_mp3Buf));
             ImGui::SameLine();
             if (ImGui::Button("Обзор##Mp3Browse")) {
-                std::string picked = BrowseFolderDialog(m_hWnd, "Выберите папку MP3");
-                if (!picked.empty()) {
-                    strncpy_s(m_mp3Buf, picked.c_str(), sizeof(m_mp3Buf) - 1);
-                }
+                LaunchBrowseThread(m_hWnd, 3, "Выберите папку MP3");
             }
 
             ImGui::PopItemWidth();
@@ -2803,6 +2799,30 @@ LRESULT CALLBACK AppWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
     case WM_TAG_SCAN_FINISHED:
         Instance().HandleTagScanFinished();
         return 0;
+    case WM_BROWSE_RESULT: {
+        int target = (int)wParam;
+        std::string* pResult = (std::string*)lParam;
+        auto& app = Instance();
+        std::string result = pResult ? *pResult : "";
+        delete pResult;
+        switch (target) {
+            case 0:
+                strncpy_s(app.m_toSortBuf, result.c_str(), sizeof(app.m_toSortBuf) - 1);
+                break;
+            case 1:
+                strncpy_s(app.m_outputBuf, result.c_str(), sizeof(app.m_outputBuf) - 1);
+                strncpy_s(app.m_flacBuf, (fs::path(result) / "flac").string().c_str(), sizeof(app.m_flacBuf) - 1);
+                strncpy_s(app.m_mp3Buf, (fs::path(result) / "mp3").string().c_str(), sizeof(app.m_mp3Buf) - 1);
+                break;
+            case 2:
+                strncpy_s(app.m_flacBuf, result.c_str(), sizeof(app.m_flacBuf) - 1);
+                break;
+            case 3:
+                strncpy_s(app.m_mp3Buf, result.c_str(), sizeof(app.m_mp3Buf) - 1);
+                break;
+        }
+        return 0;
+    }
     case WM_SIZE:
         if (Instance().m_pd3dDevice != NULL && wParam != SIZE_MINIMIZED) {
             Instance().CleanupRenderTarget();

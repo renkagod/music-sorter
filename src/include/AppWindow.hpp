@@ -9,6 +9,7 @@
 #define WM_SCAN_PROGRESS     (WM_USER + 101)
 #define WM_SCAN_FINISHED     (WM_USER + 102)
 #define WM_TAG_SCAN_FINISHED (WM_USER + 103)
+#define WM_BROWSE_RESULT     (WM_USER + 104)
 
 struct TagReviewItem {
     std::string filePath;
