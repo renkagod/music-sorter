@@ -1553,7 +1553,8 @@ void AppWindow::RunMessageLoop() {
                         std::string artistClean(item.artistBuf);
                         std::string albumClean(item.albumBuf);
                         std::string titleClean(item.titleBuf);
-                        std::string albumKey = artistClean + "___" + albumClean;
+                        std::string folderStr = fs::path(files[i]).parent_path().string();
+                        std::string albumKey = NormalizeKey(folderStr) + "_" + NormalizeKey(albumClean);
 
                         std::string releaseGroupMbId;
                         std::string firstReleaseDate;
@@ -1871,10 +1872,11 @@ void AppWindow::RunMessageLoop() {
                             }
                             
                             // Apply track match for current item and all items matching albumKey
-                            for (auto& albItem : m_tagItems) {
-                                std::string aKey = std::string(albItem.artistBuf) + "___" + std::string(albItem.albumBuf);
+                            for (size_t k = 0; k < files.size(); ++k) {
+                                std::string fPath = fs::path(files[k]).parent_path().string();
+                                std::string aKey = NormalizeKey(fPath) + "_" + NormalizeKey(m_tagItems[k].albumBuf);
                                 if (aKey == albumKey) {
-                                    ApplyTrackMatch(albItem, mbTracks);
+                                    ApplyTrackMatch(m_tagItems[k], mbTracks);
                                 }
                             }
                             
