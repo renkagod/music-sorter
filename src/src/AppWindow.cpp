@@ -1438,14 +1438,37 @@ void AppWindow::RunMessageLoop() {
                                         if (aendPos != std::string::npos) {
                                             std::string candMbId = mbAlbumRes.substr(aidPos, aendPos - aidPos);
                                             if (candMbId.length() == 36) {
-                                                releaseGroupMbId = candMbId;
-                                                isMatched = true;
-                                                LOG_INFO("[MUSICBRAINZ TIER B SUCCESS] MBID: " + releaseGroupMbId);
+                                                bool artistMatched = true;
+                                                if (!artistClean.empty() && artistClean != "Unknown Artist") {
+                                                    std::string baseArtist = artistClean;
+                                                    size_t semiPos = baseArtist.find(';');
+                                                    if (semiPos != std::string::npos) baseArtist = baseArtist.substr(0, semiPos);
+                                                    while (!baseArtist.empty() && (baseArtist.back() == ' ' || baseArtist.back() == '\t')) baseArtist.pop_back();
+
+                                                    size_t acPos = mbAlbumRes.find("\"artist-credit\":", argPos);
+                                                    if (acPos != std::string::npos && !baseArtist.empty()) {
+                                                        std::string acChunk = mbAlbumRes.substr(acPos, 600);
+                                                        std::string acLower = acChunk;
+                                                        std::transform(acLower.begin(), acLower.end(), acLower.begin(), ::tolower);
+                                                        std::string baseLower = baseArtist;
+                                                        std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), ::tolower);
+                                                        if (acLower.find(baseLower) == std::string::npos) {
+                                                            artistMatched = false;
+                                                            LOG_INFO("[MUSICBRAINZ TIER B REJECTED] Mismatched artist credit for release:" + albumClean + " (Expected: " + baseArtist + ")");
+                                                        }
+                                                    }
+                                                }
+
+                                                if (artistMatched) {
+                                                    releaseGroupMbId = candMbId;
+                                                    isMatched = true;
+                                                    LOG_INFO("[MUSICBRAINZ TIER B SUCCESS] MBID: " + releaseGroupMbId);
+                                                }
                                             }
                                         }
                                     }
                                     size_t datePos = mbAlbumRes.find("\"first-release-date\":\"", argPos);
-                                    if (datePos != std::string::npos) {
+                                    if (datePos != std::string::npos && isMatched) {
                                         datePos += 22;
                                         size_t dendPos = mbAlbumRes.find("\"", datePos);
                                         if (dendPos != std::string::npos) {
@@ -1471,14 +1494,37 @@ void AppWindow::RunMessageLoop() {
                                         if (lendPos != std::string::npos) {
                                             std::string candMbId = mbLooseRes.substr(lidPos, lendPos - lidPos);
                                             if (candMbId.length() == 36) {
-                                                releaseGroupMbId = candMbId;
-                                                isMatched = true;
-                                                LOG_INFO("[MUSICBRAINZ TIER C SUCCESS] MBID: " + releaseGroupMbId);
+                                                bool artistMatched = true;
+                                                if (!artistClean.empty() && artistClean != "Unknown Artist") {
+                                                    std::string baseArtist = artistClean;
+                                                    size_t semiPos = baseArtist.find(';');
+                                                    if (semiPos != std::string::npos) baseArtist = baseArtist.substr(0, semiPos);
+                                                    while (!baseArtist.empty() && (baseArtist.back() == ' ' || baseArtist.back() == '\t')) baseArtist.pop_back();
+
+                                                    size_t acPos = mbLooseRes.find("\"artist-credit\":", lrgPos);
+                                                    if (acPos != std::string::npos && !baseArtist.empty()) {
+                                                        std::string acChunk = mbLooseRes.substr(acPos, 600);
+                                                        std::string acLower = acChunk;
+                                                        std::transform(acLower.begin(), acLower.end(), acLower.begin(), ::tolower);
+                                                        std::string baseLower = baseArtist;
+                                                        std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), ::tolower);
+                                                        if (acLower.find(baseLower) == std::string::npos) {
+                                                            artistMatched = false;
+                                                            LOG_INFO("[MUSICBRAINZ TIER C REJECTED] Mismatched artist credit for loose query (Expected: " + baseArtist + ")");
+                                                        }
+                                                    }
+                                                }
+
+                                                if (artistMatched) {
+                                                    releaseGroupMbId = candMbId;
+                                                    isMatched = true;
+                                                    LOG_INFO("[MUSICBRAINZ TIER C SUCCESS] MBID: " + releaseGroupMbId);
+                                                }
                                             }
                                         }
                                     }
                                     size_t datePos = mbLooseRes.find("\"first-release-date\":\"", lrgPos);
-                                    if (datePos != std::string::npos) {
+                                    if (datePos != std::string::npos && isMatched) {
                                         datePos += 22;
                                         size_t dendPos = mbLooseRes.find("\"", datePos);
                                         if (dendPos != std::string::npos) {
