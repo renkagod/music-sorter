@@ -1604,12 +1604,17 @@ void AppWindow::RunMessageLoop() {
         auto MakeDecisionA = [this]() {
             if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
                 auto& pair = m_candidates[m_currentCandidateIndex];
-                fs::path rel = fs::relative(pair.trackB_path, g_BaseDir);
+                fs::path toSortParent = fs::path(g_ToSortDir).parent_path();
+                fs::path rel = fs::relative(pair.trackB_path, toSortParent);
                 fs::path dst = fs::path(g_DeleteDir) / rel;
                 fs::create_directories(dst.parent_path());
                 LOG_INFO("[DECISION] Keeping Track A. Moving rejected Track B to delete/: " + rel.string());
-                if (fs::exists(dst)) fs::remove(dst);
-                fs::rename(pair.trackB_path, dst);
+                try {
+                    if (fs::exists(dst)) fs::remove(dst);
+                    fs::rename(pair.trackB_path, dst);
+                } catch (const std::exception& ex) {
+                    LOG_WARN("[DECISION] Failed moving Track B: " + std::string(ex.what()));
+                }
 
                 m_currentCandidateIndex++;
                 if (m_currentCandidateIndex < m_candidates.size()) {
@@ -1623,12 +1628,17 @@ void AppWindow::RunMessageLoop() {
         auto MakeDecisionB = [this]() {
             if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
                 auto& pair = m_candidates[m_currentCandidateIndex];
-                fs::path rel = fs::relative(pair.trackA_path, g_BaseDir);
+                fs::path toSortParent = fs::path(g_ToSortDir).parent_path();
+                fs::path rel = fs::relative(pair.trackA_path, toSortParent);
                 fs::path dst = fs::path(g_DeleteDir) / rel;
                 fs::create_directories(dst.parent_path());
                 LOG_INFO("[DECISION] Keeping Track B. Moving rejected Track A to delete/: " + rel.string());
-                if (fs::exists(dst)) fs::remove(dst);
-                fs::rename(pair.trackA_path, dst);
+                try {
+                    if (fs::exists(dst)) fs::remove(dst);
+                    fs::rename(pair.trackA_path, dst);
+                } catch (const std::exception& ex) {
+                    LOG_WARN("[DECISION] Failed moving Track A: " + std::string(ex.what()));
+                }
 
                 m_currentCandidateIndex++;
                 if (m_currentCandidateIndex < m_candidates.size()) {
@@ -1711,6 +1721,7 @@ void AppWindow::RunMessageLoop() {
         g_OutputDir = std::string(m_outputBuf);
         g_FlacDir = std::string(m_flacBuf);
         g_Mp3Dir = std::string(m_mp3Buf);
+        g_DeleteDir = (fs::path(g_ToSortDir).parent_path() / "delete").string();
 
         ImGui::Separator();
 
@@ -2843,15 +2854,38 @@ LRESULT CALLBACK AppWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
 void AppWindow::HandleScanFinished() {
     LOG_INFO("Scan process finished. Found " + std::to_string(m_candidates.size()) + " candidates for A/B comparison.");
 
-    for (const std::string& pathStr : m_autoDelete) {
+    // Deduplicate auto-delete list (same file may be matched against multiple others)
+    std::unordered_set<std::string> seen;
+    std::vector<std::string> uniqueAutoDelete;
+    for (const auto& pathStr : m_autoDelete) {
+        if (seen.insert(pathStr).second) {
+            uniqueAutoDelete.push_back(pathStr);
+        }
+    }
+
+    fs::path toSortParent = fs::path(g_ToSortDir).parent_path();
+
+    for (const std::string& pathStr : uniqueAutoDelete) {
         fs::path p(pathStr);
         if (fs::exists(p)) {
-            fs::path rel = fs::relative(p, fs::path(g_BaseDir));
+            fs::path rel = fs::relative(p, toSortParent);
             fs::path dst = fs::path(g_DeleteDir) / rel;
+
+            // Safety: never move a file onto itself
+            std::error_code ec;
+            if (fs::weakly_canonical(p, ec) == fs::weakly_canonical(dst, ec)) {
+                LOG_WARN("[AUTO-DELETE] Skipping self-move: " + rel.string());
+                continue;
+            }
+
             fs::create_directories(dst.parent_path());
-            LOG_INFO("[AUTO-DELETE] Moving 100% exact MP3 duplicate to delete/: " + rel.string());
-            if (fs::exists(dst)) fs::remove(dst);
-            fs::rename(p, dst);
+            LOG_INFO("[AUTO-DELETE] Moving exact duplicate to delete/: " + rel.string());
+            try {
+                if (fs::exists(dst)) fs::remove(dst);
+                fs::rename(p, dst);
+            } catch (const std::exception& ex) {
+                LOG_WARN("[AUTO-DELETE] Failed moving " + rel.string() + ": " + ex.what());
+            }
         }
     }
 

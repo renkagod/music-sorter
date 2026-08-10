@@ -195,9 +195,9 @@ void AcousticAnalyzer::AnalyzeDirectory(
 
                 // Auto-delete applies ONLY to:
                 // 1. Exact 96%+ identical wave matches
-                // 2. FLAC vs MP3 pairs (MP3 auto-deleted)
-                // 3. Explicit "- Copy" folders (copy auto-deleted)
-                if (sim >= 0.96 || isFlacMp3Pair || (sim >= 0.85 && isExplicitCopyFolder)) {
+                // 2. FLAC vs MP3 pairs that are 85%+ similar (MP3 auto-deleted) — previously deleted at ANY similarity!
+                // 3. Explicit "- Copy" folders that are 85%+ similar (copy auto-deleted)
+                if (sim >= 0.96 || (isFlacMp3Pair && sim >= 0.85) || (sim >= 0.85 && isExplicitCopyFolder)) {
                     std::string autoDelPath;
                     if (ext1 == ".flac" && ext2 == ".mp3") autoDelPath = f2.path;
                     else if (ext2 == ".flac" && ext1 == ".mp3") autoDelPath = f1.path;
