@@ -680,10 +680,7 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
     std::string resJson = HttpGetString(Utf8ToWide(url));
     if (resJson.empty()) return tracks;
 
-    size_t relsPos = resJson.find("\"releases\":");
-    if (relsPos == std::string::npos) return tracks;
-
-    size_t mediaPos = resJson.find("\"media\":", relsPos);
+    size_t mediaPos = resJson.find("\"media\":");
     if (mediaPos == std::string::npos) return tracks;
 
     size_t tracksPos = resJson.find("\"tracks\":", mediaPos);
@@ -710,24 +707,46 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
         }
 
         std::string title;
-        size_t titleIdx = block.find("\"title\":\"");
-        if (titleIdx != std::string::npos) {
-            titleIdx += 9;
-            size_t tendP = block.find("\"", titleIdx);
-            if (tendP != std::string::npos) {
-                title = block.substr(titleIdx, tendP - titleIdx);
+        size_t recIdx = block.find("\"recording\":");
+        if (recIdx != std::string::npos) {
+            size_t titleIdx = block.find("\"title\"", recIdx);
+            if (titleIdx != std::string::npos) {
+                size_t valStart = block.find('"', block.find(':', titleIdx) + 1);
+                if (valStart != std::string::npos) {
+                    valStart++;
+                    size_t tend = block.find('"', valStart);
+                    if (tend != std::string::npos) {
+                        title = block.substr(valStart, tend - valStart);
+                    }
+                }
+            }
+        }
+        if (title.empty()) {
+            size_t titleIdx = block.find("\"title\"");
+            if (titleIdx != std::string::npos) {
+                size_t valStart = block.find('"', block.find(':', titleIdx) + 1);
+                if (valStart != std::string::npos) {
+                    valStart++;
+                    size_t tend = block.find('"', valStart);
+                    if (tend != std::string::npos) {
+                        title = block.substr(valStart, tend - valStart);
+                    }
+                }
             }
         }
 
         std::string artist;
         size_t acIdx = block.find("\"artist-credit\":");
         if (acIdx != std::string::npos) {
-            size_t nameIdx = block.find("\"name\":\"", acIdx);
+            size_t nameIdx = block.find("\"name\"", acIdx);
             if (nameIdx != std::string::npos) {
-                nameIdx += 8;
-                size_t nendP = block.find("\"", nameIdx);
-                if (nendP != std::string::npos) {
-                    artist = block.substr(nameIdx, nendP - nameIdx);
+                size_t valStart = block.find('"', block.find(':', nameIdx) + 1);
+                if (valStart != std::string::npos) {
+                    valStart++;
+                    size_t nend = block.find('"', valStart);
+                    if (nend != std::string::npos) {
+                        artist = block.substr(valStart, nend - valStart);
+                    }
                 }
             }
         }
