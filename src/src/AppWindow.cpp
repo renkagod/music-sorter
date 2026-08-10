@@ -37,6 +37,7 @@ struct MBTrackEntry {
     int position = 0;
     std::string title;
     std::string artist;
+    int lengthMs = 0;
 };
 
 struct AlbumMetadataCache {
@@ -820,6 +821,9 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
             std::string title = tObj.get("title").strVal;
             if (title.empty()) title = tObj.get("recording").get("title").strVal;
 
+            int lengthMs = (int)tObj.get("length").numVal;
+            if (lengthMs == 0) lengthMs = (int)tObj.get("recording").get("length").numVal;
+
             std::string artist;
             const auto& ac = tObj.get("artist-credit");
             if (ac.type == JsonVal::Array && !ac.arrVal.empty()) {
@@ -832,7 +836,7 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
             }
 
             if (pos > 0 && !title.empty()) {
-                tracks.push_back({ pos, title, artist });
+                tracks.push_back({ pos, title, artist, lengthMs });
             }
         }
     }
@@ -843,6 +847,14 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
     if (mbTracks.empty()) return;
 
     std::string rawName = albItem.originalFilename;
+    int leadingTrackNo = 0;
+    try {
+        size_t d = rawName.find_first_of("._ -");
+        if (d != std::string::npos && d > 0 && d <= 3) {
+            leadingTrackNo = std::stoi(rawName.substr(0, d));
+        }
+    } catch (...) {}
+
     size_t dotPos = rawName.find_first_not_of("0123456789. -_");
     if (dotPos != std::string::npos && dotPos > 0 && dotPos < 6) {
         rawName = rawName.substr(dotPos);
@@ -860,6 +872,20 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
         std::string tTitleClean = NormalizeKey(t.title);
         std::string tArtistClean = NormalizeKey(t.artist);
 
+        // 1. Match by leading track number in filename
+        if (leadingTrackNo > 0 && leadingTrackNo == t.position) {
+            score += 50;
+        }
+
+        // 2. Match by audio length / duration (within 3 seconds)
+        if (albItem.duration > 0 && t.lengthMs > 0) {
+            double tSec = (double)t.lengthMs / 1000.0;
+            if (std::abs(albItem.duration - tSec) <= 3.0) {
+                score += 40;
+            }
+        }
+
+        // 3. Match by track title
         if (tTitleClean.length() >= 3) {
             if (!tTitleClean.empty() && (rawClean.find(tTitleClean) != std::string::npos || (rawClean.length() >= 4 && tTitleClean.find(rawClean) != std::string::npos))) {
                 score += 60;
@@ -870,6 +896,7 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
             }
         }
 
+        // 4. Match by artist name
         if (!tArtistClean.empty() && tArtistClean != "variousartists" && tArtistClean != "va") {
             if (tArtistClean.length() >= 3 && rawClean.find(tArtistClean) != std::string::npos) {
                 score += 40;
@@ -1683,6 +1710,7 @@ void AppWindow::RunMessageLoop() {
                         // 1. AcoustID Fingerprint Lookup via HTTP POST (Fixes HTTP 414 Request-URI Too Long!)
                         std::this_thread::sleep_for(std::chrono::milliseconds(200));
                         auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(files[i]);
+                        item.duration = fpInfo.duration;
                         if (!fpInfo.fpData.empty()) {
                             LOG_INFO("[ACOUSTID FINGERPRINT] Extracted " + std::to_string(fpInfo.fpData.size()) + " frames, duration " + std::to_string(fpInfo.duration) + "s for " + item.originalFilename);
                             

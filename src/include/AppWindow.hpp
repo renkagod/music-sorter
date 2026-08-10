@@ -31,6 +31,7 @@ struct TagReviewItem {
     bool isMusicBrainzMatched = false;
     bool isFetchCompleted = false;
     bool hasLyrics = false;
+    double duration = 0.0;
 
     std::string localCoverPath;
     std::string onlineCoverUrl;
