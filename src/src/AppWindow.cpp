@@ -118,6 +118,63 @@ static std::string ExtractYearFromString(const std::string& str) {
     return "";
 }
 
+static std::string RomajiToKatakana(const std::string& input) {
+    if (input.empty()) return "";
+    std::string lower = input;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    static const std::pair<const char*, const char*> table[] = {
+        {"tsu", "ツ"}, {"chi", "チ"}, {"shi", "シ"},
+        {"kya", "キャ"}, {"kyu", "キュ"}, {"kyo", "キョ"},
+        {"sha", "シャ"}, {"shu", "シュ"}, {"sho", "ショ"},
+        {"cha", "チャ"}, {"chu", "チュ"}, {"cho", "チョ"},
+        {"nya", "ニャ"}, {"nyu", "ニュ"}, {"nyo", "ニョ"},
+        {"hya", "ヒャ"}, {"hyu", "ヒュ"}, {"hyo", "ヒョ"},
+        {"mya", "ミャ"}, {"myu", "ミュ"}, {"myo", "ミョ"},
+        {"rya", "リャ"}, {"ryu", "リュ"}, {"ryo", "リョ"},
+        {"gya", "ギャ"}, {"gyu", "ギュ"}, {"gyo", "ギョ"},
+        {"ja", "ジャ"}, {"ju", "ジュ"}, {"jo", "ジョ"},
+        {"bya", "ビャ"}, {"byu", "ビュ"}, {"byo", "ビョ"},
+        {"pya", "ピャ"}, {"pyu", "ピュ"}, {"pyo", "ピョ"},
+        {"ka", "カ"}, {"ki", "キ"}, {"ku", "ク"}, {"ke", "ケ"}, {"ko", "コ"},
+        {"sa", "サ"}, {"si", "シ"}, {"su", "ス"}, {"se", "セ"}, {"so", "ソ"},
+        {"ta", "タ"}, {"ti", "チ"}, {"tu", "ツ"}, {"te", "テ"}, {"to", "ト"},
+        {"na", "ナ"}, {"ni", "ニ"}, {"nu", "ヌ"}, {"ne", "ネ"}, {"no", "ノ"},
+        {"ha", "ハ"}, {"hi", "ヒ"}, {"fu", "フ"}, {"hu", "フ"}, {"he", "ヘ"}, {"ho", "ホ"},
+        {"ma", "マ"}, {"mi", "ミ"}, {"mu", "ム"}, {"me", "メ"}, {"mo", "モ"},
+        {"ya", "ヤ"}, {"yu", "ユ"}, {"yo", "ヨ"},
+        {"ra", "ラ"}, {"ri", "リ"}, {"ru", "ル"}, {"re", "レ"}, {"ro", "ロ"},
+        {"wa", "ワ"}, {"wo", "ヲ"},
+        {"ga", "ガ"}, {"gi", "ギ"}, {"gu", "グ"}, {"ge", "ゲ"}, {"go", "ゴ"},
+        {"za", "ザ"}, {"zi", "ジ"}, {"zu", "ズ"}, {"ze", "ゼ"}, {"zo", "ゾ"},
+        {"da", "ダ"}, {"di", "ヂ"}, {"du", "ヅ"}, {"de", "デ"}, {"do", "ド"},
+        {"ba", "バ"}, {"bi", "ビ"}, {"bu", "ブ"}, {"be", "ベ"}, {"bo", "ボ"},
+        {"pa", "パ"}, {"pi", "ピ"}, {"pu", "プ"}, {"pe", "ペ"}, {"po", "ポ"},
+        {"a", "ア"}, {"i", "イ"}, {"u", "ウ"}, {"e", "エ"}, {"o", "オ"},
+        {"n", "ン"}
+    };
+
+    std::string result;
+    size_t i = 0;
+    while (i < lower.size()) {
+        bool matched = false;
+        for (const auto& kv : table) {
+            size_t len = strlen(kv.first);
+            if (i + len <= lower.size() && lower.compare(i, len, kv.first) == 0) {
+                result += kv.second;
+                i += len;
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            result += input[i];
+            i++;
+        }
+    }
+    return result;
+}
+
 static std::string NormalizeKey(const std::string& text) {
     if (text.empty()) return "";
     std::string result;
@@ -1424,56 +1481,98 @@ void AppWindow::RunMessageLoop() {
                                 }
                             }
 
-                            // Tier B: Album Title Alone Search (100% matches Doujin albums!)
+                            // Tier B: Album Title Alone Search & Katakana Transliteration Fallback
                             if (releaseGroupMbId.empty()) {
                                 std::string mbAlbumUrl = "https://musicbrainz.org/ws/2/release-group?query=release:\"" + UrlEncode(albumClean) + "\"&fmt=json";
                                 LOG_INFO("[MUSICBRAINZ TIER B FALLBACK] Querying release:\"" + albumClean + "\"");
                                 std::string mbAlbumRes = HttpGetString(Utf8ToWide(mbAlbumUrl));
-                                size_t argPos = mbAlbumRes.find("\"release-groups\":");
-                                if (argPos != std::string::npos) {
-                                    size_t aidPos = mbAlbumRes.find("\"id\":\"", argPos);
-                                    if (aidPos != std::string::npos) {
-                                        aidPos += 6;
-                                        size_t aendPos = mbAlbumRes.find("\"", aidPos);
-                                        if (aendPos != std::string::npos) {
-                                            std::string candMbId = mbAlbumRes.substr(aidPos, aendPos - aidPos);
-                                            if (candMbId.length() == 36) {
-                                                bool artistMatched = true;
-                                                if (!artistClean.empty() && artistClean != "Unknown Artist") {
-                                                    std::string baseArtist = artistClean;
-                                                    size_t semiPos = baseArtist.find(';');
-                                                    if (semiPos != std::string::npos) baseArtist = baseArtist.substr(0, semiPos);
-                                                    while (!baseArtist.empty() && (baseArtist.back() == ' ' || baseArtist.back() == '\t')) baseArtist.pop_back();
 
-                                                    size_t acPos = mbAlbumRes.find("\"artist-credit\":", argPos);
-                                                    if (acPos != std::string::npos && !baseArtist.empty()) {
-                                                        std::string acChunk = mbAlbumRes.substr(acPos, 600);
-                                                        std::string acLower = acChunk;
-                                                        std::transform(acLower.begin(), acLower.end(), acLower.begin(), ::tolower);
-                                                        std::string baseLower = baseArtist;
-                                                        std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), ::tolower);
-                                                        if (acLower.find(baseLower) == std::string::npos) {
-                                                            artistMatched = false;
-                                                            LOG_INFO("[MUSICBRAINZ TIER B REJECTED] Mismatched artist credit for release:" + albumClean + " (Expected: " + baseArtist + ")");
+                                auto parseTierB = [&](const std::string& resJson, const std::string& label) {
+                                    size_t argPos = resJson.find("\"release-groups\":");
+                                    if (argPos != std::string::npos) {
+                                        size_t aidPos = resJson.find("\"id\":\"", argPos);
+                                        if (aidPos != std::string::npos) {
+                                            aidPos += 6;
+                                            size_t aendPos = resJson.find("\"", aidPos);
+                                            if (aendPos != std::string::npos) {
+                                                std::string candMbId = resJson.substr(aidPos, aendPos - aidPos);
+                                                if (candMbId.length() == 36) {
+                                                    bool artistMatched = true;
+                                                    if (!artistClean.empty() && artistClean != "Unknown Artist") {
+                                                        std::string baseArtist = artistClean;
+                                                        size_t semiPos = baseArtist.find(';');
+                                                        if (semiPos != std::string::npos) baseArtist = baseArtist.substr(0, semiPos);
+                                                        while (!baseArtist.empty() && (baseArtist.back() == ' ' || baseArtist.back() == '\t')) baseArtist.pop_back();
+
+                                                        size_t acPos = resJson.find("\"artist-credit\":", argPos);
+                                                        if (acPos != std::string::npos && !baseArtist.empty()) {
+                                                            std::string acChunk = resJson.substr(acPos, 600);
+                                                            std::string acLower = acChunk;
+                                                            std::transform(acLower.begin(), acLower.end(), acLower.begin(), ::tolower);
+                                                            std::string baseLower = baseArtist;
+                                                            std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), ::tolower);
+                                                            if (acLower.find(baseLower) == std::string::npos) {
+                                                                artistMatched = false;
+                                                                LOG_INFO("[MUSICBRAINZ TIER B REJECTED] Mismatched artist credit for " + label + " (Expected: " + baseArtist + ")");
+                                                            }
                                                         }
                                                     }
-                                                }
 
-                                                if (artistMatched) {
-                                                    releaseGroupMbId = candMbId;
-                                                    isMatched = true;
-                                                    LOG_INFO("[MUSICBRAINZ TIER B SUCCESS] MBID: " + releaseGroupMbId);
+                                                    if (artistMatched) {
+                                                        releaseGroupMbId = candMbId;
+                                                        isMatched = true;
+                                                        LOG_INFO("[MUSICBRAINZ TIER B SUCCESS] MBID: " + releaseGroupMbId);
+                                                    }
                                                 }
                                             }
                                         }
+                                        size_t datePos = resJson.find("\"first-release-date\":\"", argPos);
+                                        if (datePos != std::string::npos && isMatched) {
+                                            datePos += 22;
+                                            size_t dendPos = resJson.find("\"", datePos);
+                                            if (dendPos != std::string::npos) {
+                                                firstReleaseDate = resJson.substr(datePos, dendPos - datePos);
+                                                LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + firstReleaseDate);
+                                            }
+                                        }
                                     }
-                                    size_t datePos = mbAlbumRes.find("\"first-release-date\":\"", argPos);
-                                    if (datePos != std::string::npos && isMatched) {
-                                        datePos += 22;
-                                        size_t dendPos = mbAlbumRes.find("\"", datePos);
-                                        if (dendPos != std::string::npos) {
-                                            firstReleaseDate = mbAlbumRes.substr(datePos, dendPos - datePos);
-                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + firstReleaseDate);
+                                };
+
+                                parseTierB(mbAlbumRes, "release:\"" + albumClean + "\"");
+
+                                // If Romaji album title didn't match, try Japanese Katakana transliteration (e.g. Iranai -> イラナイ)
+                                if (releaseGroupMbId.empty()) {
+                                    std::string albumKatakana = RomajiToKatakana(albumClean);
+                                    if (!albumKatakana.empty() && albumKatakana != albumClean) {
+                                        std::string mbKataUrl = "https://musicbrainz.org/ws/2/release-group?query=release:\"" + UrlEncode(albumKatakana) + "\"&fmt=json";
+                                        LOG_INFO("[MUSICBRAINZ TIER B KATAKANA] Querying release:\"" + albumKatakana + "\" (Converted from " + albumClean + ")");
+                                        std::string mbKataRes = HttpGetString(Utf8ToWide(mbKataUrl));
+                                        
+                                        // For Katakana transliteration, accept if release title matches Katakana
+                                        size_t argPos = mbKataRes.find("\"release-groups\":");
+                                        if (argPos != std::string::npos) {
+                                            size_t aidPos = mbKataRes.find("\"id\":\"", argPos);
+                                            if (aidPos != std::string::npos) {
+                                                aidPos += 6;
+                                                size_t aendPos = mbKataRes.find("\"", aidPos);
+                                                if (aendPos != std::string::npos) {
+                                                    std::string candMbId = mbKataRes.substr(aidPos, aendPos - aidPos);
+                                                    if (candMbId.length() == 36) {
+                                                        releaseGroupMbId = candMbId;
+                                                        isMatched = true;
+                                                        LOG_INFO("[MUSICBRAINZ TIER B KATAKANA SUCCESS] MBID: " + releaseGroupMbId + " for Katakana title: " + albumKatakana);
+                                                    }
+                                                }
+                                            }
+                                            size_t datePos = mbKataRes.find("\"first-release-date\":\"", argPos);
+                                            if (datePos != std::string::npos && isMatched) {
+                                                datePos += 22;
+                                                size_t dendPos = mbKataRes.find("\"", datePos);
+                                                if (dendPos != std::string::npos) {
+                                                    firstReleaseDate = mbKataRes.substr(datePos, dendPos - datePos);
+                                                    LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + firstReleaseDate);
+                                                }
+                                            }
                                         }
                                     }
                                 }
