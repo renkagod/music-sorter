@@ -190,6 +190,24 @@ static std::string CleanMetadataString(const std::string& str) {
     return res.substr(first, (last - first + 1));
 }
 
+static std::string SanitizeForFilename(const std::string& str) {
+    std::string res;
+    res.reserve(str.size());
+    for (char c : str) {
+        if (c == '<' || c == '>' || c == ':' || c == '"' || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
+            res.push_back('_');
+        } else if (c == '\t' || c == '\r' || c == '\n') {
+            res.push_back(' ');
+        } else {
+            res.push_back(c);
+        }
+    }
+    size_t first = res.find_first_not_of(" ");
+    if (first == std::string::npos) return "_";
+    size_t last = res.find_last_not_of(" .");
+    return res.substr(first, (last - first + 1));
+}
+
 static std::string EscapeLuceneQuery(const std::string& str) {
     std::string res;
     res.reserve(str.size() * 2);
@@ -2502,12 +2520,16 @@ void AppWindow::RunMessageLoop() {
                         std::string ext = srcFile.extension().string();
                         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-                        fs::path flacDir = fs::path(g_FlacDir) / newArtist / newAlbum;
-                        fs::path mp3Dir  = fs::path(g_Mp3Dir) / newArtist / newAlbum;
+                        std::string safeArtist = SanitizeForFilename(newArtist);
+                        std::string safeAlbum  = SanitizeForFilename(newAlbum);
+                        std::string safeTitle  = SanitizeForFilename(newTitle);
+
+                        fs::path flacDir = fs::path(g_FlacDir) / safeArtist / safeAlbum;
+                        fs::path mp3Dir  = fs::path(g_Mp3Dir) / safeArtist / safeAlbum;
                         fs::create_directories(flacDir);
                         fs::create_directories(mp3Dir);
 
-                        std::string baseTrackName = newTrackNo + ". " + newTitle;
+                        std::string baseTrackName = newTrackNo + ". " + safeTitle;
 
                         if (ext == ".flac") {
                             fs::path flacFile = flacDir / (baseTrackName + ".flac");
