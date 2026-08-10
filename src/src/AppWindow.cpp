@@ -861,7 +861,7 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
         std::string tArtistClean = NormalizeKey(t.artist);
 
         if (tTitleClean.length() >= 3) {
-            if (!tTitleClean.empty() && rawClean.find(tTitleClean) != std::string::npos) {
+            if (!tTitleClean.empty() && (rawClean.find(tTitleClean) != std::string::npos || (rawClean.length() >= 4 && tTitleClean.find(rawClean) != std::string::npos))) {
                 score += 60;
             }
         } else if (!tTitleClean.empty()) {
