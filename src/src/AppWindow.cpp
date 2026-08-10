@@ -908,6 +908,192 @@ static JsonVal ParseJsonSimple(const std::string& str, size_t& pos) {
     return {};
 }
 
+static bool ContainsJapanese(const std::string& str) {
+    for (size_t i = 0; i + 2 < str.size(); ++i) {
+        unsigned char c = (unsigned char)str[i];
+        if (c == 0xE3) {
+            unsigned char b2 = (unsigned char)str[i + 1];
+            unsigned char b3 = (unsigned char)str[i + 2];
+            uint32_t cp = ((uint32_t)(c & 0x0F) << 12) | ((uint32_t)(b2 & 0x3F) << 6) | (uint32_t)(b3 & 0x3F);
+            if (cp >= 0x3040 && cp <= 0x30FF) return true;
+        }
+    }
+    return false;
+}
+
+static std::string RomanizeJapanese(const std::string& str) {
+    if (str.empty()) return str;
+
+    static const std::unordered_map<uint32_t, std::string> kanaMap = {
+        // Hiragana basic
+        {0x3042, "a"}, {0x3044, "i"}, {0x3046, "u"}, {0x3048, "e"}, {0x304A, "o"},
+        {0x304B, "ka"}, {0x304D, "ki"}, {0x304F, "ku"}, {0x3051, "ke"}, {0x3053, "ko"},
+        {0x3055, "sa"}, {0x3057, "shi"}, {0x3059, "su"}, {0x305B, "se"}, {0x305D, "so"},
+        {0x305F, "ta"}, {0x3061, "chi"}, {0x3064, "tsu"}, {0x3066, "te"}, {0x3068, "to"},
+        {0x306A, "na"}, {0x306B, "ni"}, {0x306C, "nu"}, {0x306D, "ne"}, {0x306E, "no"},
+        {0x306F, "ha"}, {0x3072, "hi"}, {0x3075, "fu"}, {0x3078, "he"}, {0x307B, "ho"},
+        {0x307E, "ma"}, {0x307F, "mi"}, {0x3080, "mu"}, {0x3081, "me"}, {0x3082, "mo"},
+        {0x3084, "ya"}, {0x3086, "yu"}, {0x3088, "yo"},
+        {0x3089, "ra"}, {0x308A, "ri"}, {0x308B, "ru"}, {0x308C, "re"}, {0x308D, "ro"},
+        {0x308F, "wa"}, {0x3092, "wo"}, {0x3093, "n"},
+        // Hiragana dakuten
+        {0x304C, "ga"}, {0x304E, "gi"}, {0x3050, "gu"}, {0x3052, "ge"}, {0x3054, "go"},
+        {0x3056, "za"}, {0x3058, "ji"}, {0x305A, "zu"}, {0x305C, "ze"}, {0x305E, "zo"},
+        {0x3060, "da"}, {0x3062, "di"}, {0x3065, "du"}, {0x3067, "de"}, {0x3069, "do"},
+        {0x3070, "ba"}, {0x3073, "bi"}, {0x3076, "bu"}, {0x3079, "be"}, {0x307C, "bo"},
+        {0x3071, "pa"}, {0x3074, "pi"}, {0x3077, "pu"}, {0x307A, "pe"}, {0x307D, "po"},
+        // Hiragana small
+        {0x3041, "a"}, {0x3043, "i"}, {0x3045, "u"}, {0x3047, "e"}, {0x3049, "o"},
+        {0x3063, ""},  // small tsu - handled specially
+        {0x3083, "ya"}, {0x3085, "yu"}, {0x3087, "yo"},
+        {0x308E, "wa"}, {0x3095, "va"}, {0x3096, "va"},
+        // Katakana basic
+        {0x30A2, "a"}, {0x30A4, "i"}, {0x30A6, "u"}, {0x30A8, "e"}, {0x30AA, "o"},
+        {0x30AB, "ka"}, {0x30AD, "ki"}, {0x30AF, "ku"}, {0x30B1, "ke"}, {0x30B3, "ko"},
+        {0x30B5, "sa"}, {0x30B7, "shi"}, {0x30B9, "su"}, {0x30BB, "se"}, {0x30BD, "so"},
+        {0x30BF, "ta"}, {0x30C1, "chi"}, {0x30C4, "tsu"}, {0x30C6, "te"}, {0x30C8, "to"},
+        {0x30CA, "na"}, {0x30CB, "ni"}, {0x30CC, "nu"}, {0x30CD, "ne"}, {0x30CE, "no"},
+        {0x30CF, "ha"}, {0x30D2, "hi"}, {0x30D5, "fu"}, {0x30D8, "he"}, {0x30DB, "ho"},
+        {0x30DE, "ma"}, {0x30DF, "mi"}, {0x30E0, "mu"}, {0x30E1, "me"}, {0x30E2, "mo"},
+        {0x30E4, "ya"}, {0x30E6, "yu"}, {0x30E8, "yo"},
+        {0x30E9, "ra"}, {0x30EA, "ri"}, {0x30EB, "ru"}, {0x30EC, "re"}, {0x30ED, "ro"},
+        {0x30EF, "wa"}, {0x30F2, "wo"}, {0x30F3, "n"},
+        // Katakana dakuten
+        {0x30AC, "ga"}, {0x30AE, "gi"}, {0x30B0, "gu"}, {0x30B2, "ge"}, {0x30B4, "go"},
+        {0x30B6, "za"}, {0x30B8, "ji"}, {0x30BA, "zu"}, {0x30BC, "ze"}, {0x30BE, "zo"},
+        {0x30C0, "da"}, {0x30C2, "di"}, {0x30C5, "du"}, {0x30C7, "de"}, {0x30C9, "do"},
+        {0x30D0, "ba"}, {0x30D3, "bi"}, {0x30D6, "bu"}, {0x30D9, "be"}, {0x30DC, "bo"},
+        {0x30D1, "pa"}, {0x30D4, "pi"}, {0x30D7, "pu"}, {0x30DA, "pe"}, {0x30DD, "po"},
+        // Katakana small
+        {0x30A1, "a"}, {0x30A3, "i"}, {0x30A5, "u"}, {0x30A7, "e"}, {0x30A9, "o"},
+        {0x30C3, ""},  // small tsu
+        {0x30E3, "ya"}, {0x30E5, "yu"}, {0x30E7, "yo"},
+        {0x30EE, "wa"}, {0x30F4, "vu"}, {0x30FC, ""},  // long vowel mark - handled specially
+        // Y-combinations (small y-sounds) — handled by combining with prev consonant
+        // These map to ya/yu/yo but we process them specially below
+    };
+
+    auto decodeUtf8 = [](const std::string& s, size_t& pos, uint32_t& outCp) -> bool {
+        if (pos >= s.size()) return false;
+        unsigned char c = (unsigned char)s[pos];
+        if (c < 0x80) { outCp = c; pos += 1; return true; }
+        if ((c & 0xE0) == 0xC0 && pos + 1 < s.size()) {
+            outCp = ((uint32_t)(c & 0x1F) << 6) | ((uint32_t)(unsigned char)s[pos+1] & 0x3F);
+            pos += 2; return true;
+        }
+        if ((c & 0xF0) == 0xE0 && pos + 2 < s.size()) {
+            outCp = ((uint32_t)(c & 0x0F) << 12) | ((uint32_t)(unsigned char)s[pos+1] & 0x3F) << 6 | ((uint32_t)(unsigned char)s[pos+2] & 0x3F);
+            pos += 3; return true;
+        }
+        if ((c & 0xF8) == 0xF0 && pos + 3 < s.size()) {
+            outCp = ((uint32_t)(c & 0x07) << 18) | ((uint32_t)(unsigned char)s[pos+1] & 0x3F) << 12 | ((uint32_t)(unsigned char)s[pos+2] & 0x3F) << 6 | ((uint32_t)(unsigned char)s[pos+3] & 0x3F);
+            pos += 4; return true;
+        }
+        pos += 1; return false;
+    };
+
+    auto isSmallY = [](uint32_t cp) {
+        return cp == 0x3083 || cp == 0x3085 || cp == 0x3087 ||
+               cp == 0x30E3 || cp == 0x30E5 || cp == 0x30E7;
+    };
+
+    std::string result;
+    result.reserve(str.size() * 2);
+    bool doubleConsonant = false;
+    std::string lastRomaji;
+
+    size_t pos = 0;
+    while (pos < str.size()) {
+        uint32_t cp;
+        if (!decodeUtf8(str, pos, cp)) {
+            result.push_back(str[pos - 1]);
+            continue;
+        }
+
+        // Small tsu → double next consonant
+        if (cp == 0x3063 || cp == 0x30C3) {
+            doubleConsonant = true;
+            continue;
+        }
+
+        // Long vowel mark → repeat last vowel
+        if (cp == 0x30FC) {
+            if (!lastRomaji.empty()) {
+                char lastVowel = lastRomaji.back();
+                if (lastVowel == 'a' || lastVowel == 'i' || lastVowel == 'u' || lastVowel == 'e' || lastVowel == 'o') {
+                    result.push_back(lastVowel);
+                }
+            }
+            continue;
+        }
+
+        auto it = kanaMap.find(cp);
+        if (it != kanaMap.end()) {
+            std::string romaji = it->second;
+
+            // Y-combination: prev kana + small y
+            if (isSmallY(cp) && !lastRomaji.empty() && lastRomaji.size() >= 2) {
+                // Take consonant from previous kana (e.g. "ki" → "k"), add ya/yu/yo
+                std::string consonant = lastRomaji.substr(0, lastRomaji.size() - 1);
+                // Remove the last kana's romaji from result, replace with combination
+                if (!result.empty() && result.size() >= lastRomaji.size()) {
+                    result = result.substr(0, result.size() - lastRomaji.size());
+                }
+                std::string yPart = (cp == 0x3083 || cp == 0x30E3) ? "ya" :
+                                    (cp == 0x3085 || cp == 0x30E5) ? "yu" : "yo";
+                std::string combined = consonant + yPart;
+                if (doubleConsonant && !combined.empty()) {
+                    combined = std::string(1, combined[0]) + combined;
+                    doubleConsonant = false;
+                }
+                result += combined;
+                lastRomaji = combined;
+            } else {
+                if (doubleConsonant && !romaji.empty()) {
+                    // Double first consonant (chi→tchi, shi→sshi, tsu→ttsu handled by first char)
+                    char first = romaji[0];
+                    if (romaji == "chi") romaji = "tchi";
+                    else if (romaji == "shi") romaji = "sshi";
+                    else if (romaji == "tsu") romaji = "ttsu";
+                    else romaji = std::string(1, first) + romaji;
+                    doubleConsonant = false;
+                }
+                result += romaji;
+                lastRomaji = romaji;
+            }
+        } else {
+            // Non-kana (kanji, ASCII, punctuation) — pass through
+            if (cp < 0x80) {
+                result.push_back((char)cp);
+            } else {
+                // Re-encode the code point as UTF-8
+                if (cp < 0x80) {
+                    result.push_back((char)cp);
+                } else if (cp < 0x800) {
+                    result.push_back((char)(0xC0 | (cp >> 6)));
+                    result.push_back((char)(0x80 | (cp & 0x3F)));
+                } else if (cp < 0x10000) {
+                    result.push_back((char)(0xE0 | (cp >> 12)));
+                    result.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+                    result.push_back((char)(0x80 | (cp & 0x3F)));
+                } else {
+                    result.push_back((char)(0xF0 | (cp >> 18)));
+                    result.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
+                    result.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+                    result.push_back((char)(0x80 | (cp & 0x3F)));
+                }
+            }
+            lastRomaji.clear();
+        }
+    }
+
+    // Capitalize first letter
+    if (!result.empty()) {
+        result[0] = std::toupper((unsigned char)result[0]);
+    }
+    return result;
+}
+
 static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string& releaseGroupMbId) {
     std::vector<MBTrackEntry> tracks;
     if (releaseGroupMbId.empty()) return tracks;
@@ -963,20 +1149,39 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
         }
     }
 
-    // 2. Fallback to first Official release
+    // 2. Fallback to first Official release with built-in romanization
     for (const auto& rel : rels.arrVal) {
         std::string status = rel.get("status").strVal;
         if (status == "Official") {
             extractTracks(rel.get("media"), tracks);
             if (!tracks.empty()) {
-                LOG_INFO("[MUSICBRAINZ] No Pseudo-Release found, using Official release titles");
+                LOG_INFO("[MUSICBRAINZ] No Pseudo-Release found, romanizing Official release titles");
+                int romanized = 0;
+                for (auto& t : tracks) {
+                    if (ContainsJapanese(t.title)) {
+                        std::string orig = t.title;
+                        t.title = RomanizeJapanese(t.title);
+                        if (!ContainsJapanese(t.title)) romanized++;
+                        LOG_INFO("[ROMANIZE] " + orig + " -> " + t.title);
+                    }
+                    if (ContainsJapanese(t.artist)) {
+                        std::string orig = t.artist;
+                        t.artist = RomanizeJapanese(t.artist);
+                        LOG_INFO("[ROMANIZE] " + orig + " -> " + t.artist);
+                    }
+                }
+                LOG_INFO("[ROMANIZE] Romanized " + std::to_string(romanized) + " track titles (kanji left as-is)");
                 return tracks;
             }
         }
     }
 
-    // 3. Last resort: whatever is available
+    // 3. Last resort: whatever is available (also romanize)
     extractTracks(rels.get(0).get("media"), tracks);
+    for (auto& t : tracks) {
+        if (ContainsJapanese(t.title))   t.title  = RomanizeJapanese(t.title);
+        if (ContainsJapanese(t.artist))  t.artist = RomanizeJapanese(t.artist);
+    }
     return tracks;
 }
 
