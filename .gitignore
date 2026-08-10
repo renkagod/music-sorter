@@ -1,0 +1,33 @@
+# Audio collections and quarantine
+TO SORT/
+flac/
+mp3/
+review/
+*.mp3
+*.flac
+*.wav
+*.m4a
+*.ogg
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.cue
+*.log
+*.zip
+*.7z
+
+# Build artifacts
+build/
+CMakeCache.txt
+CMakeFiles/
+*.exe
+*.obj
+*.pdb
+*.bin
+
+# Temporary scripts & system artifacts
+*.py
+.system_generated/
+.user_uploaded/
+.agents/
