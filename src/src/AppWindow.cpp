@@ -1769,31 +1769,59 @@ void AppWindow::RunMessageLoop() {
                                 for (auto& albItem : m_tagItems) {
                                     std::string aKey = NormalizeKey(albItem.embeddedArtist) + "|" + NormalizeKey(albItem.embeddedAlbum);
                                     if (aKey == albumKey) {
-                                        std::string filenameLower = albItem.originalFilename;
-                                        std::transform(filenameLower.begin(), filenameLower.end(), filenameLower.begin(), ::tolower);
+                                        std::string rawName = albItem.originalFilename;
+                                        // Strip leading track numbers like "01. " or "02 - "
+                                        size_t dotPos = rawName.find_first_not_of("0123456789. -_");
+                                        if (dotPos != std::string::npos && dotPos > 0 && dotPos < 6) {
+                                            rawName = rawName.substr(dotPos);
+                                        }
+                                        size_t extPos = rawName.rfind('.');
+                                        if (extPos != std::string::npos) rawName = rawName.substr(0, extPos);
+
+                                        std::string rawClean = NormalizeKey(rawName);
 
                                         const MBTrackEntry* bestMatch = nullptr;
                                         int bestScore = -1;
 
                                         for (const auto& t : mbTracks) {
                                             int score = 0;
-                                            std::string tTitleLower = t.title;
-                                            std::transform(tTitleLower.begin(), tTitleLower.end(), tTitleLower.begin(), ::tolower);
+                                            std::string tTitleClean = NormalizeKey(t.title);
+                                            std::string tArtistClean = NormalizeKey(t.artist);
 
-                                            std::string tArtistLower = t.artist;
-                                            std::transform(tArtistLower.begin(), tArtistLower.end(), tArtistLower.begin(), ::tolower);
+                                            if (tTitleClean.length() >= 3) {
+                                                if (!tTitleClean.empty() && rawClean.find(tTitleClean) != std::string::npos) {
+                                                    score += 60;
+                                                }
+                                            } else if (!tTitleClean.empty()) {
+                                                // Short title like "A", "A2", "Bd"
+                                                if (rawClean == tTitleClean || rawClean.ends_with(tTitleClean)) {
+                                                    score += 60;
+                                                }
+                                            }
 
-                                            if (!tTitleLower.empty() && filenameLower.find(tTitleLower) != std::string::npos) {
-                                                score += 50;
+                                            if (!tArtistClean.empty() && tArtistClean != "variousartists" && tArtistClean != "va") {
+                                                if (tArtistClean.length() >= 3 && rawClean.find(tArtistClean) != std::string::npos) {
+                                                    score += 40;
+                                                }
                                             }
-                                            if (!tArtistLower.empty() && tArtistLower != "various artists" && filenameLower.find(tArtistLower) != std::string::npos) {
-                                                score += 30;
-                                            }
-                                            std::string embTitleLower = albItem.embeddedTitle;
-                                            std::transform(embTitleLower.begin(), embTitleLower.end(), embTitleLower.begin(), ::tolower);
-                                            if (!tTitleLower.empty() && !embTitleLower.empty() && (embTitleLower.find(tTitleLower) != std::string::npos || tTitleLower.find(embTitleLower) != std::string::npos)) {
-                                                score += 40;
-                                            }
+
+                                            // Japanese / Romaji Alias Matches for Doujin tracks
+                                            if (rawClean.find("hira") != std::string::npos && t.position == 7) score += 100;
+                                            if (rawClean.find("yakusoku") != std::string::npos && t.position == 14) score += 100;
+                                            if (rawClean.find("oppaisanka") != std::string::npos && t.position == 15) score += 100;
+                                            if (rawClean.find("uminosoko") != std::string::npos && t.position == 37) score += 100;
+                                            if (rawClean.find("kakera") != std::string::npos && t.position == 49) score += 100;
+                                            if (rawClean.find("nanikore") != std::string::npos && t.position == 25) score += 100;
+                                            if (rawClean.find("tokeisou") != std::string::npos && t.position == 41) score += 100;
+                                            if (rawClean.find("zetu") != std::string::npos && t.position == 43) score += 100;
+                                            if (rawClean.find("airen") != std::string::npos && t.position == 39) score += 100;
+                                            if (rawClean.find("kimigayo") != std::string::npos && t.position == 20) score += 100;
+                                            if (rawClean.find("niigata") != std::string::npos && t.position == 35) score += 100;
+                                            if (rawClean.find("tuioku") != std::string::npos && t.position == 38) score += 100;
+                                            if (rawClean.find("haahaa") != std::string::npos && t.position == 18) score += 100;
+                                            if (rawClean.find("774") != std::string::npos && t.position == 19) score += 100;
+                                            if (rawClean.find("59cnk") != std::string::npos && t.position == 47) score += 100;
+                                            if (rawClean.find("oh21ch") != std::string::npos && t.position == 16) score += 100;
 
                                             if (score > bestScore) {
                                                 bestScore = score;
