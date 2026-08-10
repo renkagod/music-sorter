@@ -1,5 +1,0 @@
-The original FLStudio files that were used to create both songs were on -45's website.
-These are exports using those original project files and the original plugins used to create the songs, in both 16bit and 24bit.
-
-http://www5.pf-x.net/
-
