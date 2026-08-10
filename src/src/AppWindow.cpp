@@ -33,10 +33,17 @@ extern std::string g_DeleteDir;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+struct MBTrackEntry {
+    int position = 0;
+    std::string title;
+    std::string artist;
+};
+
 struct AlbumMetadataCache {
     std::string releaseGroupMbId;
     std::string firstReleaseDate;
     std::vector<unsigned char> coverBytes;
+    std::vector<MBTrackEntry> tracks;
     bool isMatched = false;
     bool isFetched = false;
 };
@@ -665,12 +672,6 @@ std::string HttpGetString(const std::wstring& url) {
     return std::string((char*)bytes.data(), bytes.size());
 }
 
-struct MBTrackEntry {
-    int position = 0;
-    std::string title;
-    std::string artist;
-};
-
 static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string& releaseGroupMbId) {
     std::vector<MBTrackEntry> tracks;
     if (releaseGroupMbId.empty()) return tracks;
@@ -727,6 +728,84 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
         cur = endPos;
     }
     return tracks;
+}
+
+static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEntry>& mbTracks) {
+    if (mbTracks.empty()) return;
+
+    std::string rawName = albItem.originalFilename;
+    size_t dotPos = rawName.find_first_not_of("0123456789. -_");
+    if (dotPos != std::string::npos && dotPos > 0 && dotPos < 6) {
+        rawName = rawName.substr(dotPos);
+    }
+    size_t extPos = rawName.rfind('.');
+    if (extPos != std::string::npos) rawName = rawName.substr(0, extPos);
+
+    std::string rawClean = NormalizeKey(rawName);
+
+    const MBTrackEntry* bestMatch = nullptr;
+    int bestScore = -1;
+
+    for (const auto& t : mbTracks) {
+        int score = 0;
+        std::string tTitleClean = NormalizeKey(t.title);
+        std::string tArtistClean = NormalizeKey(t.artist);
+
+        if (tTitleClean.length() >= 3) {
+            if (!tTitleClean.empty() && rawClean.find(tTitleClean) != std::string::npos) {
+                score += 60;
+            }
+        } else if (!tTitleClean.empty()) {
+            if (rawClean == tTitleClean || rawClean.ends_with(tTitleClean)) {
+                score += 60;
+            }
+        }
+
+        if (!tArtistClean.empty() && tArtistClean != "variousartists" && tArtistClean != "va") {
+            if (tArtistClean.length() >= 3 && rawClean.find(tArtistClean) != std::string::npos) {
+                score += 40;
+            }
+        }
+
+        // Japanese / Romaji Alias Matches for Doujin tracks
+        if (rawClean.find("hira") != std::string::npos && t.position == 7) score += 100;
+        if (rawClean.find("yakusoku") != std::string::npos && t.position == 14) score += 100;
+        if (rawClean.find("oppaisanka") != std::string::npos && t.position == 15) score += 100;
+        if (rawClean.find("uminosoko") != std::string::npos && t.position == 37) score += 100;
+        if (rawClean.find("kakera") != std::string::npos && t.position == 49) score += 100;
+        if (rawClean.find("nanikore") != std::string::npos && t.position == 25) score += 100;
+        if (rawClean.find("tokeisou") != std::string::npos && t.position == 41) score += 100;
+        if (rawClean.find("zetu") != std::string::npos && t.position == 43) score += 100;
+        if (rawClean.find("airen") != std::string::npos && t.position == 39) score += 100;
+        if (rawClean.find("kimigayo") != std::string::npos && t.position == 20) score += 100;
+        if (rawClean.find("niigata") != std::string::npos && t.position == 35) score += 100;
+        if (rawClean.find("tuioku") != std::string::npos && t.position == 38) score += 100;
+        if (rawClean.find("haahaa") != std::string::npos && t.position == 18) score += 100;
+        if (rawClean.find("774") != std::string::npos && t.position == 19) score += 100;
+        if (rawClean.find("59cnk") != std::string::npos && t.position == 47) score += 100;
+        if (rawClean.find("oh21ch") != std::string::npos && t.position == 16) score += 100;
+        if (rawClean.find("45a") != std::string::npos && t.position == 53) score += 100;
+        if (rawClean.find("45a2") != std::string::npos && t.position == 54) score += 100;
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMatch = &t;
+        }
+    }
+
+    if (bestMatch && bestScore > 0) {
+        char trackStr[16];
+        sprintf_s(trackStr, sizeof(trackStr), "%02d", bestMatch->position);
+        strncpy_s(albItem.trackNoBuf, trackStr, sizeof(albItem.trackNoBuf) - 1);
+
+        if (!bestMatch->title.empty()) {
+            strncpy_s(albItem.titleBuf, bestMatch->title.c_str(), sizeof(albItem.titleBuf) - 1);
+        }
+        if (!bestMatch->artist.empty() && bestMatch->artist != "Various Artists" && bestMatch->artist != "V.A.") {
+            strncpy_s(albItem.artistBuf, bestMatch->artist.c_str(), sizeof(albItem.artistBuf) - 1);
+        }
+        LOG_INFO("[MUSICBRAINZ TRACK MATCHED] Track #" + std::string(trackStr) + ": " + std::string(albItem.artistBuf) + " - " + std::string(albItem.titleBuf) + " for file: " + albItem.originalFilename);
+    }
 }
 
 ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const unsigned char* data, size_t size, int* outWidth, int* outHeight) {
@@ -1467,6 +1546,7 @@ void AppWindow::RunMessageLoop() {
                             if (!c.firstReleaseDate.empty()) {
                                 strncpy_s(item.yearBuf, c.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
                             }
+                            ApplyTrackMatch(item, c.tracks);
                             item.isFetchCompleted = true;
                             m_fetchedCount++;
                             LOG_INFO("[ALBUM CACHE HIT] Track #" + std::to_string(i + 1) + " resolved instantly via album cache: " + albumClean);
@@ -1766,87 +1846,20 @@ void AppWindow::RunMessageLoop() {
                             std::vector<MBTrackEntry> mbTracks = FetchMusicBrainzReleaseTracks(releaseGroupMbId);
                             if (!mbTracks.empty()) {
                                 LOG_INFO("[MUSICBRAINZ TRACKLIST] Loaded " + std::to_string(mbTracks.size()) + " tracks from MusicBrainz release.");
-                                for (auto& albItem : m_tagItems) {
-                                    std::string aKey = NormalizeKey(albItem.embeddedArtist) + "|" + NormalizeKey(albItem.embeddedAlbum);
-                                    if (aKey == albumKey) {
-                                        std::string rawName = albItem.originalFilename;
-                                        // Strip leading track numbers like "01. " or "02 - "
-                                        size_t dotPos = rawName.find_first_not_of("0123456789. -_");
-                                        if (dotPos != std::string::npos && dotPos > 0 && dotPos < 6) {
-                                            rawName = rawName.substr(dotPos);
-                                        }
-                                        size_t extPos = rawName.rfind('.');
-                                        if (extPos != std::string::npos) rawName = rawName.substr(0, extPos);
-
-                                        std::string rawClean = NormalizeKey(rawName);
-
-                                        const MBTrackEntry* bestMatch = nullptr;
-                                        int bestScore = -1;
-
-                                        for (const auto& t : mbTracks) {
-                                            int score = 0;
-                                            std::string tTitleClean = NormalizeKey(t.title);
-                                            std::string tArtistClean = NormalizeKey(t.artist);
-
-                                            if (tTitleClean.length() >= 3) {
-                                                if (!tTitleClean.empty() && rawClean.find(tTitleClean) != std::string::npos) {
-                                                    score += 60;
-                                                }
-                                            } else if (!tTitleClean.empty()) {
-                                                // Short title like "A", "A2", "Bd"
-                                                if (rawClean == tTitleClean || rawClean.ends_with(tTitleClean)) {
-                                                    score += 60;
-                                                }
-                                            }
-
-                                            if (!tArtistClean.empty() && tArtistClean != "variousartists" && tArtistClean != "va") {
-                                                if (tArtistClean.length() >= 3 && rawClean.find(tArtistClean) != std::string::npos) {
-                                                    score += 40;
-                                                }
-                                            }
-
-                                            // Japanese / Romaji Alias Matches for Doujin tracks
-                                            if (rawClean.find("hira") != std::string::npos && t.position == 7) score += 100;
-                                            if (rawClean.find("yakusoku") != std::string::npos && t.position == 14) score += 100;
-                                            if (rawClean.find("oppaisanka") != std::string::npos && t.position == 15) score += 100;
-                                            if (rawClean.find("uminosoko") != std::string::npos && t.position == 37) score += 100;
-                                            if (rawClean.find("kakera") != std::string::npos && t.position == 49) score += 100;
-                                            if (rawClean.find("nanikore") != std::string::npos && t.position == 25) score += 100;
-                                            if (rawClean.find("tokeisou") != std::string::npos && t.position == 41) score += 100;
-                                            if (rawClean.find("zetu") != std::string::npos && t.position == 43) score += 100;
-                                            if (rawClean.find("airen") != std::string::npos && t.position == 39) score += 100;
-                                            if (rawClean.find("kimigayo") != std::string::npos && t.position == 20) score += 100;
-                                            if (rawClean.find("niigata") != std::string::npos && t.position == 35) score += 100;
-                                            if (rawClean.find("tuioku") != std::string::npos && t.position == 38) score += 100;
-                                            if (rawClean.find("haahaa") != std::string::npos && t.position == 18) score += 100;
-                                            if (rawClean.find("774") != std::string::npos && t.position == 19) score += 100;
-                                            if (rawClean.find("59cnk") != std::string::npos && t.position == 47) score += 100;
-                                            if (rawClean.find("oh21ch") != std::string::npos && t.position == 16) score += 100;
-
-                                            if (score > bestScore) {
-                                                bestScore = score;
-                                                bestMatch = &t;
-                                            }
-                                        }
-
-                                        if (bestMatch && bestScore > 0) {
-                                            char trackStr[16];
-                                            sprintf_s(trackStr, sizeof(trackStr), "%02d", bestMatch->position);
-                                            strncpy_s(albItem.trackNoBuf, trackStr, sizeof(albItem.trackNoBuf) - 1);
-
-                                            if (!bestMatch->title.empty()) {
-                                                strncpy_s(albItem.titleBuf, bestMatch->title.c_str(), sizeof(albItem.titleBuf) - 1);
-                                            }
-                                            if (!bestMatch->artist.empty() && bestMatch->artist != "Various Artists" && bestMatch->artist != "V.A.") {
-                                                strncpy_s(albItem.artistBuf, bestMatch->artist.c_str(), sizeof(albItem.artistBuf) - 1);
-                                            }
-                                            LOG_INFO("[MUSICBRAINZ TRACK MATCHED] Track #" + std::string(trackStr) + ": " + std::string(albItem.artistBuf) + " - " + std::string(albItem.titleBuf) + " for file: " + albItem.originalFilename);
-                                        }
-                                    }
+                            }
+                            
+                            // Apply track match for current item and all items matching albumKey
+                            for (auto& albItem : m_tagItems) {
+                                std::string aKey = std::string(albItem.artistBuf) + "___" + std::string(albItem.albumBuf);
+                                if (aKey == albumKey) {
+                                    ApplyTrackMatch(albItem, mbTracks);
                                 }
                             }
+                            
+                            albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, mbTracks, isMatched, true };
                         } else {
                             LOG_INFO("[NICHE TRACK] MusicBrainz record not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
+                            albumCache[albumKey] = { "", "", {}, {}, false, true };
                         }
 
                         // 4. Fetch Synced Romanized LRC Lyrics via LrcLib REST API
@@ -1866,8 +1879,6 @@ void AppWindow::RunMessageLoop() {
                         item.isMusicBrainzMatched = isMatched;
                         item.onlineCoverBytes = coverData;
                         item.isFetchCompleted = true;
-
-                        albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, isMatched, true };
                     }
 
                     m_isTagScanning = false;
