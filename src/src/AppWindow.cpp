@@ -672,6 +672,122 @@ std::string HttpGetString(const std::wstring& url) {
     return std::string((char*)bytes.data(), bytes.size());
 }
 
+struct JsonVal {
+    enum Type { Null, Bool, Number, String, Array, Object } type = Null;
+    std::string strVal;
+    double numVal = 0;
+    bool boolVal = false;
+    std::vector<JsonVal> arrVal;
+    std::unordered_map<std::string, JsonVal> objVal;
+
+    const JsonVal& get(const std::string& key) const {
+        static JsonVal nullVal;
+        if (type == Object) {
+            auto it = objVal.find(key);
+            if (it != objVal.end()) return it->second;
+        }
+        return nullVal;
+    }
+
+    const JsonVal& get(size_t idx) const {
+        static JsonVal nullVal;
+        if (type == Array && idx < arrVal.size()) return arrVal[idx];
+        return nullVal;
+    }
+};
+
+static JsonVal ParseJsonSimple(const std::string& str, size_t& pos) {
+    auto skipWs = [&]() {
+        while (pos < str.size() && (unsigned char)str[pos] <= 32) pos++;
+    };
+    skipWs();
+    if (pos >= str.size()) return {};
+
+    char c = str[pos];
+    if (c == '"') {
+        pos++;
+        std::string s;
+        while (pos < str.size()) {
+            char ch = str[pos++];
+            if (ch == '"') break;
+            if (ch == '\\' && pos < str.size()) {
+                char esc = str[pos++];
+                if (esc == '"' || esc == '\\' || esc == '/') s += esc;
+                else if (esc == 'b') s += '\b';
+                else if (esc == 'f') s += '\f';
+                else if (esc == 'n') s += '\n';
+                else if (esc == 'r') s += '\r';
+                else if (esc == 't') s += '\t';
+                else if (esc == 'u' && pos + 4 <= str.size()) {
+                    std::string hexStr = str.substr(pos, 4);
+                    pos += 4;
+                    try {
+                        unsigned int code = std::stoul(hexStr, nullptr, 16);
+                        if (code < 0x80) s += (char)code;
+                        else if (code < 0x800) { s += (char)(0xC0 | (code >> 6)); s += (char)(0x80 | (code & 0x3F)); }
+                        else { s += (char)(0xE0 | (code >> 12)); s += (char)(0x80 | ((code >> 6) & 0x3F)); s += (char)(0x80 | (code & 0x3F)); }
+                    } catch (...) {}
+                }
+            } else {
+                s += ch;
+            }
+        }
+        JsonVal v; v.type = JsonVal::String; v.strVal = s; return v;
+    }
+    if (c == '{') {
+        pos++;
+        JsonVal v; v.type = JsonVal::Object;
+        while (pos < str.size()) {
+            skipWs();
+            if (pos < str.size() && str[pos] == '}') { pos++; break; }
+            JsonVal k = ParseJsonSimple(str, pos);
+            if (k.type != JsonVal::String) break;
+            skipWs();
+            if (pos < str.size() && str[pos] == ':') pos++;
+            JsonVal val = ParseJsonSimple(str, pos);
+            v.objVal[k.strVal] = val;
+            skipWs();
+            if (pos < str.size() && str[pos] == ',') pos++;
+            else if (pos < str.size() && str[pos] == '}') { pos++; break; }
+        }
+        return v;
+    }
+    if (c == '[') {
+        pos++;
+        JsonVal v; v.type = JsonVal::Array;
+        while (pos < str.size()) {
+            skipWs();
+            if (pos < str.size() && str[pos] == ']') { pos++; break; }
+            JsonVal val = ParseJsonSimple(str, pos);
+            v.arrVal.push_back(val);
+            skipWs();
+            if (pos < str.size() && str[pos] == ',') pos++;
+            else if (pos < str.size() && str[pos] == ']') { pos++; break; }
+        }
+        return v;
+    }
+    if (c == 't' || c == 'f') {
+        JsonVal v; v.type = JsonVal::Bool;
+        if (str.compare(pos, 4, "true") == 0) { v.boolVal = true; pos += 4; }
+        else if (str.compare(pos, 5, "false") == 0) { v.boolVal = false; pos += 5; }
+        return v;
+    }
+    if (c == 'n') {
+        if (str.compare(pos, 4, "null") == 0) pos += 4;
+        return {};
+    }
+    if ((c >= '0' && c <= '9') || c == '-') {
+        size_t start = pos;
+        if (c == '-') pos++;
+        while (pos < str.size() && (std::isdigit((unsigned char)str[pos]) || str[pos] == '.' || str[pos] == 'e' || str[pos] == 'E' || str[pos] == '+' || str[pos] == '-')) pos++;
+        JsonVal v; v.type = JsonVal::Number;
+        try { v.numVal = std::stod(str.substr(start, pos - start)); } catch (...) {}
+        return v;
+    }
+    pos++;
+    return {};
+}
+
 static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string& releaseGroupMbId) {
     std::vector<MBTrackEntry> tracks;
     if (releaseGroupMbId.empty()) return tracks;
@@ -680,81 +796,38 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
     std::string resJson = HttpGetString(Utf8ToWide(url));
     if (resJson.empty()) return tracks;
 
-    size_t mediaPos = resJson.find("\"media\":");
-    if (mediaPos == std::string::npos) return tracks;
+    size_t p = 0;
+    JsonVal doc = ParseJsonSimple(resJson, p);
 
-    size_t tracksPos = resJson.find("\"tracks\":", mediaPos);
-    if (tracksPos == std::string::npos) return tracks;
+    const auto& media = doc.get("media");
+    if (media.type != JsonVal::Array || media.arrVal.empty()) return tracks;
 
-    size_t cur = tracksPos;
-    while (cur < resJson.size()) {
-        size_t p1 = resJson.find("\"position\":", cur);
-        if (p1 == std::string::npos) break;
+    for (size_t m = 0; m < media.arrVal.size(); ++m) {
+        const auto& trs = media.get(m).get("tracks");
+        if (trs.type != JsonVal::Array) continue;
 
-        size_t pNext = resJson.find("\"position\":", p1 + 11);
-        size_t blockEnd = (pNext != std::string::npos) ? pNext : resJson.size();
-        std::string block = resJson.substr(p1, blockEnd - p1);
+        for (size_t i = 0; i < trs.arrVal.size(); ++i) {
+            const auto& tObj = trs.get(i);
+            int pos = (int)tObj.get("position").numVal;
 
-        int pos = 0;
-        size_t posIdx = block.find("\"position\":");
-        if (posIdx != std::string::npos) {
-            posIdx += 11;
-            while (posIdx < block.size() && (block[posIdx] == ' ' || block[posIdx] == ':')) posIdx++;
-            size_t endP = block.find_first_of(",}", posIdx);
-            if (endP != std::string::npos) {
-                try { pos = std::stoi(block.substr(posIdx, endP - posIdx)); } catch (...) {}
-            }
-        }
+            std::string title = tObj.get("title").strVal;
+            if (title.empty()) title = tObj.get("recording").get("title").strVal;
 
-        std::string title;
-        size_t recIdx = block.find("\"recording\":");
-        if (recIdx != std::string::npos) {
-            size_t titleIdx = block.find("\"title\"", recIdx);
-            if (titleIdx != std::string::npos) {
-                size_t valStart = block.find('"', block.find(':', titleIdx) + 1);
-                if (valStart != std::string::npos) {
-                    valStart++;
-                    size_t tend = block.find('"', valStart);
-                    if (tend != std::string::npos) {
-                        title = block.substr(valStart, tend - valStart);
-                    }
+            std::string artist;
+            const auto& ac = tObj.get("artist-credit");
+            if (ac.type == JsonVal::Array && !ac.arrVal.empty()) {
+                artist = ac.get(0).get("name").strVal;
+            } else {
+                const auto& recAc = tObj.get("recording").get("artist-credit");
+                if (recAc.type == JsonVal::Array && !recAc.arrVal.empty()) {
+                    artist = recAc.get(0).get("name").strVal;
                 }
             }
-        }
-        if (title.empty()) {
-            size_t titleIdx = block.find("\"title\"");
-            if (titleIdx != std::string::npos) {
-                size_t valStart = block.find('"', block.find(':', titleIdx) + 1);
-                if (valStart != std::string::npos) {
-                    valStart++;
-                    size_t tend = block.find('"', valStart);
-                    if (tend != std::string::npos) {
-                        title = block.substr(valStart, tend - valStart);
-                    }
-                }
+
+            if (pos > 0 && !title.empty()) {
+                tracks.push_back({ pos, title, artist });
             }
         }
-
-        std::string artist;
-        size_t acIdx = block.find("\"artist-credit\":");
-        if (acIdx != std::string::npos) {
-            size_t nameIdx = block.find("\"name\"", acIdx);
-            if (nameIdx != std::string::npos) {
-                size_t valStart = block.find('"', block.find(':', nameIdx) + 1);
-                if (valStart != std::string::npos) {
-                    valStart++;
-                    size_t nend = block.find('"', valStart);
-                    if (nend != std::string::npos) {
-                        artist = block.substr(valStart, nend - valStart);
-                    }
-                }
-            }
-        }
-
-        if (pos > 0 && !title.empty()) {
-            tracks.push_back({ pos, title, artist });
-        }
-        cur = (pNext != std::string::npos) ? pNext : std::string::npos;
     }
     return tracks;
 }
