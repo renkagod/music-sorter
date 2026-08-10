@@ -137,7 +137,7 @@ static void LoadFolderSettings() {
     LOG_INFO("[FOLDERS] FLAC: " + g_FlacDir);
     LOG_INFO("[FOLDERS] MP3: " + g_Mp3Dir);
     if (g_AcoustIdKey == "8Xa1nV0f") {
-        LOG_WARN("[FOLDERS] AcoustID key is the demo key (8Xa1nV0f) which returns 'invalid API key'. Set acoustid_key=<your-key> in folders.cfg (get one at https://acoustid.org/api-key).");
+        LOG_WARN("[FOLDERS] AcoustID key is the demo key (8Xa1nV0f) which returns 'invalid API key'. Get an application key at https://acoustid.org/new-application (NOT the user key from /api-key -- lookups need the APPLICATION key).");
     } else {
         LOG_INFO("[FOLDERS] AcoustID API key loaded from folders.cfg");
     }
@@ -1761,7 +1761,7 @@ void AppWindow::RunMessageLoop() {
             ImGui::PopItemWidth();
             if (std::string(m_acoustIdKeyBuf) == "8Xa1nV0f") {
                 ImGui::SameLine();
-                ImGui::TextDisabled("(демо-ключ мёртв — получи свой на https://acoustid.org/api-key)");
+                ImGui::TextDisabled("(демо-ключ мёртв — получи APPLICATION ключ на https://acoustid.org/new-application)");
             }
 
             if (ImGui::Button("Сохранить пути")) {
