@@ -917,46 +917,64 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
     size_t p = 0;
     JsonVal doc = ParseJsonSimple(resJson, p);
 
-    const JsonVal* mediaPtr = &doc.get("media");
-    if (mediaPtr->type != JsonVal::Array || mediaPtr->arrVal.empty()) {
-        const auto& rels = doc.get("releases");
-        if (rels.type == JsonVal::Array && !rels.arrVal.empty()) {
-            mediaPtr = &rels.get(0).get("media");
-        }
-    }
-    if (mediaPtr->type != JsonVal::Array || mediaPtr->arrVal.empty()) return tracks;
-    const auto& media = *mediaPtr;
+    const auto& rels = doc.get("releases");
+    if (rels.type != JsonVal::Array || rels.arrVal.empty()) return tracks;
 
-    for (size_t m = 0; m < media.arrVal.size(); ++m) {
-        const auto& trs = media.get(m).get("tracks");
-        if (trs.type != JsonVal::Array) continue;
-
-        for (size_t i = 0; i < trs.arrVal.size(); ++i) {
-            const auto& tObj = trs.get(i);
-            int pos = (int)tObj.get("position").numVal;
-
-            std::string title = tObj.get("title").strVal;
-            if (title.empty()) title = tObj.get("recording").get("title").strVal;
-
-            int lengthMs = (int)tObj.get("length").numVal;
-            if (lengthMs == 0) lengthMs = (int)tObj.get("recording").get("length").numVal;
-
-            std::string artist;
-            const auto& ac = tObj.get("artist-credit");
-            if (ac.type == JsonVal::Array && !ac.arrVal.empty()) {
-                artist = ac.get(0).get("name").strVal;
-            } else {
-                const auto& recAc = tObj.get("recording").get("artist-credit");
-                if (recAc.type == JsonVal::Array && !recAc.arrVal.empty()) {
-                    artist = recAc.get(0).get("name").strVal;
+    auto extractTracks = [](const JsonVal& mediaVal, std::vector<MBTrackEntry>& out) {
+        if (mediaVal.type != JsonVal::Array || mediaVal.arrVal.empty()) return;
+        for (size_t m = 0; m < mediaVal.arrVal.size(); ++m) {
+            const auto& trs = mediaVal.get(m).get("tracks");
+            if (trs.type != JsonVal::Array) continue;
+            for (size_t i = 0; i < trs.arrVal.size(); ++i) {
+                const auto& tObj = trs.get(i);
+                int pos = (int)tObj.get("position").numVal;
+                std::string title = tObj.get("title").strVal;
+                if (title.empty()) title = tObj.get("recording").get("title").strVal;
+                int lengthMs = (int)tObj.get("length").numVal;
+                if (lengthMs == 0) lengthMs = (int)tObj.get("recording").get("length").numVal;
+                std::string artist;
+                const auto& ac = tObj.get("artist-credit");
+                if (ac.type == JsonVal::Array && !ac.arrVal.empty()) {
+                    artist = ac.get(0).get("name").strVal;
+                } else {
+                    const auto& recAc = tObj.get("recording").get("artist-credit");
+                    if (recAc.type == JsonVal::Array && !recAc.arrVal.empty()) {
+                        artist = recAc.get(0).get("name").strVal;
+                    }
+                }
+                if (pos > 0 && !title.empty()) {
+                    out.push_back({ pos, title, artist, lengthMs });
                 }
             }
+        }
+    };
 
-            if (pos > 0 && !title.empty()) {
-                tracks.push_back({ pos, title, artist, lengthMs });
+    // 1. Prefer Pseudo-Release (romanized titles)
+    for (const auto& rel : rels.arrVal) {
+        std::string status = rel.get("status").strVal;
+        if (status == "Pseudo-Release") {
+            extractTracks(rel.get("media"), tracks);
+            if (!tracks.empty()) {
+                LOG_INFO("[MUSICBRAINZ] Selected Pseudo-Release for romanized track titles");
+                return tracks;
             }
         }
     }
+
+    // 2. Fallback to first Official release
+    for (const auto& rel : rels.arrVal) {
+        std::string status = rel.get("status").strVal;
+        if (status == "Official") {
+            extractTracks(rel.get("media"), tracks);
+            if (!tracks.empty()) {
+                LOG_INFO("[MUSICBRAINZ] No Pseudo-Release found, using Official release titles");
+                return tracks;
+            }
+        }
+    }
+
+    // 3. Last resort: whatever is available
+    extractTracks(rels.get(0).get("media"), tracks);
     return tracks;
 }
 
