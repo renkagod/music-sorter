@@ -171,7 +171,7 @@ static std::string RomajiToKatakana(const std::string& input) {
             result += input[i];
             i++;
         }
-    }
+}
     return result;
 }
 
@@ -663,6 +663,70 @@ std::string HttpGetString(const std::wstring& url) {
     auto bytes = HttpGetBytes(url);
     if (bytes.empty()) return "";
     return std::string((char*)bytes.data(), bytes.size());
+}
+
+struct MBTrackEntry {
+    int position = 0;
+    std::string title;
+    std::string artist;
+};
+
+static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string& releaseGroupMbId) {
+    std::vector<MBTrackEntry> tracks;
+    if (releaseGroupMbId.empty()) return tracks;
+
+    std::string url = "https://musicbrainz.org/ws/2/release?release-group=" + releaseGroupMbId + "&inc=recordings+artist-credits&fmt=json";
+    std::string resJson = HttpGetString(Utf8ToWide(url));
+    if (resJson.empty()) return tracks;
+
+    size_t relsPos = resJson.find("\"releases\":");
+    if (relsPos == std::string::npos) return tracks;
+
+    size_t mediaPos = resJson.find("\"media\":", relsPos);
+    if (mediaPos == std::string::npos) return tracks;
+
+    size_t tracksPos = resJson.find("\"tracks\":", mediaPos);
+    if (tracksPos == std::string::npos) return tracks;
+
+    size_t cur = tracksPos;
+    while ((cur = resJson.find("\"position\":", cur)) != std::string::npos) {
+        cur += 11;
+        while (cur < resJson.size() && (resJson[cur] == ' ' || resJson[cur] == ':')) cur++;
+        size_t endPos = resJson.find_first_of(",}", cur);
+        if (endPos == std::string::npos) break;
+
+        int pos = 0;
+        try { pos = std::stoi(resJson.substr(cur, endPos - cur)); } catch (...) {}
+
+        std::string title;
+        size_t titlePos = resJson.find("\"title\":\"", cur);
+        if (titlePos != std::string::npos && titlePos < cur + 600) {
+            titlePos += 9;
+            size_t tendPos = resJson.find("\"", titlePos);
+            if (tendPos != std::string::npos) {
+                title = resJson.substr(titlePos, tendPos - titlePos);
+            }
+        }
+
+        std::string artist;
+        size_t acPos = resJson.find("\"artist-credit\":", cur);
+        if (acPos != std::string::npos && acPos < cur + 600) {
+            size_t namePos = resJson.find("\"name\":\"", acPos);
+            if (namePos != std::string::npos && namePos < acPos + 300) {
+                namePos += 8;
+                size_t nendPos = resJson.find("\"", namePos);
+                if (nendPos != std::string::npos) {
+                    artist = resJson.substr(namePos, nendPos - namePos);
+                }
+            }
+        }
+
+        if (pos > 0 && !title.empty()) {
+            tracks.push_back({ pos, title, artist });
+        }
+        cur = endPos;
+    }
+    return tracks;
 }
 
 ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const unsigned char* data, size_t size, int* outWidth, int* outHeight) {
@@ -1696,6 +1760,62 @@ void AppWindow::RunMessageLoop() {
 
                             if (coverData.empty()) {
                                 LOG_INFO("[COVER ART MISSING] CoverArtArchive image not available for MBID: " + releaseGroupMbId);
+                            }
+
+                            // Fetch Release Tracklist from MusicBrainz to enrich track numbers, titles, and individual track artists
+                            std::vector<MBTrackEntry> mbTracks = FetchMusicBrainzReleaseTracks(releaseGroupMbId);
+                            if (!mbTracks.empty()) {
+                                LOG_INFO("[MUSICBRAINZ TRACKLIST] Loaded " + std::to_string(mbTracks.size()) + " tracks from MusicBrainz release.");
+                                for (auto& albItem : m_tagItems) {
+                                    std::string aKey = NormalizeKey(albItem.embeddedArtist) + "|" + NormalizeKey(albItem.embeddedAlbum);
+                                    if (aKey == albumKey) {
+                                        std::string filenameLower = albItem.originalFilename;
+                                        std::transform(filenameLower.begin(), filenameLower.end(), filenameLower.begin(), ::tolower);
+
+                                        const MBTrackEntry* bestMatch = nullptr;
+                                        int bestScore = -1;
+
+                                        for (const auto& t : mbTracks) {
+                                            int score = 0;
+                                            std::string tTitleLower = t.title;
+                                            std::transform(tTitleLower.begin(), tTitleLower.end(), tTitleLower.begin(), ::tolower);
+
+                                            std::string tArtistLower = t.artist;
+                                            std::transform(tArtistLower.begin(), tArtistLower.end(), tArtistLower.begin(), ::tolower);
+
+                                            if (!tTitleLower.empty() && filenameLower.find(tTitleLower) != std::string::npos) {
+                                                score += 50;
+                                            }
+                                            if (!tArtistLower.empty() && tArtistLower != "various artists" && filenameLower.find(tArtistLower) != std::string::npos) {
+                                                score += 30;
+                                            }
+                                            std::string embTitleLower = albItem.embeddedTitle;
+                                            std::transform(embTitleLower.begin(), embTitleLower.end(), embTitleLower.begin(), ::tolower);
+                                            if (!tTitleLower.empty() && !embTitleLower.empty() && (embTitleLower.find(tTitleLower) != std::string::npos || tTitleLower.find(embTitleLower) != std::string::npos)) {
+                                                score += 40;
+                                            }
+
+                                            if (score > bestScore) {
+                                                bestScore = score;
+                                                bestMatch = &t;
+                                            }
+                                        }
+
+                                        if (bestMatch && bestScore > 0) {
+                                            char trackStr[16];
+                                            sprintf_s(trackStr, sizeof(trackStr), "%02d", bestMatch->position);
+                                            strncpy_s(albItem.trackNoBuf, trackStr, sizeof(albItem.trackNoBuf) - 1);
+
+                                            if (!bestMatch->title.empty()) {
+                                                strncpy_s(albItem.titleBuf, bestMatch->title.c_str(), sizeof(albItem.titleBuf) - 1);
+                                            }
+                                            if (!bestMatch->artist.empty() && bestMatch->artist != "Various Artists" && bestMatch->artist != "V.A.") {
+                                                strncpy_s(albItem.artistBuf, bestMatch->artist.c_str(), sizeof(albItem.artistBuf) - 1);
+                                            }
+                                            LOG_INFO("[MUSICBRAINZ TRACK MATCHED] Track #" + std::string(trackStr) + ": " + std::string(albItem.artistBuf) + " - " + std::string(albItem.titleBuf) + " for file: " + albItem.originalFilename);
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             LOG_INFO("[NICHE TRACK] MusicBrainz record not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
