@@ -193,11 +193,12 @@ void AcousticAnalyzer::AnalyzeDirectory(
                                              f2.path.find("- Copy") != std::string::npos || f2.path.find(" (1)") != std::string::npos);
                 bool isFlacMp3Pair = (ext1 != ext2 && (ext1 == ".mp3" || ext2 == ".mp3"));
 
-                // Auto-delete applies ONLY to:
-                // 1. Exact 96%+ identical wave matches
-                // 2. FLAC vs MP3 pairs that are 85%+ similar (MP3 auto-deleted) — previously deleted at ANY similarity!
-                // 3. Explicit "- Copy" folders that are 85%+ similar (copy auto-deleted)
-                if (sim >= 0.96 || (isFlacMp3Pair && sim >= 0.85) || (sim >= 0.85 && isExplicitCopyFolder)) {
+                // Auto-delete applies ONLY to near-identical matches (96%+):
+                // 1. Exact identical wave matches
+                // 2. FLAC vs MP3 pairs of the SAME audio (MP3 auto-deleted)
+                // 3. Explicit "- Copy" folders that are exact duplicates
+                // Anything 70-95% goes to A/B comparison for user decision!
+                if (sim >= 0.96) {
                     std::string autoDelPath;
                     if (ext1 == ".flac" && ext2 == ".mp3") autoDelPath = f2.path;
                     else if (ext2 == ".flac" && ext1 == ".mp3") autoDelPath = f1.path;
@@ -205,7 +206,10 @@ void AcousticAnalyzer::AnalyzeDirectory(
                     else if (f1.path.find("- Copy") != std::string::npos || f1.path.find(" (1)") != std::string::npos) autoDelPath = f1.path;
                     else autoDelPath = f2.path;
 
-                    LOG_INFO("[AUTO-DELETE MATCH " + std::to_string((int)(sim * 100)) + "%] Moving duplicate to delete/: " + fs::relative(autoDelPath, baseDirectory).string());
+                    std::string autoDelRel = fs::relative(autoDelPath, baseDirectory).string();
+                    std::string keptPath = (autoDelPath == f1.path) ? f2.path : f1.path;
+                    std::string keptRel = fs::relative(keptPath, baseDirectory).string();
+                    LOG_INFO("[AUTO-DELETE MATCH " + std::to_string((int)(sim * 100)) + "%] Deleting: " + autoDelRel + " | Keeping: " + keptRel);
                     outAutoDelete.push_back(autoDelPath);
                 } else if (sim >= 0.70) {
                     // Alternate album mixes, reissues, demos (70% - 95% similarity) are sent to A/B Comparison Screen for user decision!
