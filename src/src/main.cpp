@@ -15,6 +15,7 @@ std::string g_DeleteDir;
 std::string g_OutputDir;
 std::string g_FlacDir;
 std::string g_Mp3Dir;
+std::string g_AcoustIdKey = "8Xa1nV0f";
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     char exe_path[MAX_PATH];

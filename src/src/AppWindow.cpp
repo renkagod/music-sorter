@@ -36,6 +36,7 @@ extern std::string g_DeleteDir;
 extern std::string g_OutputDir;
 extern std::string g_FlacDir;
 extern std::string g_Mp3Dir;
+extern std::string g_AcoustIdKey;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -106,6 +107,7 @@ static void SaveFolderSettings() {
     out << "output=" << g_OutputDir << "\n";
     out << "flac=" << g_FlacDir << "\n";
     out << "mp3=" << g_Mp3Dir << "\n";
+    out << "acoustid_key=" << g_AcoustIdKey << "\n";
     out.close();
     LOG_INFO("[FOLDERS] Settings saved to folders.cfg");
 }
@@ -125,6 +127,7 @@ static void LoadFolderSettings() {
         else if (key == "output" && !val.empty()) g_OutputDir = val;
         else if (key == "flac" && !val.empty()) g_FlacDir = val;
         else if (key == "mp3" && !val.empty()) g_Mp3Dir = val;
+        else if (key == "acoustid_key" && !val.empty()) g_AcoustIdKey = val;
     }
     in.close();
     LOG_INFO("[FOLDERS] Loaded settings from folders.cfg");
@@ -132,6 +135,11 @@ static void LoadFolderSettings() {
     LOG_INFO("[FOLDERS] Output: " + g_OutputDir);
     LOG_INFO("[FOLDERS] FLAC: " + g_FlacDir);
     LOG_INFO("[FOLDERS] MP3: " + g_Mp3Dir);
+    if (g_AcoustIdKey == "8Xa1nV0f") {
+        LOG_WARN("[FOLDERS] AcoustID key is the demo key (8Xa1nV0f) which returns 'invalid API key'. Set acoustid_key=<your-key> in folders.cfg (get one at https://acoustid.org/api-key).");
+    } else {
+        LOG_INFO("[FOLDERS] AcoustID API key loaded from folders.cfg");
+    }
 }
 
 struct MBTrackEntry {
@@ -1709,6 +1717,7 @@ void AppWindow::RunMessageLoop() {
             strncpy_s(m_outputBuf, g_OutputDir.c_str(), sizeof(m_outputBuf) - 1);
             strncpy_s(m_flacBuf, g_FlacDir.c_str(), sizeof(m_flacBuf) - 1);
             strncpy_s(m_mp3Buf, g_Mp3Dir.c_str(), sizeof(m_mp3Buf) - 1);
+            strncpy_s(m_acoustIdKeyBuf, g_AcoustIdKey.c_str(), sizeof(m_acoustIdKeyBuf) - 1);
             m_foldersInited = true;
         }
 
@@ -1745,11 +1754,21 @@ void AppWindow::RunMessageLoop() {
 
             ImGui::PopItemWidth();
 
+            ImGui::TextDisabled("AcoustID API ключ (нужен для fingerprint lookup)");
+            ImGui::PushItemWidth(420);
+            ImGui::InputText("##AcoustIdKey", m_acoustIdKeyBuf, sizeof(m_acoustIdKeyBuf));
+            ImGui::PopItemWidth();
+            if (std::string(m_acoustIdKeyBuf) == "8Xa1nV0f") {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(демо-ключ мёртв — получи свой на https://acoustid.org/api-key)");
+            }
+
             if (ImGui::Button("Сохранить пути")) {
                 g_ToSortDir = std::string(m_toSortBuf);
                 g_OutputDir = std::string(m_outputBuf);
                 g_FlacDir = std::string(m_flacBuf);
                 g_Mp3Dir = std::string(m_mp3Buf);
+                g_AcoustIdKey = std::string(m_acoustIdKeyBuf);
                 SaveFolderSettings();
             }
         }
@@ -1929,7 +1948,7 @@ void AppWindow::RunMessageLoop() {
                             LOG_INFO("[ACOUSTID FINGERPRINT] Extracted " + std::to_string(fpInfo.fpData.size()) + " frames, duration " + std::to_string(fpInfo.duration) + "s for " + item.originalFilename);
                             
                             std::ostringstream postStream;
-                            postStream << "client=8Xa1nV0f&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << "&fingerprint=";
+                            postStream << "client=" << g_AcoustIdKey << "&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << "&fingerprint=";
                             for (size_t k = 0; k < fpInfo.fpData.size(); ++k) {
                                 if (k > 0) postStream << ",";
                                 postStream << fpInfo.fpData[k];
