@@ -23,6 +23,8 @@
 #include <filesystem>
 #include <fstream>
 #include <regex>
+#include <chrono>
+#include <ctime>
 
 #pragma comment(lib, "wininet.lib")
 
@@ -2777,6 +2779,27 @@ void AppWindow::RunMessageLoop() {
             }
             CopyToClipboardWin32(full_logs);
             LOG_INFO("[CLIPBOARD] All console logs copied to Windows clipboard!");
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Сохранить в файл", ImVec2(140, 24))) {
+            auto now = std::chrono::system_clock::now();
+            std::time_t t = std::chrono::system_clock::to_time_t(now);
+            std::tm tm;
+            localtime_s(&tm, &t);
+            char stamp[32];
+            std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm);
+            fs::path logPath = fs::path(g_BaseDir) / ("logs_" + std::string(stamp) + ".txt");
+            std::ofstream fOut(logPath);
+            if (fOut.is_open()) {
+                for (const auto& log : logs) {
+                    fOut << log << "\n";
+                }
+                fOut.close();
+                LOG_INFO("[LOGS SAVED] Written to: " + logPath.string());
+            } else {
+                LOG_WARN("[LOGS SAVE ERROR] Could not write: " + logPath.string());
+            }
         }
 
         ImGui::Separator();

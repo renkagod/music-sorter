@@ -34,3 +34,4 @@ CMakeFiles/
 .agents/
 folders.cfg
 imgui.ini
+logs_*.txt
