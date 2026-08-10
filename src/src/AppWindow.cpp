@@ -1511,7 +1511,19 @@ void AppWindow::RunMessageLoop() {
                                                             std::transform(acLower.begin(), acLower.end(), acLower.begin(), ::tolower);
                                                             std::string baseLower = baseArtist;
                                                             std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), ::tolower);
-                                                            if (acLower.find(baseLower) == std::string::npos) {
+                                                            
+                                                            bool isVA = (acLower.find("various artists") != std::string::npos || acLower.find("v.a.") != std::string::npos);
+                                                            
+                                                            size_t labelPos = resJson.find("\"label\":", argPos);
+                                                            std::string labelChunk;
+                                                            if (labelPos != std::string::npos) {
+                                                                labelChunk = resJson.substr(labelPos, 600);
+                                                                std::transform(labelChunk.begin(), labelChunk.end(), labelChunk.begin(), ::tolower);
+                                                            }
+
+                                                            if (acLower.find(baseLower) == std::string::npos &&
+                                                                labelChunk.find(baseLower) == std::string::npos &&
+                                                                !isVA) {
                                                                 artistMatched = false;
                                                                 LOG_INFO("[MUSICBRAINZ TIER B REJECTED] Mismatched artist credit for " + label + " (Expected: " + baseArtist + ")");
                                                             }
