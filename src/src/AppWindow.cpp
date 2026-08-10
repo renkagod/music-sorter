@@ -799,8 +799,15 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
     size_t p = 0;
     JsonVal doc = ParseJsonSimple(resJson, p);
 
-    const auto& media = doc.get("media");
-    if (media.type != JsonVal::Array || media.arrVal.empty()) return tracks;
+    const JsonVal* mediaPtr = &doc.get("media");
+    if (mediaPtr->type != JsonVal::Array || mediaPtr->arrVal.empty()) {
+        const auto& rels = doc.get("releases");
+        if (rels.type == JsonVal::Array && !rels.arrVal.empty()) {
+            mediaPtr = &rels.get(0).get("media");
+        }
+    }
+    if (mediaPtr->type != JsonVal::Array || mediaPtr->arrVal.empty()) return tracks;
+    const auto& media = *mediaPtr;
 
     for (size_t m = 0; m < media.arrVal.size(); ++m) {
         const auto& trs = media.get(m).get("tracks");
