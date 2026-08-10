@@ -22,6 +22,7 @@ build/
 CMakeCache.txt
 CMakeFiles/
 *.exe
+!fpcalc.exe
 *.obj
 *.pdb
 *.bin
