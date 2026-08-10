@@ -119,6 +119,7 @@ static void LoadFolderSettings() {
     if (!in.is_open()) return;
     std::string line;
     while (std::getline(in, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
         std::string key = line.substr(0, eq);
