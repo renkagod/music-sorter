@@ -31,45 +31,54 @@ AudioFingerprint AcousticAnalyzer::ExtractFingerprint(const std::string& filepat
 
     std::wstring wBin = Utf8ToWideStr(m_fpcalcBin);
     std::wstring wFile = Utf8ToWideStr(filepath);
-    std::wstring wCmd = L"\"" + wBin + L"\" -raw \"" + wFile + L"\"";
 
-    HANDLE hRead, hWrite;
-    SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
-    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) return res;
-    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+    // Helper: run fpcalc with optional -raw flag, capture stdout
+    auto runFpcalc = [&](bool raw) -> std::string {
+        std::wstring wCmd = L"\"" + wBin + L"\"";
+        if (raw) wCmd += L" -raw";
+        wCmd += L" \"" + wFile + L"\"";
 
-    STARTUPINFOW si = { sizeof(STARTUPINFOW) };
-    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    si.hStdOutput = hWrite;
-    si.hStdError = hWrite;
-    si.wShowWindow = SW_HIDE;
+        HANDLE hRead, hWrite;
+        SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+        if (!CreatePipe(&hRead, &hWrite, &sa, 0)) return "";
+        SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
 
-    PROCESS_INFORMATION pi = { 0 };
-    std::vector<wchar_t> cmdBuf(wCmd.begin(), wCmd.end());
-    cmdBuf.push_back(L'\0');
+        STARTUPINFOW si = { sizeof(STARTUPINFOW) };
+        si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+        si.hStdOutput = hWrite;
+        si.hStdError = hWrite;
+        si.wShowWindow = SW_HIDE;
 
-    if (!CreateProcessW(NULL, cmdBuf.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-        CloseHandle(hRead);
+        PROCESS_INFORMATION pi = { 0 };
+        std::vector<wchar_t> cmdBuf(wCmd.begin(), wCmd.end());
+        cmdBuf.push_back(L'\0');
+
+        if (!CreateProcessW(NULL, cmdBuf.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            CloseHandle(hRead);
+            CloseHandle(hWrite);
+            return "";
+        }
+
         CloseHandle(hWrite);
-        return res;
-    }
 
-    CloseHandle(hWrite);
+        char buffer[4096];
+        DWORD bytesRead = 0;
+        std::string output;
+        while (ReadFile(hRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+            buffer[bytesRead] = '\0';
+            output += buffer;
+        }
 
-    char buffer[4096];
-    DWORD bytesRead = 0;
-    std::string output;
-    while (ReadFile(hRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
-        buffer[bytesRead] = '\0';
-        output += buffer;
-    }
+        CloseHandle(hRead);
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return output;
+    };
 
-    CloseHandle(hRead);
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    std::stringstream ss(output);
+    // Raw format (for cross-correlation dup detection)
+    std::string rawOutput = runFpcalc(true);
+    std::stringstream ss(rawOutput);
     std::string line;
     while (std::getline(ss, line)) {
         if (line.rfind("DURATION=", 0) == 0) {
@@ -85,8 +94,27 @@ AudioFingerprint AcousticAnalyzer::ExtractFingerprint(const std::string& filepat
         }
     }
 
+    // Base64 format (for AcoustID API lookup)
+    std::string b64Output = runFpcalc(false);
+    std::stringstream bss(b64Output);
+    while (std::getline(bss, line)) {
+        if (line.rfind("DURATION=", 0) == 0) {
+            if (res.duration == 0.0) {
+                try { res.duration = std::stod(line.substr(9)); } catch (...) {}
+            }
+        } else if (line.rfind("FINGERPRINT=", 0) == 0) {
+            res.fpBase64 = line.substr(12);
+            while (!res.fpBase64.empty() && (res.fpBase64.back() == '\r' || res.fpBase64.back() == '\n' || res.fpBase64.back() == ' ')) {
+                res.fpBase64.pop_back();
+            }
+        }
+    }
+
     if (res.fpData.empty()) {
-        LOG_WARN("fpcalc failed to produce fingerprint for: " + fs::path(filepath).filename().string());
+        LOG_WARN("fpcalc failed to produce raw fingerprint for: " + fs::path(filepath).filename().string());
+    }
+    if (res.fpBase64.empty()) {
+        LOG_WARN("fpcalc failed to produce base64 fingerprint for: " + fs::path(filepath).filename().string());
     }
 
     return res;

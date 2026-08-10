@@ -9,6 +9,7 @@ struct AudioFingerprint {
     std::string path;
     double duration = 0.0;
     std::vector<unsigned int> fpData;
+    std::string fpBase64;
 };
 
 struct ABCandidatePair {

@@ -1945,16 +1945,12 @@ void AppWindow::RunMessageLoop() {
                         std::string acoustRecTitle;
                         std::string acoustRecArtist;
 
-                        if (!fpInfo.fpData.empty()) {
+                        if (!fpInfo.fpBase64.empty()) {
                             LOG_INFO("[ACOUSTID FINGERPRINT] Extracted " + std::to_string(fpInfo.fpData.size()) + " frames, duration " + std::to_string(fpInfo.duration) + "s for " + item.originalFilename);
                             
                             std::ostringstream postStream;
-                            postStream << "client=" << g_AcoustIdKey << "&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << "&fingerprint=";
-                            for (size_t k = 0; k < fpInfo.fpData.size(); ++k) {
-                                if (k > 0) postStream << ",";
-                                postStream << fpInfo.fpData[k];
-                            }
-                                   std::string acoustRes = AcoustIdHttpPost(postStream.str());
+                            postStream << "client=" << g_AcoustIdKey << "&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << "&fingerprint=" << fpInfo.fpBase64;
+                            std::string acoustRes = AcoustIdHttpPost(postStream.str());
 
                             if (acoustRes.empty()) {
                                 LOG_WARN("[ACOUSTID] Empty response from API (rate limit or network issue)");
