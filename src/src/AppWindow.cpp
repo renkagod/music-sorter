@@ -1558,27 +1558,32 @@ void AppWindow::RunMessageLoop() {
                             }
                         }
 
-                        // 3. Fetch Cover Art from CoverArtArchive.org if Release ID was found (Prioritize Original Ultra-High Res /front)
+                        // 3. Fetch Cover Art from CoverArtArchive.org (Cascading Fallback: Original -> 1200px -> 500px -> 250px)
                         if (!releaseGroupMbId.empty()) {
-                            LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive original full-res image...");
-                            std::wstring caaUrl = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front");
-                            coverData = HttpGetBytes(caaUrl);
-                            if (coverData.empty()) {
-                                std::wstring caaRelUrl = Utf8ToWide("https://coverartarchive.org/release/" + releaseGroupMbId + "/front");
-                                coverData = HttpGetBytes(caaRelUrl);
-                            }
-                            if (coverData.empty()) {
-                                std::wstring caaUrl500 = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-500");
-                                coverData = HttpGetBytes(caaUrl500);
-                            }
-                            if (coverData.empty()) {
-                                std::wstring caaRelUrl500 = Utf8ToWide("https://coverartarchive.org/release/" + releaseGroupMbId + "/front-500");
-                                coverData = HttpGetBytes(caaRelUrl500);
+                            LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive image...");
+                            
+                            const char* endpoints[] = {
+                                "https://coverartarchive.org/release-group/%s/front",
+                                "https://coverartarchive.org/release/%s/front",
+                                "https://coverartarchive.org/release-group/%s/front-1200",
+                                "https://coverartarchive.org/release/%s/front-1200",
+                                "https://coverartarchive.org/release-group/%s/front-500",
+                                "https://coverartarchive.org/release/%s/front-500",
+                                "https://coverartarchive.org/release-group/%s/front-250",
+                                "https://coverartarchive.org/release/%s/front-250"
+                            };
+
+                            for (const char* epPattern : endpoints) {
+                                char urlBuf[512];
+                                sprintf_s(urlBuf, sizeof(urlBuf), epPattern, releaseGroupMbId.c_str());
+                                coverData = HttpGetBytes(Utf8ToWide(urlBuf));
+                                if (!coverData.empty()) {
+                                    LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art via " + std::string(urlBuf));
+                                    break;
+                                }
                             }
 
-                            if (!coverData.empty()) {
-                                LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art for " + albumClean);
-                            } else {
+                            if (coverData.empty()) {
                                 LOG_INFO("[COVER ART MISSING] CoverArtArchive image not available for MBID: " + releaseGroupMbId);
                             }
                         } else {
