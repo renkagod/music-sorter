@@ -1920,6 +1920,11 @@ void AppWindow::RunMessageLoop() {
                         std::this_thread::sleep_for(std::chrono::milliseconds(200));
                         auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(files[i]);
                         item.duration = fpInfo.duration;
+
+                        std::string acoustRecMbId;
+                        std::string acoustRecTitle;
+                        std::string acoustRecArtist;
+
                         if (!fpInfo.fpData.empty()) {
                             LOG_INFO("[ACOUSTID FINGERPRINT] Extracted " + std::to_string(fpInfo.fpData.size()) + " frames, duration " + std::to_string(fpInfo.duration) + "s for " + item.originalFilename);
                             
@@ -1934,10 +1939,6 @@ void AppWindow::RunMessageLoop() {
                             size_t jsonPos = 0;
                             JsonVal acoustDoc = ParseJsonSimple(acoustRes, jsonPos);
                             const auto& acoustResults = acoustDoc.get("results");
-
-                            std::string acoustRecMbId;
-                            std::string acoustRecTitle;
-                            std::string acoustRecArtist;
 
                             if (acoustResults.type == JsonVal::Array) {
                                 std::string bestRgId;
@@ -2050,9 +2051,20 @@ void AppWindow::RunMessageLoop() {
 
                         // 2. Multi-Tier MusicBrainz Search Strategy with Detailed Tier Logging
                         if (releaseGroupMbId.empty() && !albumClean.empty()) {
+                            // If AcoustID provided a recording artist/title, prefer it over folder-derived metadata
+                            std::string searchArtist = artistClean;
+                            std::string searchTitle = titleClean;
+                            if (!acoustRecArtist.empty()) {
+                                searchArtist = acoustRecArtist;
+                                LOG_INFO("[ACOUSTID OVERRIDE] Using AcoustID artist '" + acoustRecArtist + "' instead of folder '" + artistClean + "'");
+                            }
+                            if (!acoustRecTitle.empty()) {
+                                searchTitle = acoustRecTitle;
+                            }
+
                             // Tier A: Strict Release Group Search
-                            if (!artistClean.empty() && artistClean != "Unknown Artist") {
-                                std::string artistLucene = EscapeLuceneQuery(artistClean);
+                            if (!searchArtist.empty() && searchArtist != "Unknown Artist") {
+                                std::string artistLucene = EscapeLuceneQuery(searchArtist);
                                 std::string albumLucene = EscapeLuceneQuery(albumClean);
                                 std::string mbQuery = "artist:\"" + artistLucene + "\" AND release:\"" + albumLucene + "\"";
                                 std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
@@ -2102,9 +2114,9 @@ void AppWindow::RunMessageLoop() {
                                             if (aendPos != std::string::npos) {
                                                 std::string candMbId = resJson.substr(aidPos, aendPos - aidPos);
                                                 if (candMbId.length() == 36) {
-                                                    bool artistMatched = true;
-                                                    if (!artistClean.empty() && artistClean != "Unknown Artist") {
-                                                        std::string baseArtist = artistClean;
+                                    bool artistMatched = true;
+                                    if (!searchArtist.empty() && searchArtist != "Unknown Artist") {
+                                        std::string baseArtist = searchArtist;
                                                         size_t semiPos = baseArtist.find(';');
                                                         if (semiPos != std::string::npos) baseArtist = baseArtist.substr(0, semiPos);
                                                         while (!baseArtist.empty() && (baseArtist.back() == ' ' || baseArtist.back() == '\t')) baseArtist.pop_back();
@@ -2197,7 +2209,7 @@ void AppWindow::RunMessageLoop() {
 
                             // Tier C: Loose Text Search
                             if (releaseGroupMbId.empty()) {
-                                std::string mbLooseQuery = EscapeLuceneQuery(artistClean) + " " + EscapeLuceneQuery(albumClean);
+                                std::string mbLooseQuery = EscapeLuceneQuery(searchArtist) + " " + EscapeLuceneQuery(albumClean);
                                 std::string mbLooseUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbLooseQuery) + "&fmt=json";
                                 LOG_INFO("[MUSICBRAINZ TIER C LOOSE] Querying: " + mbLooseQuery);
                                 std::string mbLooseRes = HttpGetString(Utf8ToWide(mbLooseUrl));
@@ -2211,8 +2223,8 @@ void AppWindow::RunMessageLoop() {
                                             std::string candMbId = mbLooseRes.substr(lidPos, lendPos - lidPos);
                                             if (candMbId.length() == 36) {
                                                 bool artistMatched = true;
-                                                if (!artistClean.empty() && artistClean != "Unknown Artist") {
-                                                    std::string baseArtist = artistClean;
+                                                if (!searchArtist.empty() && searchArtist != "Unknown Artist") {
+                                                    std::string baseArtist = searchArtist;
                                                     size_t semiPos = baseArtist.find(';');
                                                     if (semiPos != std::string::npos) baseArtist = baseArtist.substr(0, semiPos);
                                                     while (!baseArtist.empty() && (baseArtist.back() == ' ' || baseArtist.back() == '\t')) baseArtist.pop_back();
