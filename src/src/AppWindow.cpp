@@ -1515,7 +1515,29 @@ void AppWindow::RunMessageLoop() {
                                                     }
                                                 }
 
-                                                if (artistMatched) {
+                                                bool titleMatched = true;
+                                                if (!albumClean.empty()) {
+                                                    size_t tPos = mbLooseRes.find("\"title\":\"", lrgPos);
+                                                    if (tPos != std::string::npos) {
+                                                        tPos += 9;
+                                                        size_t tendPos = mbLooseRes.find("\"", tPos);
+                                                        if (tendPos != std::string::npos) {
+                                                            std::string candTitle = mbLooseRes.substr(tPos, tendPos - tPos);
+                                                            std::string candTitleLower = candTitle;
+                                                            std::transform(candTitleLower.begin(), candTitleLower.end(), candTitleLower.begin(), ::tolower);
+                                                            std::string albumCleanLower = albumClean;
+                                                            std::transform(albumCleanLower.begin(), albumCleanLower.end(), albumCleanLower.begin(), ::tolower);
+
+                                                            if (candTitleLower.find(albumCleanLower) == std::string::npos &&
+                                                                albumCleanLower.find(candTitleLower) == std::string::npos) {
+                                                                titleMatched = false;
+                                                                LOG_INFO("[MUSICBRAINZ TIER C REJECTED] Mismatched album title: " + candTitle + " (Expected: " + albumClean + ")");
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                if (artistMatched && titleMatched) {
                                                     releaseGroupMbId = candMbId;
                                                     isMatched = true;
                                                     LOG_INFO("[MUSICBRAINZ TIER C SUCCESS] MBID: " + releaseGroupMbId);
