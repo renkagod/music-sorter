@@ -1553,8 +1553,10 @@ void AppWindow::RunMessageLoop() {
                         std::string artistClean(item.artistBuf);
                         std::string albumClean(item.albumBuf);
                         std::string titleClean(item.titleBuf);
-                        std::string folderStr = fs::path(files[i]).parent_path().string();
-                        std::string albumKey = NormalizeKey(folderStr) + "_" + NormalizeKey(albumClean);
+                        std::string albumKey = NormalizeKey(albumClean);
+                        if (albumKey.empty() || albumKey == "unknown" || albumKey == "tosort" || albumKey == "music" || albumKey == "media") {
+                            albumKey = NormalizeKey(fs::path(files[i]).parent_path().string());
+                        }
 
                         std::string releaseGroupMbId;
                         std::string firstReleaseDate;
@@ -1871,16 +1873,21 @@ void AppWindow::RunMessageLoop() {
                                 LOG_INFO("[MUSICBRAINZ TRACKLIST] Loaded " + std::to_string(mbTracks.size()) + " tracks from MusicBrainz release.");
                             }
                             
-                            // Apply track match for current item and all items matching albumKey
+                            // Apply track match for current item and all items matching albumKey or MBID
                             for (size_t k = 0; k < files.size(); ++k) {
-                                std::string fPath = fs::path(files[k]).parent_path().string();
-                                std::string aKey = NormalizeKey(fPath) + "_" + NormalizeKey(m_tagItems[k].albumBuf);
+                                std::string aKey = NormalizeKey(m_tagItems[k].albumBuf);
+                                if (aKey.empty() || aKey == "unknown" || aKey == "tosort" || aKey == "music" || aKey == "media") {
+                                    aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
+                                }
                                 if (aKey == albumKey) {
                                     ApplyTrackMatch(m_tagItems[k], mbTracks);
                                 }
                             }
                             
                             albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, mbTracks, isMatched, true };
+                            if (!releaseGroupMbId.empty()) {
+                                albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, mbTracks, isMatched, true };
+                            }
                         } else {
                             LOG_INFO("[NICHE TRACK] MusicBrainz record not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
                             albumCache[albumKey] = { "", "", {}, {}, false, true };
