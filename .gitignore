@@ -25,6 +25,7 @@ CMakeFiles/
 !fpcalc.exe
 *.obj
 *.pdb
+*.ilk
 *.bin
 
 # Temporary scripts & system artifacts
