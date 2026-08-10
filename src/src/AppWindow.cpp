@@ -1935,6 +1935,10 @@ void AppWindow::RunMessageLoop() {
                             JsonVal acoustDoc = ParseJsonSimple(acoustRes, jsonPos);
                             const auto& acoustResults = acoustDoc.get("results");
 
+                            std::string acoustRecMbId;
+                            std::string acoustRecTitle;
+                            std::string acoustRecArtist;
+
                             if (acoustResults.type == JsonVal::Array) {
                                 std::string bestRgId;
                                 int bestScore = -1;
@@ -1946,6 +1950,7 @@ void AppWindow::RunMessageLoop() {
                                     for (size_t ci = 0; ci < recs.arrVal.size(); ++ci) {
                                         const auto& rec = recs.get(ci);
                                         std::string recTitle = rec.get("title").strVal;
+                                        std::string recId = rec.get("id").strVal;
 
                                         std::string recArtist;
                                         const auto& recArtists = rec.get("artists");
@@ -1954,10 +1959,12 @@ void AppWindow::RunMessageLoop() {
                                         }
 
                                         const auto& rgs = rec.get("releasegroups");
-                                        if (rgs.type != JsonVal::Array || rgs.arrVal.empty()) continue;
-                                        std::string rgId = rgs.get(0).get("id").strVal;
-                                        if (rgId.length() != 36) continue;
-                                        std::string rgTitle = rgs.get(0).get("title").strVal;
+                                        std::string rgId;
+                                        std::string rgTitle;
+                                        if (rgs.type == JsonVal::Array && !rgs.arrVal.empty()) {
+                                            rgId = rgs.get(0).get("id").strVal;
+                                            rgTitle = rgs.get(0).get("title").strVal;
+                                        }
 
                                         int score = 0;
 
@@ -1994,14 +2001,49 @@ void AppWindow::RunMessageLoop() {
                                         if (score > bestScore) {
                                             bestScore = score;
                                             bestRgId = rgId;
+                                            if (!recId.empty()) acoustRecMbId = recId;
+                                            if (!recTitle.empty()) acoustRecTitle = recTitle;
+                                            if (!recArtist.empty()) acoustRecArtist = recArtist;
                                         }
                                     }
                                 }
 
-                                if (!bestRgId.empty() && bestScore >= 0) {
+                                if (!bestRgId.empty() && bestRgId.length() == 36) {
                                     releaseGroupMbId = bestRgId;
                                     isMatched = true;
                                     LOG_INFO("[ACOUSTID MATCHED] ReleaseGroup MBID: " + releaseGroupMbId + " (score: " + std::to_string(bestScore) + ")");
+                                } else if (!acoustRecMbId.empty()) {
+                                    LOG_INFO("[ACOUSTID MATCHED] Recording MBID: " + acoustRecMbId + " (no releasegroup in AcoustID, fetching from MusicBrainz)");
+                                    std::string recLookupUrl = "https://musicbrainz.org/ws/2/recording/" + acoustRecMbId + "?inc=release-groups&fmt=json";
+                                    std::string recLookupRes = HttpGetString(Utf8ToWide(recLookupUrl));
+                                    size_t lp = 0;
+                                    JsonVal recDoc = ParseJsonSimple(recLookupRes, lp);
+                                    const auto& recRgs = recDoc.get("release-groups");
+                                    if (recRgs.type == JsonVal::Array && !recRgs.arrVal.empty()) {
+                                        for (size_t gi = 0; gi < recRgs.arrVal.size(); ++gi) {
+                                            std::string rgId = recRgs.get(gi).get("id").strVal;
+                                            std::string rgTitle = recRgs.get(gi).get("title").strVal;
+                                            if (rgId.length() == 36) {
+                                                if (!albumClean.empty()) {
+                                                    std::string rgLower = rgTitle;
+                                                    std::transform(rgLower.begin(), rgLower.end(), rgLower.begin(), ::tolower);
+                                                    std::string albLower = albumClean;
+                                                    std::transform(albLower.begin(), albLower.end(), albLower.begin(), ::tolower);
+                                                    if (rgLower.find(albLower) != std::string::npos || albLower.find(rgLower) != std::string::npos) {
+                                                        releaseGroupMbId = rgId;
+                                                        isMatched = true;
+                                                        LOG_INFO("[ACOUSTID->MB RECORDING LOOKUP] Found matching releasegroup: " + rgTitle + " (MBID: " + rgId + ")");
+                                                        break;
+                                                    }
+                                                }
+                                                if (releaseGroupMbId.empty()) {
+                                                    releaseGroupMbId = rgId;
+                                                    isMatched = true;
+                                                    LOG_INFO("[ACOUSTID->MB RECORDING LOOKUP] First releasegroup: " + rgTitle + " (MBID: " + rgId + ")");
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
