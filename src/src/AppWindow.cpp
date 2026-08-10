@@ -1563,6 +1563,11 @@ void AppWindow::RunMessageLoop() {
                             LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive image...");
                             std::wstring caaUrl = Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-500");
                             coverData = HttpGetBytes(caaUrl);
+                            if (coverData.empty()) {
+                                std::wstring caaRelUrl = Utf8ToWide("https://coverartarchive.org/release/" + releaseGroupMbId + "/front-500");
+                                coverData = HttpGetBytes(caaRelUrl);
+                            }
+
                             if (!coverData.empty()) {
                                 LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art for " + albumClean);
                             } else {
