@@ -34,7 +34,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_DeleteDir = (fs::path(g_BaseDir) / "delete").string();
     g_FlacDir = (fs::path(g_OutputDir) / "flac").string();
     g_Mp3Dir = (fs::path(g_OutputDir) / "mp3").string();
-
     LOG_INFO("=== Starting MusicSorter Native ImGui C++ Studio ===");
     LOG_INFO("Base Directory: " + g_BaseDir);
     LOG_INFO("Output Directory: " + g_OutputDir);
