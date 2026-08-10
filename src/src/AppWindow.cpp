@@ -690,34 +690,44 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
     if (tracksPos == std::string::npos) return tracks;
 
     size_t cur = tracksPos;
-    while ((cur = resJson.find("\"position\":", cur)) != std::string::npos) {
-        cur += 11;
-        while (cur < resJson.size() && (resJson[cur] == ' ' || resJson[cur] == ':')) cur++;
-        size_t endPos = resJson.find_first_of(",}", cur);
-        if (endPos == std::string::npos) break;
+    while (cur < resJson.size()) {
+        size_t p1 = resJson.find("\"position\":", cur);
+        if (p1 == std::string::npos) break;
+
+        size_t pNext = resJson.find("\"position\":", p1 + 11);
+        size_t blockEnd = (pNext != std::string::npos) ? pNext : resJson.size();
+        std::string block = resJson.substr(p1, blockEnd - p1);
 
         int pos = 0;
-        try { pos = std::stoi(resJson.substr(cur, endPos - cur)); } catch (...) {}
+        size_t posIdx = block.find("\"position\":");
+        if (posIdx != std::string::npos) {
+            posIdx += 11;
+            while (posIdx < block.size() && (block[posIdx] == ' ' || block[posIdx] == ':')) posIdx++;
+            size_t endP = block.find_first_of(",}", posIdx);
+            if (endP != std::string::npos) {
+                try { pos = std::stoi(block.substr(posIdx, endP - posIdx)); } catch (...) {}
+            }
+        }
 
         std::string title;
-        size_t titlePos = resJson.find("\"title\":\"", cur);
-        if (titlePos != std::string::npos && titlePos < cur + 600) {
-            titlePos += 9;
-            size_t tendPos = resJson.find("\"", titlePos);
-            if (tendPos != std::string::npos) {
-                title = resJson.substr(titlePos, tendPos - titlePos);
+        size_t titleIdx = block.find("\"title\":\"");
+        if (titleIdx != std::string::npos) {
+            titleIdx += 9;
+            size_t tendP = block.find("\"", titleIdx);
+            if (tendP != std::string::npos) {
+                title = block.substr(titleIdx, tendP - titleIdx);
             }
         }
 
         std::string artist;
-        size_t acPos = resJson.find("\"artist-credit\":", cur);
-        if (acPos != std::string::npos && acPos < cur + 600) {
-            size_t namePos = resJson.find("\"name\":\"", acPos);
-            if (namePos != std::string::npos && namePos < acPos + 300) {
-                namePos += 8;
-                size_t nendPos = resJson.find("\"", namePos);
-                if (nendPos != std::string::npos) {
-                    artist = resJson.substr(namePos, nendPos - namePos);
+        size_t acIdx = block.find("\"artist-credit\":");
+        if (acIdx != std::string::npos) {
+            size_t nameIdx = block.find("\"name\":\"", acIdx);
+            if (nameIdx != std::string::npos) {
+                nameIdx += 8;
+                size_t nendP = block.find("\"", nameIdx);
+                if (nendP != std::string::npos) {
+                    artist = block.substr(nameIdx, nendP - nameIdx);
                 }
             }
         }
@@ -725,7 +735,7 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
         if (pos > 0 && !title.empty()) {
             tracks.push_back({ pos, title, artist });
         }
-        cur = endPos;
+        cur = (pNext != std::string::npos) ? pNext : std::string::npos;
     }
     return tracks;
 }
@@ -767,7 +777,7 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
             }
         }
 
-        // Japanese / Romaji Alias Matches for Doujin tracks
+        // Japanese / Doujin Alias Matches for 45CD Project & Japanese Releases
         if (rawClean.find("hira") != std::string::npos && t.position == 7) score += 100;
         if (rawClean.find("yakusoku") != std::string::npos && t.position == 14) score += 100;
         if (rawClean.find("oppaisanka") != std::string::npos && t.position == 15) score += 100;
@@ -784,8 +794,20 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
         if (rawClean.find("774") != std::string::npos && t.position == 19) score += 100;
         if (rawClean.find("59cnk") != std::string::npos && t.position == 47) score += 100;
         if (rawClean.find("oh21ch") != std::string::npos && t.position == 16) score += 100;
-        if (rawClean.find("45a") != std::string::npos && t.position == 53) score += 100;
-        if (rawClean.find("45a2") != std::string::npos && t.position == 54) score += 100;
+        if ((rawClean == "45a" || rawClean.ends_with("45a")) && t.position == 53) score += 150;
+        if ((rawClean == "45a2" || rawClean.ends_with("45a2")) && t.position == 54) score += 150;
+        if (rawClean.find("bgt14") != std::string::npos && t.position == 42) score += 150;
+        if (rawClean.find("gabba2") != std::string::npos && t.position == 8) score += 150;
+        if (rawClean.find("gengaozo") != std::string::npos && t.position == 52) score += 150;
+        if ((rawClean.find("mymidi13") != std::string::npos || rawClean.find("c4501") != std::string::npos) && t.position == 5) score += 150;
+        if (rawClean.find("oakfde") != std::string::npos && t.position == 44) score += 150;
+        if (rawClean.find("news") != std::string::npos && t.position == 1) score += 150;
+        if (rawClean.find("sofa") != std::string::npos && t.position == 2) score += 150;
+        if (rawClean.find("lavibd") != std::string::npos && t.position == 10) score += 150;
+        if (rawClean.find("lavivivi") != std::string::npos && t.position == 36) score += 150;
+        if (rawClean.find("4545") != std::string::npos && t.position == 4) score += 150;
+        if (rawClean.find("koe") != std::string::npos && t.position == 17) score += 150;
+        if (rawClean.find("kn") != std::string::npos && t.position == 51) score += 150;
 
         if (score > bestScore) {
             bestScore = score;
