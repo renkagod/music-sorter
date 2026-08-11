@@ -1816,12 +1816,46 @@ void AppWindow::OpenSummaryWindow() {
 
     CreateSummaryRenderTarget();
 
-    // Create ImGui context for summary window sharing font atlas
-    m_summaryImGuiContext = ImGui::CreateContext(m_mainImGuiContext ? m_mainImGuiContext->IO.Fonts : NULL);
+    // Create ImGui context for summary window with its own font atlas
+    m_summaryImGuiContext = ImGui::CreateContext();
     ImGui::SetCurrentContext(m_summaryImGuiContext);
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+
+    // Load fonts for summary window
+    ImFontConfig font_cfg_primary;
+    font_cfg_primary.FontDataOwnedByAtlas = false;
+    static const ImWchar ranges_latin_cyrillic[] = {
+        0x0020, 0x00FF,
+        0x0400, 0x052F,
+        0x2000, 0x206F,
+        0,
+    };
+
+    if (fs::exists("C:\\Windows\\Fonts\\segoeui.ttf")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 16.0f, &font_cfg_primary, ranges_latin_cyrillic);
+    } else if (fs::exists("C:\\Windows\\Fonts\\arial.ttf")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\arial.ttf", 16.0f, &font_cfg_primary, ranges_latin_cyrillic);
+    }
+
+    ImFontConfig font_cfg_cjk;
+    font_cfg_cjk.FontDataOwnedByAtlas = false;
+    font_cfg_cjk.MergeMode = true;
+
+    static const ImWchar ranges_cjk[] = {
+        0x3000, 0x30FF,
+        0x31F0, 0x31FF,
+        0x4E00, 0x9FAF,
+        0xFF00, 0xFFEF,
+        0,
+    };
+
+    if (fs::exists("C:\\Windows\\Fonts\\msgothic.ttc")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msgothic.ttc", 16.0f, &font_cfg_cjk, ranges_cjk);
+    } else if (fs::exists("C:\\Windows\\Fonts\\YuGothM.ttc")) {
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\YuGothM.ttc", 16.0f, &font_cfg_cjk, ranges_cjk);
+    }
 
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 6.0f;
@@ -1858,9 +1892,11 @@ void AppWindow::OpenSummaryWindow() {
 
 LRESULT CALLBACK AppWindow::SummaryWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (Instance().m_summaryImGuiContext) {
+        ImGuiContext* prevCtx = ImGui::GetCurrentContext();
         ImGui::SetCurrentContext(Instance().m_summaryImGuiContext);
-        if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
-            return true;
+        LRESULT res = ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+        ImGui::SetCurrentContext(prevCtx);
+        if (res) return true;
     }
 
     switch (msg) {
@@ -2149,7 +2185,8 @@ void AppWindow::RunMessageLoop() {
             }
         }
 
-        // Start Dear ImGui Frame
+        // Start Dear ImGui Frame for Main Window
+        ImGui::SetCurrentContext(m_mainImGuiContext);
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
@@ -3530,9 +3567,11 @@ void AppWindow::RunMessageLoop() {
 
 LRESULT CALLBACK AppWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (Instance().m_mainImGuiContext) {
+        ImGuiContext* prevCtx = ImGui::GetCurrentContext();
         ImGui::SetCurrentContext(Instance().m_mainImGuiContext);
-        if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
-            return true;
+        LRESULT res = ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+        ImGui::SetCurrentContext(prevCtx);
+        if (res) return true;
     }
 
     switch (msg) {
