@@ -141,4 +141,9 @@ private:
     char m_mp3Buf[512] = {0};
     char m_acoustIdKeyBuf[64] = {0};
     bool m_foldersInited = false;
+
+    // Manual MusicBrainz Release URL / MBID Input
+    char m_manualMbUrlBuf[512] = {0};
+    bool m_manualMbApplyToAlbum = true;
+    void FetchManualMusicBrainzMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
 };

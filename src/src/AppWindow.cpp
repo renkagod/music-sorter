@@ -2150,6 +2150,224 @@ void AppWindow::RenderReleaseSummaryTable() {
     }
 }
 
+void AppWindow::FetchManualMusicBrainzMetadata(const std::string& inputUrl, bool applyToAllInAlbum) {
+    if (m_tagItems.empty() || m_currentTagIndex >= m_tagItems.size()) {
+        LOG_WARN("[MANUAL MB] Очередь треков пуста или индекс некорректен.");
+        return;
+    }
+
+    std::regex uuidRegex(R"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})");
+    std::smatch match;
+    if (!std::regex_search(inputUrl, match, uuidRegex)) {
+        LOG_WARN("[MANUAL MB] В строке не найден валидный MBID (UUID): " + inputUrl);
+        return;
+    }
+
+    std::string mbid = match.str(0);
+    LOG_INFO("[MANUAL MB] Запуск ручной загрузки метаданных для MBID: " + mbid + " (URL: " + inputUrl + ")");
+
+    std::thread([this, mbid, inputUrl, applyToAllInAlbum]() {
+        std::string releaseMbId = mbid;
+        std::string releaseGroupMbId = "";
+
+        // If release-group URL, resolve first release ID
+        if (inputUrl.find("release-group") != std::string::npos) {
+            releaseGroupMbId = mbid;
+            std::string rgLookupUrl = "https://musicbrainz.org/ws/2/release?release-group=" + mbid + "&inc=recordings+artist-credits+release-groups&fmt=json";
+            std::string rgRes = HttpGetString(Utf8ToWide(rgLookupUrl));
+            size_t p = 0;
+            JsonVal rgDoc = ParseJsonSimple(rgRes, p);
+            const auto& rels = rgDoc.get("releases");
+            if (rels.type == JsonVal::Array && !rels.arrVal.empty()) {
+                releaseMbId = rels.get(0).get("id").strVal;
+            }
+        }
+
+        std::string lookupUrl = "https://musicbrainz.org/ws/2/release/" + releaseMbId + "?inc=recordings+artist-credits+release-groups&fmt=json";
+        std::string mbJsonStr = HttpGetString(Utf8ToWide(lookupUrl));
+        if (mbJsonStr.empty()) {
+            LOG_WARN("[MANUAL MB ERROR] Не удалось получить данные релиза с MusicBrainz для ID: " + releaseMbId);
+            return;
+        }
+
+        size_t p = 0;
+        JsonVal doc = ParseJsonSimple(mbJsonStr, p);
+
+        std::string releaseTitle = doc.get("title").strVal;
+        std::string releaseDate = doc.get("date").strVal;
+
+        std::string artistCredit = "";
+        const auto& ac = doc.get("artist-credit");
+        if (ac.type == JsonVal::Array) {
+            for (size_t i = 0; i < ac.arrVal.size(); ++i) {
+                std::string aName = ac.get(i).get("name").strVal;
+                std::string join = ac.get(i).get("joinphrase").strVal;
+                artistCredit += aName + join;
+            }
+        }
+        if (artistCredit.empty()) artistCredit = "Unknown Artist";
+
+        if (releaseGroupMbId.empty()) {
+            releaseGroupMbId = doc.get("release-group").get("id").strVal;
+            if (releaseGroupMbId.empty()) releaseGroupMbId = releaseMbId;
+        }
+
+        struct MbTrackInfo {
+            int trackNumber = 0;
+            std::string title;
+            std::string artist;
+            std::string recordingId;
+        };
+
+        std::vector<MbTrackInfo> mbTracks;
+        const auto& media = doc.get("media");
+        if (media.type == JsonVal::Array) {
+            int trackCounter = 1;
+            for (size_t m = 0; m < media.arrVal.size(); ++m) {
+                const auto& trs = media.get(m).get("tracks");
+                if (trs.type != JsonVal::Array) continue;
+                for (size_t i = 0; i < trs.arrVal.size(); ++i) {
+                    const auto& tObj = trs.get(i);
+                    MbTrackInfo ti;
+                    ti.trackNumber = (int)tObj.get("position").numVal;
+                    if (ti.trackNumber <= 0) ti.trackNumber = trackCounter;
+                    trackCounter++;
+
+                    ti.title = tObj.get("title").strVal;
+                    if (ti.title.empty()) ti.title = tObj.get("recording").get("title").strVal;
+
+                    const auto& trkAc = tObj.get("artist-credit");
+                    if (trkAc.type == JsonVal::Array && !trkAc.arrVal.empty()) {
+                        for (size_t a = 0; a < trkAc.arrVal.size(); ++a) {
+                            ti.artist += trkAc.get(a).get("name").strVal + trkAc.get(a).get("joinphrase").strVal;
+                        }
+                    }
+                    if (ti.artist.empty()) ti.artist = artistCredit;
+                    ti.recordingId = tObj.get("recording").get("id").strVal;
+
+                    mbTracks.push_back(ti);
+                }
+            }
+        }
+
+        // Download Cover Art
+        std::vector<unsigned char> coverData;
+        const char* endpoints[] = {
+            "https://coverartarchive.org/release/%s/front",
+            "https://coverartarchive.org/release-group/%s/front",
+            "https://coverartarchive.org/release/%s/front-1200",
+            "https://coverartarchive.org/release-group/%s/front-1200",
+            "https://coverartarchive.org/release/%s/front-500",
+            "https://coverartarchive.org/release-group/%s/front-500",
+            "https://coverartarchive.org/release/%s/front-250",
+            "https://coverartarchive.org/release-group/%s/front-250"
+        };
+
+        for (const char* ep : endpoints) {
+            char urlBuf[256];
+            if (strstr(ep, "release-group")) {
+                sprintf_s(urlBuf, sizeof(urlBuf), ep, releaseGroupMbId.c_str());
+            } else {
+                sprintf_s(urlBuf, sizeof(urlBuf), ep, releaseMbId.c_str());
+            }
+            coverData = HttpGetBytes(Utf8ToWide(urlBuf));
+            if (!coverData.empty() && coverData.size() > 4096) break;
+        }
+
+        // Determine target tracks in m_tagItems
+        auto& currentItem = m_tagItems[m_currentTagIndex];
+        std::string targetFolder = fs::path(currentItem.filePath).parent_path().string();
+
+        std::vector<size_t> targetIndices;
+        if (applyToAllInAlbum) {
+            for (size_t i = 0; i < m_tagItems.size(); ++i) {
+                if (fs::path(m_tagItems[i].filePath).parent_path().string() == targetFolder) {
+                    targetIndices.push_back(i);
+                }
+            }
+        } else {
+            targetIndices.push_back(m_currentTagIndex);
+        }
+
+        for (size_t idx : targetIndices) {
+            auto& item = m_tagItems[idx];
+            
+            // Find matching track from mbTracks
+            int trackNo = 0;
+            if (strlen(item.trackNoBuf) > 0) trackNo = atoi(item.trackNoBuf);
+            if (trackNo <= 0 && !item.embeddedTrackNo.empty()) trackNo = atoi(item.embeddedTrackNo.c_str());
+            if (trackNo <= 0) {
+                std::string fn = fs::path(item.filePath).stem().string();
+                int parsedNo = 0;
+                if (sscanf_s(fn.c_str(), "%d", &parsedNo) == 1 && parsedNo > 0) {
+                    trackNo = parsedNo;
+                }
+            }
+
+            MbTrackInfo matchedMbTrack;
+            bool foundTrack = false;
+
+            if (trackNo > 0) {
+                for (const auto& mt : mbTracks) {
+                    if (mt.trackNumber == trackNo) {
+                        matchedMbTrack = mt;
+                        foundTrack = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!foundTrack && !mbTracks.empty()) {
+                size_t relIdx = 0;
+                for (size_t t = 0; t < targetIndices.size(); ++t) {
+                    if (targetIndices[t] == idx) { relIdx = t; break; }
+                }
+                if (relIdx < mbTracks.size()) {
+                    matchedMbTrack = mbTracks[relIdx];
+                    foundTrack = true;
+                } else {
+                    matchedMbTrack = mbTracks[0];
+                }
+            }
+
+            strncpy_s(item.artistBuf, matchedMbTrack.artist.empty() ? artistCredit.c_str() : matchedMbTrack.artist.c_str(), sizeof(item.artistBuf) - 1);
+            strncpy_s(item.albumBuf, releaseTitle.c_str(), sizeof(item.albumBuf) - 1);
+            if (!matchedMbTrack.title.empty()) {
+                strncpy_s(item.titleBuf, matchedMbTrack.title.c_str(), sizeof(item.titleBuf) - 1);
+            }
+            if (matchedMbTrack.trackNumber > 0) {
+                sprintf_s(item.trackNoBuf, sizeof(item.trackNoBuf), "%d", matchedMbTrack.trackNumber);
+            }
+            if (!releaseDate.empty()) {
+                strncpy_s(item.yearBuf, releaseDate.c_str(), sizeof(item.yearBuf) - 1);
+            }
+
+            item.matchTier = MatchTier::TierA;
+            item.releaseGroupMbId = releaseGroupMbId;
+            item.isMusicBrainzMatched = true;
+            item.isFetchCompleted = true;
+
+            if (!coverData.empty()) {
+                item.onlineCoverBytes = coverData;
+                if (item.onlineTexture) {
+                    item.onlineTexture->Release();
+                    item.onlineTexture = NULL;
+                }
+                item.selectedCoverChoice = 1;
+            }
+
+            // Fetch LRC lyrics
+            std::string lrcLyrics = FetchLrcLibSyncedLyrics(item.artistBuf, item.titleBuf, item.albumBuf);
+            if (!lrcLyrics.empty()) {
+                item.hasLyrics = true;
+                strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+            }
+        }
+
+        LOG_INFO("[MANUAL MB MATCHED] Успешно загружен релиз: \"" + releaseTitle + "\" (" + artistCredit + ", дата: " + releaseDate + ", треков в MB: " + std::to_string(mbTracks.size()) + ")");
+    }).detach();
+}
+
 void AppWindow::RunMessageLoop() {
     bool done = false;
     while (!done) {
@@ -3076,6 +3294,20 @@ void AppWindow::RunMessageLoop() {
 
                 ImGui::SameLine();
                 ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
+                ImGui::Separator();
+
+                // Manual MusicBrainz URL / MBID Input Row
+                ImGui::PushItemWidth(360);
+                ImGui::InputTextWithHint("##ManualMbUrlInput", "Вставьте ссылку или MBID (https://musicbrainz.org/release/...)", m_manualMbUrlBuf, sizeof(m_manualMbUrlBuf));
+                ImGui::PopItemWidth();
+                ImGui::SameLine();
+                if (ImGui::Button("Загрузить с MusicBrainz", ImVec2(185, 24))) {
+                    if (strlen(m_manualMbUrlBuf) > 0) {
+                        FetchManualMusicBrainzMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
+                    }
+                }
+                ImGui::SameLine();
+                ImGui::Checkbox("Ко всему альбому", &m_manualMbApplyToAlbum);
                 ImGui::Separator();
 
                 // Main 3-Column Layout: Left Column (Col 0) = Stacked Original & Proposed Tags | Middle (Col 1) = Local Cover | Right (Col 2) = Online Cover
