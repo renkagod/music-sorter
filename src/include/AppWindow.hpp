@@ -11,6 +11,16 @@
 #define WM_TAG_SCAN_FINISHED (WM_USER + 103)
 #define WM_BROWSE_RESULT     (WM_USER + 104)
 
+enum class MatchTier {
+    AcoustId,
+    TierA,
+    TierB_Verified,
+    TierB_Fallback,
+    TierB_Katakana,
+    TierC_Loose,
+    Niche_Local
+};
+
 struct TagReviewItem {
     std::string filePath;
     std::string relPath;
@@ -33,6 +43,8 @@ struct TagReviewItem {
     bool isFetchCompleted = false;
     bool hasLyrics = false;
     double duration = 0.0;
+    MatchTier matchTier = MatchTier::Niche_Local;
+    std::string releaseGroupMbId;
 
     std::string localCoverPath;
     std::string onlineCoverUrl;
@@ -98,6 +110,10 @@ private:
 
     // Active Stage Tab (0 = Step 1 Duplicates, 1 = Step 2 Inspector, 2 = Step 3 Mirror, 3 = Step 4 Tracklist)
     int m_activeStageTab = 0;
+
+    // Release Summary Modal State
+    bool m_showReleaseSummaryModal = false;
+    int m_releaseSummaryTierFilter = 0;
 
     // Console Log Auto-Scroll State
     bool m_logAutoScroll = true;
