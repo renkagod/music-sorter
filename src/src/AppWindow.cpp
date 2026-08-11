@@ -992,7 +992,7 @@ static std::vector<MBReleaseGroupCandidate> ParseMusicBrainzReleaseGroups(const 
     return candidates;
 }
 
-static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string& releaseGroupMbId) {
+static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string& releaseGroupMbId, std::string* outReleaseDate = nullptr) {
     std::vector<MBTrackEntry> tracks;
     if (releaseGroupMbId.empty()) return tracks;
 
@@ -1005,6 +1005,20 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
 
     const auto& rels = doc.get("releases");
     if (rels.type != JsonVal::Array || rels.arrVal.empty()) return tracks;
+
+    if (outReleaseDate && outReleaseDate->empty()) {
+        for (size_t ri = 0; ri < rels.arrVal.size(); ++ri) {
+            std::string d = rels.get(ri).get("date").strVal;
+            if (!d.empty()) {
+                if (outReleaseDate->empty() || d < *outReleaseDate) {
+                    *outReleaseDate = d;
+                }
+            }
+        }
+        if (!outReleaseDate->empty()) {
+            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + *outReleaseDate);
+        }
+    }
 
     auto extractTracks = [](const JsonVal& mediaVal, std::vector<MBTrackEntry>& out) {
         if (mediaVal.type != JsonVal::Array || mediaVal.arrVal.empty()) return;
@@ -2375,7 +2389,7 @@ void AppWindow::RunMessageLoop() {
                             }
 
                             // Fetch Release Tracklist from MusicBrainz to enrich track numbers, titles, and individual track artists
-                            std::vector<MBTrackEntry> mbTracks = FetchMusicBrainzReleaseTracks(releaseGroupMbId);
+                            std::vector<MBTrackEntry> mbTracks = FetchMusicBrainzReleaseTracks(releaseGroupMbId, &firstReleaseDate);
                             if (!mbTracks.empty()) {
                                 LOG_INFO("[MUSICBRAINZ TRACKLIST] Loaded " + std::to_string(mbTracks.size()) + " tracks from MusicBrainz release.");
                             }
@@ -2388,6 +2402,9 @@ void AppWindow::RunMessageLoop() {
                                 }
                                 if (aKey == albumKey) {
                                     ApplyTrackMatch(m_tagItems[k], mbTracks);
+                                    if (!firstReleaseDate.empty()) {
+                                        strncpy_s(m_tagItems[k].yearBuf, firstReleaseDate.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
+                                    }
                                 }
                             }
                             
