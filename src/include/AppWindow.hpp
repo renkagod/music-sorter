@@ -87,6 +87,7 @@ private:
     void CleanupRenderTarget();
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    void RenderReleaseSummaryTable();
 
     HINSTANCE m_hInstance = NULL;
     HWND m_hWnd = NULL;

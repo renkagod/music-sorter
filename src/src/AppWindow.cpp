@@ -1720,6 +1720,219 @@ void AppWindow::Cleanup() {
     UnregisterClassW(L"MusicSorterImGuiClass", m_hInstance);
 }
 
+void AppWindow::RenderReleaseSummaryTable() {
+    struct ReleaseGroupInfo {
+        std::string albumKey;
+        std::string artist;
+        std::string album;
+        std::string releaseGroupMbId;
+        std::string releaseDate;
+        MatchTier matchTier = MatchTier::Niche_Local;
+        size_t fileCount = 0;
+        size_t firstTrackIndex = 0;
+        bool isFetchCompleted = false;
+    };
+
+    std::vector<ReleaseGroupInfo> groups;
+    std::unordered_map<std::string, size_t> keyMap;
+
+    size_t countTierA = 0;
+    size_t countTierB = 0;
+    size_t countTierC = 0;
+    size_t countNiche = 0;
+
+    for (size_t i = 0; i < m_tagItems.size(); ++i) {
+        const auto& itm = m_tagItems[i];
+        std::string albumClean(itm.albumBuf);
+        std::string albumKey = NormalizeKey(albumClean);
+        if (albumKey.empty() || albumKey == "unknown" || albumKey == "tosort" || albumKey == "music" || albumKey == "media") {
+            albumKey = NormalizeKey(fs::path(itm.filePath).parent_path().string());
+        }
+
+        auto it = keyMap.find(albumKey);
+        if (it == keyMap.end()) {
+            ReleaseGroupInfo g;
+            g.albumKey = albumKey;
+            g.artist = itm.artistBuf;
+            g.album = itm.albumBuf;
+            g.releaseGroupMbId = itm.releaseGroupMbId;
+            g.releaseDate = itm.yearBuf;
+            g.matchTier = itm.matchTier;
+            g.fileCount = 1;
+            g.firstTrackIndex = i;
+            g.isFetchCompleted = itm.isFetchCompleted;
+            keyMap[albumKey] = groups.size();
+            groups.push_back(g);
+        } else {
+            auto& g = groups[it->second];
+            g.fileCount++;
+            if (g.artist.empty() || g.artist == "Unknown Artist") g.artist = itm.artistBuf;
+            if (g.album.empty()) g.album = itm.albumBuf;
+            if (g.releaseGroupMbId.empty() && !itm.releaseGroupMbId.empty()) {
+                g.releaseGroupMbId = itm.releaseGroupMbId;
+                g.matchTier = itm.matchTier;
+            }
+            if (g.releaseDate.empty() && strlen(itm.yearBuf) > 0) {
+                g.releaseDate = itm.yearBuf;
+            }
+            if (itm.isFetchCompleted) g.isFetchCompleted = true;
+        }
+    }
+
+    for (const auto& g : groups) {
+        if (g.matchTier == MatchTier::AcoustId || g.matchTier == MatchTier::TierA) {
+            countTierA++;
+        } else if (g.matchTier == MatchTier::TierB_Verified || g.matchTier == MatchTier::TierB_Fallback || g.matchTier == MatchTier::TierB_Katakana) {
+            countTierB++;
+        } else if (g.matchTier == MatchTier::TierC_Loose) {
+            countTierC++;
+        } else {
+            countNiche++;
+        }
+    }
+
+    ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Аудит распознавания релизов");
+    ImGui::SameLine();
+    ImGui::TextDisabled("| Всего релизов: %zu (файлов: %zu)", groups.size(), m_tagItems.size());
+
+    ImGui::Spacing();
+
+    // Filter Buttons
+    static char searchFilter[128] = "";
+
+    auto drawFilterBtn = [this](const char* label, int filterValue, size_t count, const ImVec4& activeColor) {
+        bool isActive = (m_releaseSummaryTierFilter == filterValue);
+        if (isActive) {
+            ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
+        }
+        char buf[64];
+        sprintf_s(buf, sizeof(buf), "%s (%zu)", label, count);
+        if (ImGui::Button(buf)) {
+            m_releaseSummaryTierFilter = filterValue;
+        }
+        if (isActive) {
+            ImGui::PopStyleColor(2);
+        }
+    };
+
+    drawFilterBtn("Все", 0, groups.size(), ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+    ImGui::SameLine();
+    drawFilterBtn("Tier A", 1, countTierA, ImVec4(0.2f, 0.9f, 0.3f, 1.0f));
+    ImGui::SameLine();
+    drawFilterBtn("Tier B", 2, countTierB, ImVec4(0.95f, 0.85f, 0.2f, 1.0f));
+    ImGui::SameLine();
+    drawFilterBtn("Tier C", 3, countTierC, ImVec4(1.0f, 0.55f, 0.2f, 1.0f));
+    ImGui::SameLine();
+    drawFilterBtn("Niche", 4, countNiche, ImVec4(0.95f, 0.4f, 0.3f, 1.0f));
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(150);
+    ImGui::InputTextWithHint("##ReleaseSearchFilter", "Поиск...", searchFilter, sizeof(searchFilter));
+
+    ImGui::Separator();
+
+    if (groups.empty()) {
+        ImGui::TextDisabled("Текущая очередь пуста. Перейдите во вкладку '2. Инспектор тегов' для сканирования файлов.");
+    } else {
+        if (ImGui::BeginTable("ReleaseSummaryTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable, ImVec2(0, 0))) {
+            ImGui::TableSetupColumn("Альбом и исполнитель", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+            ImGui::TableSetupColumn("Файлов", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+            ImGui::TableSetupColumn("Уровень распознавания", ImGuiTableColumnFlags_WidthFixed, 175.0f);
+            ImGui::TableSetupColumn("MBID и дата", ImGuiTableColumnFlags_WidthFixed, 185.0f);
+            ImGui::TableSetupColumn("Действие", ImGuiTableColumnFlags_WidthFixed, 105.0f);
+            ImGui::TableHeadersRow();
+
+            std::string filterLower = searchFilter;
+            std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
+
+            for (size_t gi = 0; gi < groups.size(); ++gi) {
+                const auto& g = groups[gi];
+
+                if (m_releaseSummaryTierFilter == 1 && !(g.matchTier == MatchTier::AcoustId || g.matchTier == MatchTier::TierA)) {
+                    continue;
+                }
+                if (m_releaseSummaryTierFilter == 2 && !(g.matchTier == MatchTier::TierB_Verified || g.matchTier == MatchTier::TierB_Fallback || g.matchTier == MatchTier::TierB_Katakana)) {
+                    continue;
+                }
+                if (m_releaseSummaryTierFilter == 3 && !(g.matchTier == MatchTier::TierC_Loose)) {
+                    continue;
+                }
+                if (m_releaseSummaryTierFilter == 4 && !(g.matchTier == MatchTier::Niche_Local)) {
+                    continue;
+                }
+
+                if (!filterLower.empty()) {
+                    std::string aLower = g.artist;
+                    std::transform(aLower.begin(), aLower.end(), aLower.begin(), ::tolower);
+                    std::string albLower = g.album;
+                    std::transform(albLower.begin(), albLower.end(), albLower.begin(), ::tolower);
+                    std::string mbidLower = g.releaseGroupMbId;
+                    std::transform(mbidLower.begin(), mbidLower.end(), mbidLower.begin(), ::tolower);
+
+                    if (aLower.find(filterLower) == std::string::npos &&
+                        albLower.find(filterLower) == std::string::npos &&
+                        mbidLower.find(filterLower) == std::string::npos) {
+                        continue;
+                    }
+                }
+
+                ImGui::TableNextRow();
+
+                // Column 0: Album & Artist with click selection
+                ImGui::TableSetColumnIndex(0);
+                bool isSelected = (m_currentTagIndex >= g.firstTrackIndex && m_currentTagIndex < g.firstTrackIndex + g.fileCount);
+                char selId[64];
+                sprintf_s(selId, sizeof(selId), "##RowSelect_%zu", gi);
+
+                if (ImGui::Selectable(selId, isSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
+                    m_currentTagIndex = g.firstTrackIndex;
+                    m_activeStageTab = 1;
+                }
+                ImGui::SameLine();
+                ImGui::BeginGroup();
+                ImGui::TextUnformatted(g.album.empty() ? "(Без названия альбома)" : g.album.c_str());
+                ImGui::TextDisabled("%s", g.artist.empty() ? "Unknown Artist" : g.artist.c_str());
+                ImGui::EndGroup();
+
+                // Column 1: Files
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%zu", g.fileCount);
+
+                // Column 2: Badge
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextColored(GetTierColor(g.matchTier), "%s", GetTierName(g.matchTier));
+
+                // Column 3: MBID & Date
+                ImGui::TableSetColumnIndex(3);
+                if (!g.releaseGroupMbId.empty()) {
+                    ImGui::TextUnformatted(g.releaseGroupMbId.c_str());
+                    if (!g.releaseDate.empty()) {
+                        ImGui::TextDisabled("Дата: %s", g.releaseDate.c_str());
+                    }
+                } else {
+                    ImGui::TextDisabled("MBID отсутствует");
+                }
+
+                // Column 4: Open in MusicBrainz
+                ImGui::TableSetColumnIndex(4);
+                if (!g.releaseGroupMbId.empty()) {
+                    char btnId[64];
+                    sprintf_s(btnId, sizeof(btnId), "Открыть##%zu", gi);
+                    if (ImGui::Button(btnId, ImVec2(-1, 24))) {
+                        std::string mbUrl = "https://musicbrainz.org/release-group/" + g.releaseGroupMbId;
+                        ShellExecuteA(NULL, "open", mbUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+                    }
+                } else {
+                    ImGui::TextDisabled("-");
+                }
+            }
+
+            ImGui::EndTable();
+        }
+    }
+}
+
 void AppWindow::RunMessageLoop() {
     bool done = false;
     while (!done) {
@@ -2520,6 +2733,15 @@ void AppWindow::RunMessageLoop() {
         }
         if (pushed3) ImGui::PopStyleColor();
 
+        ImGui::SameLine();
+
+        bool pushed4 = (m_activeStageTab == 4);
+        if (pushed4) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
+        if (ImGui::Button("5. Сводка релизов", ImVec2(170, 32))) {
+            m_activeStageTab = 4;
+        }
+        if (pushed4) ImGui::PopStyleColor();
+
         ImGui::Separator();
 
         // DYNAMIC WORKFLOW INTERFACE SWITCHING
@@ -3000,6 +3222,11 @@ void AppWindow::RunMessageLoop() {
             }
 
             ImGui::EndChild();
+        } else if (m_activeStageTab == 4) {
+            // Stage 5 Interface: Dedicated Release Summary Audit Table in Workspace
+            ImGui::BeginChild("Stage5ReleaseSummaryRegion", ImVec2(0, 0), true);
+            RenderReleaseSummaryTable();
+            ImGui::EndChild();
         }
 
         // Clean Syntax-Highlighted & Click-to-Copy Logs Panel with Left-Aligned 'Скопировать' Button
@@ -3042,7 +3269,7 @@ void AppWindow::RunMessageLoop() {
 
         ImGui::SameLine();
         if (ImGui::Button("Сводная таблица релизов", ImVec2(200, 24))) {
-            m_showReleaseSummaryModal = true;
+            m_showReleaseSummaryModal = !m_showReleaseSummaryModal;
         }
 
         ImGui::Separator();
@@ -3091,243 +3318,21 @@ void AppWindow::RunMessageLoop() {
         ImGui::EndChild(); // End LogListRegion
         ImGui::EndChild(); // End LogConsoleHeader
 
-        // Release Summary Modal Dialog
+        ImGui::End(); // End MusicSorter Workspace
+
+        // Separate Floating Window for Release Summary
         if (m_showReleaseSummaryModal) {
-            ImGui::OpenPopup("Сводная таблица релизов##Modal");
+            float dispW = ImGui::GetIO().DisplaySize.x;
+            float dispH = ImGui::GetIO().DisplaySize.y;
+            ImGui::SetNextWindowSize(ImVec2((std::min)(860.0f, dispW - 20.0f), (std::min)(580.0f, dispH - 40.0f)), ImGuiCond_Appearing);
+            ImGui::SetNextWindowPos(ImVec2(10.0f, 20.0f), ImGuiCond_Appearing);
+            ImGui::SetNextWindowSizeConstraints(ImVec2(350.0f, 250.0f), ImGui::GetIO().DisplaySize);
+
+            if (ImGui::Begin("Сводная таблица релизов", &m_showReleaseSummaryModal, ImGuiWindowFlags_None)) {
+                RenderReleaseSummaryTable();
+            }
+            ImGui::End();
         }
-
-        ImVec2 modalCenter = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(modalCenter, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(1050, 620), ImGuiCond_Appearing);
-
-        if (ImGui::BeginPopupModal("Сводная таблица релизов##Modal", &m_showReleaseSummaryModal, ImGuiWindowFlags_None)) {
-            struct ReleaseGroupInfo {
-                std::string albumKey;
-                std::string artist;
-                std::string album;
-                std::string releaseGroupMbId;
-                std::string releaseDate;
-                MatchTier matchTier = MatchTier::Niche_Local;
-                size_t fileCount = 0;
-                size_t firstTrackIndex = 0;
-                bool isFetchCompleted = false;
-            };
-
-            std::vector<ReleaseGroupInfo> groups;
-            std::unordered_map<std::string, size_t> keyMap;
-
-            size_t countTierA = 0;
-            size_t countTierB = 0;
-            size_t countTierC = 0;
-            size_t countNiche = 0;
-
-            for (size_t i = 0; i < m_tagItems.size(); ++i) {
-                const auto& itm = m_tagItems[i];
-                std::string albumClean(itm.albumBuf);
-                std::string albumKey = NormalizeKey(albumClean);
-                if (albumKey.empty() || albumKey == "unknown" || albumKey == "tosort" || albumKey == "music" || albumKey == "media") {
-                    albumKey = NormalizeKey(fs::path(itm.filePath).parent_path().string());
-                }
-
-                auto it = keyMap.find(albumKey);
-                if (it == keyMap.end()) {
-                    ReleaseGroupInfo g;
-                    g.albumKey = albumKey;
-                    g.artist = itm.artistBuf;
-                    g.album = itm.albumBuf;
-                    g.releaseGroupMbId = itm.releaseGroupMbId;
-                    g.releaseDate = itm.yearBuf;
-                    g.matchTier = itm.matchTier;
-                    g.fileCount = 1;
-                    g.firstTrackIndex = i;
-                    g.isFetchCompleted = itm.isFetchCompleted;
-                    keyMap[albumKey] = groups.size();
-                    groups.push_back(g);
-                } else {
-                    auto& g = groups[it->second];
-                    g.fileCount++;
-                    if (g.artist.empty() || g.artist == "Unknown Artist") g.artist = itm.artistBuf;
-                    if (g.album.empty()) g.album = itm.albumBuf;
-                    if (g.releaseGroupMbId.empty() && !itm.releaseGroupMbId.empty()) {
-                        g.releaseGroupMbId = itm.releaseGroupMbId;
-                        g.matchTier = itm.matchTier;
-                    }
-                    if (g.releaseDate.empty() && strlen(itm.yearBuf) > 0) {
-                        g.releaseDate = itm.yearBuf;
-                    }
-                    if (itm.isFetchCompleted) g.isFetchCompleted = true;
-                }
-            }
-
-            for (const auto& g : groups) {
-                if (g.matchTier == MatchTier::AcoustId || g.matchTier == MatchTier::TierA) {
-                    countTierA++;
-                } else if (g.matchTier == MatchTier::TierB_Verified || g.matchTier == MatchTier::TierB_Fallback || g.matchTier == MatchTier::TierB_Katakana) {
-                    countTierB++;
-                } else if (g.matchTier == MatchTier::TierC_Loose) {
-                    countTierC++;
-                } else {
-                    countNiche++;
-                }
-            }
-
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Аудит распознавания релизов");
-            ImGui::SameLine();
-            ImGui::TextDisabled("| Всего релизов в очереди: %zu (файлов: %zu)", groups.size(), m_tagItems.size());
-
-            ImGui::Spacing();
-
-            // Filters
-            static char searchFilter[128] = "";
-
-            auto drawFilterBtn = [this](const char* label, int filterValue, size_t count, const ImVec4& activeColor) {
-                bool isActive = (m_releaseSummaryTierFilter == filterValue);
-                if (isActive) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
-                }
-                char buf[64];
-                sprintf_s(buf, sizeof(buf), "%s (%zu)", label, count);
-                if (ImGui::Button(buf)) {
-                    m_releaseSummaryTierFilter = filterValue;
-                }
-                if (isActive) {
-                    ImGui::PopStyleColor(2);
-                }
-            };
-
-            drawFilterBtn("Все", 0, groups.size(), ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
-            ImGui::SameLine();
-            drawFilterBtn("Tier A / AcoustID", 1, countTierA, ImVec4(0.2f, 0.9f, 0.3f, 1.0f));
-            ImGui::SameLine();
-            drawFilterBtn("Tier B", 2, countTierB, ImVec4(0.95f, 0.85f, 0.2f, 1.0f));
-            ImGui::SameLine();
-            drawFilterBtn("Tier C", 3, countTierC, ImVec4(1.0f, 0.55f, 0.2f, 1.0f));
-            ImGui::SameLine();
-            drawFilterBtn("Niche / Local", 4, countNiche, ImVec4(0.95f, 0.4f, 0.3f, 1.0f));
-
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(180);
-            ImGui::InputTextWithHint("##ReleaseSearch", "Поиск...", searchFilter, sizeof(searchFilter));
-
-            ImGui::Separator();
-
-            if (groups.empty()) {
-                ImGui::TextDisabled("Текущая очередь пуста. Перейдите во вкладку '2. Инспектор тегов' для сканирования файлов.");
-            } else {
-                if (ImGui::BeginTable("ReleaseSummaryTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable, ImVec2(0, -45.0f))) {
-                    ImGui::TableSetupColumn("Альбом и исполнитель", ImGuiTableColumnFlags_WidthStretch, 0.35f);
-                    ImGui::TableSetupColumn("Файлов", ImGuiTableColumnFlags_WidthFixed, 65.0f);
-                    ImGui::TableSetupColumn("Уровень распознавания", ImGuiTableColumnFlags_WidthFixed, 205.0f);
-                    ImGui::TableSetupColumn("MBID и дата релиза", ImGuiTableColumnFlags_WidthFixed, 260.0f);
-                    ImGui::TableSetupColumn("Действие", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-                    ImGui::TableHeadersRow();
-
-                    std::string filterLower = searchFilter;
-                    std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
-
-                    for (size_t gi = 0; gi < groups.size(); ++gi) {
-                        const auto& g = groups[gi];
-
-                        if (m_releaseSummaryTierFilter == 1 && !(g.matchTier == MatchTier::AcoustId || g.matchTier == MatchTier::TierA)) {
-                            continue;
-                        }
-                        if (m_releaseSummaryTierFilter == 2 && !(g.matchTier == MatchTier::TierB_Verified || g.matchTier == MatchTier::TierB_Fallback || g.matchTier == MatchTier::TierB_Katakana)) {
-                            continue;
-                        }
-                        if (m_releaseSummaryTierFilter == 3 && !(g.matchTier == MatchTier::TierC_Loose)) {
-                            continue;
-                        }
-                        if (m_releaseSummaryTierFilter == 4 && !(g.matchTier == MatchTier::Niche_Local)) {
-                            continue;
-                        }
-
-                        if (!filterLower.empty()) {
-                            std::string aLower = g.artist;
-                            std::transform(aLower.begin(), aLower.end(), aLower.begin(), ::tolower);
-                            std::string albLower = g.album;
-                            std::transform(albLower.begin(), albLower.end(), albLower.begin(), ::tolower);
-                            std::string mbidLower = g.releaseGroupMbId;
-                            std::transform(mbidLower.begin(), mbidLower.end(), mbidLower.begin(), ::tolower);
-
-                            if (aLower.find(filterLower) == std::string::npos &&
-                                albLower.find(filterLower) == std::string::npos &&
-                                mbidLower.find(filterLower) == std::string::npos) {
-                                continue;
-                            }
-                        }
-
-                        ImGui::TableNextRow();
-
-                        // Column 0: Album & Artist with click selection
-                        ImGui::TableSetColumnIndex(0);
-                        bool isSelected = (m_currentTagIndex >= g.firstTrackIndex && m_currentTagIndex < g.firstTrackIndex + g.fileCount);
-                        char selId[64];
-                        sprintf_s(selId, sizeof(selId), "##RowSelect_%zu", gi);
-
-                        if (ImGui::Selectable(selId, isSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
-                            m_currentTagIndex = g.firstTrackIndex;
-                            m_activeStageTab = 1;
-                        }
-                        ImGui::SameLine();
-                        ImGui::BeginGroup();
-                        ImGui::TextUnformatted(g.album.empty() ? "(Без названия альбома)" : g.album.c_str());
-                        ImGui::TextDisabled("%s", g.artist.empty() ? "Unknown Artist" : g.artist.c_str());
-                        ImGui::EndGroup();
-
-                        // Column 1: Files
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::Text("%zu", g.fileCount);
-
-                        // Column 2: Badge
-                        ImGui::TableSetColumnIndex(2);
-                        ImGui::TextColored(GetTierColor(g.matchTier), "%s", GetTierName(g.matchTier));
-
-                        // Column 3: MBID & Date
-                        ImGui::TableSetColumnIndex(3);
-                        if (!g.releaseGroupMbId.empty()) {
-                            ImGui::TextUnformatted(g.releaseGroupMbId.c_str());
-                            if (!g.releaseDate.empty()) {
-                                ImGui::TextDisabled("Дата: %s", g.releaseDate.c_str());
-                            }
-                        } else {
-                            ImGui::TextDisabled("MBID отсутствует");
-                        }
-
-                        // Column 4: Open in MusicBrainz
-                        ImGui::TableSetColumnIndex(4);
-                        if (!g.releaseGroupMbId.empty()) {
-                            char btnId[64];
-                            sprintf_s(btnId, sizeof(btnId), "Открыть в MB##%zu", gi);
-                            if (ImGui::Button(btnId, ImVec2(-1, 24))) {
-                                std::string mbUrl = "https://musicbrainz.org/release-group/" + g.releaseGroupMbId;
-                                ShellExecuteA(NULL, "open", mbUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
-                            }
-                        } else {
-                            ImGui::TextDisabled("-");
-                        }
-                    }
-
-                    ImGui::EndTable();
-                }
-            }
-
-            ImGui::Separator();
-            if (ImGui::Button("Перейти к выбранному треку", ImVec2(240, 30))) {
-                m_activeStageTab = 1;
-                m_showReleaseSummaryModal = false;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Закрыть", ImVec2(120, 30))) {
-                m_showReleaseSummaryModal = false;
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::EndPopup();
-        }
-
-        ImGui::End();
 
         // Rendering Frame
         ImGui::Render();
