@@ -87,16 +87,32 @@ private:
     void CleanupRenderTarget();
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK SummaryWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+    void OpenSummaryWindow();
+    void CloseSummaryWindow();
+    void CreateSummaryRenderTarget();
+    void CleanupSummaryRenderTarget();
+    void ResizeSummaryRenderTarget(UINT width, UINT height);
     void RenderReleaseSummaryTable();
 
     HINSTANCE m_hInstance = NULL;
     HWND m_hWnd = NULL;
+    HWND m_hSummaryWnd = NULL;
+
+    // ImGui Contexts
+    struct ImGuiContext* m_mainImGuiContext = NULL;
+    struct ImGuiContext* m_summaryImGuiContext = NULL;
 
     // DirectX 11 Data
     ID3D11Device* m_pd3dDevice = NULL;
     ID3D11DeviceContext* m_pd3dDeviceContext = NULL;
     IDXGISwapChain* m_pSwapChain = NULL;
     ID3D11RenderTargetView* m_mainRenderTargetView = NULL;
+
+    // Secondary Window DirectX 11 Data
+    IDXGISwapChain* m_pSummarySwapChain = NULL;
+    ID3D11RenderTargetView* m_summaryRenderTargetView = NULL;
 
     std::vector<ABCandidatePair> m_candidates;
     std::vector<std::string> m_autoDelete;
@@ -112,8 +128,7 @@ private:
     // Active Stage Tab (0 = Step 1 Duplicates, 1 = Step 2 Inspector, 2 = Step 3 Mirror, 3 = Step 4 Tracklist)
     int m_activeStageTab = 0;
 
-    // Release Summary Modal State
-    bool m_showReleaseSummaryModal = false;
+    // Release Summary Filter State
     int m_releaseSummaryTierFilter = 0;
 
     // Console Log Auto-Scroll State

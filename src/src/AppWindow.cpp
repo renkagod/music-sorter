@@ -1639,7 +1639,8 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
+    m_mainImGuiContext = ImGui::CreateContext();
+    ImGui::SetCurrentContext(m_mainImGuiContext);
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
 
@@ -1704,16 +1705,196 @@ bool AppWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     return true;
 }
 
+void AppWindow::CreateSummaryRenderTarget() {
+    if (!m_pSummarySwapChain) return;
+    ID3D11Texture2D* pBackBuffer = NULL;
+    m_pSummarySwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    if (pBackBuffer) {
+        m_pd3dDevice->CreateRenderTargetView(pBackBuffer, NULL, &m_summaryRenderTargetView);
+        pBackBuffer->Release();
+    }
+}
+
+void AppWindow::CleanupSummaryRenderTarget() {
+    if (m_summaryRenderTargetView) {
+        m_summaryRenderTargetView->Release();
+        m_summaryRenderTargetView = NULL;
+    }
+}
+
+void AppWindow::ResizeSummaryRenderTarget(UINT width, UINT height) {
+    if (m_pSummarySwapChain && width > 0 && height > 0) {
+        CleanupSummaryRenderTarget();
+        m_pSummarySwapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+        CreateSummaryRenderTarget();
+    }
+}
+
+void AppWindow::CloseSummaryWindow() {
+    if (m_hSummaryWnd != NULL) {
+        if (m_summaryImGuiContext) {
+            ImGui::SetCurrentContext(m_summaryImGuiContext);
+            ImGui_ImplDX11_Shutdown();
+            ImGui_ImplWin32_Shutdown();
+            ImGui::DestroyContext(m_summaryImGuiContext);
+            m_summaryImGuiContext = NULL;
+            if (m_mainImGuiContext) {
+                ImGui::SetCurrentContext(m_mainImGuiContext);
+            }
+        }
+        CleanupSummaryRenderTarget();
+        if (m_pSummarySwapChain) {
+            m_pSummarySwapChain->Release();
+            m_pSummarySwapChain = NULL;
+        }
+        HWND hOld = m_hSummaryWnd;
+        m_hSummaryWnd = NULL;
+        DestroyWindow(hOld);
+    }
+}
+
+void AppWindow::OpenSummaryWindow() {
+    if (m_hSummaryWnd != NULL && IsWindow(m_hSummaryWnd)) {
+        ShowWindow(m_hSummaryWnd, SW_SHOW);
+        SetForegroundWindow(m_hSummaryWnd);
+        return;
+    }
+
+    WNDCLASSEXW wcex = { sizeof(WNDCLASSEXW) };
+    wcex.style = CS_CLASSDC;
+    wcex.lpfnWndProc = AppWindow::SummaryWndProc;
+    wcex.hInstance = m_hInstance;
+    wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wcex.lpszClassName = L"MusicSorterSummaryClass";
+    RegisterClassExW(&wcex);
+
+    RECT rcMain = { 0 };
+    GetWindowRect(m_hWnd, &rcMain);
+    int posX = rcMain.right + 10;
+    int posY = rcMain.top;
+    if (posX + 980 > GetSystemMetrics(SM_CXSCREEN)) {
+        posX = (std::max)(40, (int)rcMain.left - 980);
+        if (posX < 0) posX = 50;
+    }
+
+    m_hSummaryWnd = CreateWindowW(
+        wcex.lpszClassName,
+        L"Сводная таблица релизов — MusicSorter Studio",
+        WS_OVERLAPPEDWINDOW,
+        posX, posY, 980, 650,
+        NULL, NULL, m_hInstance, NULL
+    );
+
+    if (!m_hSummaryWnd) return;
+
+    DXGI_SWAP_CHAIN_DESC sd;
+    ZeroMemory(&sd, sizeof(sd));
+    sd.BufferCount = 2;
+    sd.BufferDesc.Width = 0;
+    sd.BufferDesc.Height = 0;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferDesc.RefreshRate.Numerator = 60;
+    sd.BufferDesc.RefreshRate.Denominator = 1;
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = m_hSummaryWnd;
+    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Quality = 0;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+    IDXGIDevice* pDXGIDevice = NULL;
+    m_pd3dDevice->QueryInterface(IID_PPV_ARGS(&pDXGIDevice));
+    IDXGIAdapter* pDXGIAdapter = NULL;
+    pDXGIDevice->GetAdapter(&pDXGIAdapter);
+    IDXGIFactory* pIDXGIFactory = NULL;
+    pDXGIAdapter->GetParent(IID_PPV_ARGS(&pIDXGIFactory));
+    pIDXGIFactory->CreateSwapChain(m_pd3dDevice, &sd, &m_pSummarySwapChain);
+    pIDXGIFactory->Release();
+    pDXGIAdapter->Release();
+    pDXGIDevice->Release();
+
+    CreateSummaryRenderTarget();
+
+    // Create ImGui context for summary window sharing font atlas
+    m_summaryImGuiContext = ImGui::CreateContext(m_mainImGuiContext ? m_mainImGuiContext->IO.Fonts : NULL);
+    ImGui::SetCurrentContext(m_summaryImGuiContext);
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 6.0f;
+    style.FrameRounding = 4.0f;
+    style.PopupRounding = 4.0f;
+    style.ScrollbarRounding = 4.0f;
+    style.GrabRounding = 4.0f;
+    style.ItemSpacing = ImVec2(10, 6);
+    style.FramePadding = ImVec2(10, 6);
+
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg] = ImVec4(0.07f, 0.07f, 0.07f, 1.00f);
+    colors[ImGuiCol_Header] = ImVec4(0.16f, 0.16f, 0.16f, 1.00f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.24f, 0.24f, 0.24f, 1.00f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.30f, 0.30f, 0.30f, 1.00f);
+    colors[ImGuiCol_Button] = ImVec4(0.16f, 0.16f, 0.16f, 1.00f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.26f, 0.26f, 0.26f, 1.00f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.18f, 1.00f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.24f, 0.24f, 0.24f, 1.00f);
+
+    ImGui_ImplWin32_Init(m_hSummaryWnd);
+    ImGui_ImplDX11_Init(m_pd3dDevice, m_pd3dDeviceContext);
+
+    ShowWindow(m_hSummaryWnd, SW_SHOW);
+    UpdateWindow(m_hSummaryWnd);
+    SetForegroundWindow(m_hSummaryWnd);
+
+    if (m_mainImGuiContext) {
+        ImGui::SetCurrentContext(m_mainImGuiContext);
+    }
+}
+
+LRESULT CALLBACK AppWindow::SummaryWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (Instance().m_summaryImGuiContext) {
+        ImGui::SetCurrentContext(Instance().m_summaryImGuiContext);
+        if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+            return true;
+    }
+
+    switch (msg) {
+    case WM_SIZE:
+        if (wParam != SIZE_MINIMIZED && Instance().m_pd3dDevice != NULL) {
+            Instance().ResizeSummaryRenderTarget((UINT)LOWORD(lParam), (UINT)HIWORD(lParam));
+        }
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
+        break;
+    case WM_CLOSE:
+        Instance().CloseSummaryWindow();
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
 void AppWindow::Cleanup() {
+    CloseSummaryWindow();
+
     for (auto& item : m_tagItems) {
         if (item.localTexture) item.localTexture->Release();
         if (item.onlineTexture) item.onlineTexture->Release();
     }
     m_tagItems.clear();
 
-    ImGui_ImplDX11_Shutdown();
-    ImGui_ImplWin32_Shutdown();
-    ImGui::DestroyContext();
+    if (m_mainImGuiContext) {
+        ImGui::SetCurrentContext(m_mainImGuiContext);
+        ImGui_ImplDX11_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext(m_mainImGuiContext);
+        m_mainImGuiContext = NULL;
+    }
 
     CleanupDeviceD3D();
     DestroyWindow(m_hWnd);
@@ -2733,15 +2914,6 @@ void AppWindow::RunMessageLoop() {
         }
         if (pushed3) ImGui::PopStyleColor();
 
-        ImGui::SameLine();
-
-        bool pushed4 = (m_activeStageTab == 4);
-        if (pushed4) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
-        if (ImGui::Button("5. Сводка релизов", ImVec2(170, 32))) {
-            m_activeStageTab = 4;
-        }
-        if (pushed4) ImGui::PopStyleColor();
-
         ImGui::Separator();
 
         // DYNAMIC WORKFLOW INTERFACE SWITCHING
@@ -3222,11 +3394,6 @@ void AppWindow::RunMessageLoop() {
             }
 
             ImGui::EndChild();
-        } else if (m_activeStageTab == 4) {
-            // Stage 5 Interface: Dedicated Release Summary Audit Table in Workspace
-            ImGui::BeginChild("Stage5ReleaseSummaryRegion", ImVec2(0, 0), true);
-            RenderReleaseSummaryTable();
-            ImGui::EndChild();
         }
 
         // Clean Syntax-Highlighted & Click-to-Copy Logs Panel with Left-Aligned 'Скопировать' Button
@@ -3269,7 +3436,7 @@ void AppWindow::RunMessageLoop() {
 
         ImGui::SameLine();
         if (ImGui::Button("Сводная таблица релизов", ImVec2(200, 24))) {
-            m_showReleaseSummaryModal = !m_showReleaseSummaryModal;
+            OpenSummaryWindow();
         }
 
         ImGui::Separator();
@@ -3320,35 +3487,53 @@ void AppWindow::RunMessageLoop() {
 
         ImGui::End(); // End MusicSorter Workspace
 
-        // Separate Floating Window for Release Summary
-        if (m_showReleaseSummaryModal) {
-            float dispW = ImGui::GetIO().DisplaySize.x;
-            float dispH = ImGui::GetIO().DisplaySize.y;
-            ImGui::SetNextWindowSize(ImVec2((std::min)(860.0f, dispW - 20.0f), (std::min)(580.0f, dispH - 40.0f)), ImGuiCond_Appearing);
-            ImGui::SetNextWindowPos(ImVec2(10.0f, 20.0f), ImGuiCond_Appearing);
-            ImGui::SetNextWindowSizeConstraints(ImVec2(350.0f, 250.0f), ImGui::GetIO().DisplaySize);
-
-            if (ImGui::Begin("Сводная таблица релизов", &m_showReleaseSummaryModal, ImGuiWindowFlags_None)) {
-                RenderReleaseSummaryTable();
-            }
-            ImGui::End();
-        }
-
-        // Rendering Frame
+        // Rendering Main Window Frame
+        ImGui::SetCurrentContext(m_mainImGuiContext);
         ImGui::Render();
         const float clear_color_with_alpha[4] = { 0.07f, 0.07f, 0.07f, 1.00f };
         m_pd3dDeviceContext->OMSetRenderTargets(1, &m_mainRenderTargetView, NULL);
         m_pd3dDeviceContext->ClearRenderTargetView(m_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-
         m_pSwapChain->Present(1, 0); // Present with vsync 60 FPS
+
+        // Rendering Secondary Native Window if open
+        if (m_hSummaryWnd != NULL && IsWindow(m_hSummaryWnd) && m_summaryImGuiContext != NULL && m_summaryRenderTargetView != NULL) {
+            RECT rc;
+            GetClientRect(m_hSummaryWnd, &rc);
+            float w = (float)(rc.right - rc.left);
+            float h = (float)(rc.bottom - rc.top);
+            if (w > 0 && h > 0) {
+                ImGui::SetCurrentContext(m_summaryImGuiContext);
+                ImGui_ImplDX11_NewFrame();
+                ImGui_ImplWin32_NewFrame();
+                ImGui::NewFrame();
+
+                ImGui::SetNextWindowPos(ImVec2(0, 0));
+                ImGui::SetNextWindowSize(ImVec2(w, h));
+                ImGui::Begin("##SummaryNativeWindowCanvas", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+                RenderReleaseSummaryTable();
+                ImGui::End();
+
+                ImGui::Render();
+                m_pd3dDeviceContext->OMSetRenderTargets(1, &m_summaryRenderTargetView, NULL);
+                m_pd3dDeviceContext->ClearRenderTargetView(m_summaryRenderTargetView, clear_color_with_alpha);
+                ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+                m_pSummarySwapChain->Present(1, 0);
+
+                ImGui::SetCurrentContext(m_mainImGuiContext);
+            }
+        }
+
         Sleep(1); // Yield CPU to OS scheduler to keep IDLE CPU usage at 0.0%!
     }
 }
 
 LRESULT CALLBACK AppWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
-        return true;
+    if (Instance().m_mainImGuiContext) {
+        ImGui::SetCurrentContext(Instance().m_mainImGuiContext);
+        if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+            return true;
+    }
 
     switch (msg) {
     case WM_SCAN_FINISHED:
