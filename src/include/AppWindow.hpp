@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <chrono>
 #include "AcousticAnalyzer.hpp"
 
 #define WM_SCAN_PROGRESS     (WM_USER + 101)
@@ -77,6 +78,8 @@ public:
     HWND GetHWND() const { return m_hWnd; }
     void HandleScanFinished();
     void HandleTagScanFinished();
+    void StartTagScan();
+    void RenderTagScanProgressBar(bool compact = false);
 
 private:
     AppWindow() = default;
@@ -123,8 +126,10 @@ private:
     // Step 2 Tag & Cover Inspection
     std::vector<TagReviewItem> m_tagItems;
     size_t m_currentTagIndex = 0;
-    bool m_isTagScanning = false;
+    std::atomic<bool> m_isTagScanning{false};
     std::atomic<size_t> m_fetchedCount{0};
+    std::atomic<size_t> m_tagScanTotal{0};
+    std::chrono::steady_clock::time_point m_tagScanStartTime{};
 
     // Active Stage Tab (0 = Step 1 Duplicates, 1 = Step 2 Inspector, 2 = Step 3 Mirror, 3 = Step 4 Tracklist)
     int m_activeStageTab = 0;

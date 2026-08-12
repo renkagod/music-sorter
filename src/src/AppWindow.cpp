@@ -3010,13 +3010,898 @@ void AppWindow::RunMessageLoop() {
         if (ImGui::Button("2. Инспектор тегов", ImVec2(180, 32))) {
             m_activeStageTab = 1;
             if (!m_isTagScanning && m_tagItems.empty()) {
-                m_isTagScanning = true;
-                LOG_INFO("Step 2: Instant local scan + UI-sequential priority MusicBrainz lookup...");
-                m_tagItems.clear();
-                m_currentTagIndex = 0;
-                m_fetchedCount = 0;
+                StartTagScan();
+            }
+        }
+        if (pushed1) ImGui::PopStyleColor();
 
-                std::thread([this]() {
+        ImGui::SameLine();
+
+        bool pushed2 = (m_activeStageTab == 2);
+        if (pushed2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
+        if (ImGui::Button("3. Зеркалирование", ImVec2(170, 32))) {
+            m_activeStageTab = 2;
+            std::thread([]() {
+                NativeMirrorCollections();
+            }).detach();
+        }
+        if (pushed2) ImGui::PopStyleColor();
+
+        ImGui::SameLine();
+
+        bool pushed3 = (m_activeStageTab == 3);
+        if (pushed3) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
+        if (ImGui::Button("4. База данных & Tracklist", ImVec2(220, 32))) {
+            m_activeStageTab = 3;
+            std::thread([]() {
+                std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
+                DatabaseManager::GetInstance().InitDatabase(dbPath);
+                DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir, g_FlacDir, g_Mp3Dir, g_ToSortDir);
+            }).detach();
+        }
+        if (pushed3) ImGui::PopStyleColor();
+
+        if (m_isTagScanning && m_activeStageTab != 1) {
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Скан тегов:");
+            ImGui::SameLine();
+            RenderTagScanProgressBar(true);
+        }
+
+        ImGui::Separator();
+
+        // DYNAMIC WORKFLOW INTERFACE SWITCHING
+        if (m_activeStageTab == 0) {
+            // Stage 1 Interface: Dual A/B Comparison Cards Layout
+            float halfWidth = (ImGui::GetContentRegionAvail().x - 16.0f) * 0.5f;
+
+            // Card A (Left)
+            ImGui::BeginChild("CardA", ImVec2(halfWidth, 230), true);
+            ImGui::TextDisabled("ТРЕК А (Левый)");
+            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+                auto& pair = m_candidates[m_currentCandidateIndex];
+                ImGui::TextUnformatted(fs::path(pair.trackA_path).filename().string().c_str());
+                ImGui::Text("%s | %.1fs", pair.extA.c_str(), pair.durA);
+                ImGui::TextDisabled("%s", pair.relA.c_str());
+                ImGui::Spacing();
+                if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК А (Б -> delete)", ImVec2(-1, 36))) {
+                    MakeDecisionA();
+                }
+            } else {
+                ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
+            }
+            ImGui::EndChild();
+
+            ImGui::SameLine();
+
+            // Card B (Right)
+            ImGui::BeginChild("CardB", ImVec2(halfWidth, 230), true);
+            ImGui::TextDisabled("ТРЕК Б (Правый)");
+            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+                auto& pair = m_candidates[m_currentCandidateIndex];
+                ImGui::TextUnformatted(fs::path(pair.trackB_path).filename().string().c_str());
+                ImGui::Text("%s | %.1fs", pair.extB.c_str(), pair.durB);
+                ImGui::TextDisabled("%s", pair.relB.c_str());
+                ImGui::Spacing();
+                if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК Б (А -> delete)", ImVec2(-1, 36))) {
+                    MakeDecisionB();
+                }
+            } else {
+                ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
+            }
+            ImGui::EndChild();
+
+            // Audio Player Controls
+            ImGui::BeginChild("PlayerControls", ImVec2(0, 115), true);
+            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
+                auto& pair = m_candidates[m_currentCandidateIndex];
+                ImGui::Text("Сходство волн: %.1f%% | Смещение фазы: %d кадров", pair.similarity, pair.offset);
+            } else {
+                ImGui::TextDisabled("Сходство волн: --- % | Смещение фазы: --- кадров");
+            }
+
+            double cur = AudioEngine::Instance().GetCurrentPositionSeconds();
+            double dur = AudioEngine::Instance().GetDurationSeconds();
+            float seek_val = (dur > 0.0) ? (float)(cur / dur) : 0.0f;
+
+            int cur_m = (int)cur / 60;
+            int cur_s = (int)cur % 60;
+            int dur_m = (int)dur / 60;
+            int dur_s = (int)dur % 60;
+
+            char time_buf[64];
+            snprintf(time_buf, sizeof(time_buf), "Position: %02d:%02d / %02d:%02d", cur_m, cur_s, dur_m, dur_s);
+
+            if (ImGui::SliderFloat("##SeekSlider", &seek_val, 0.0f, 1.0f, time_buf)) {
+                AudioEngine::Instance().SeekToPercentage((double)seek_val * 100.0);
+            }
+
+            if (ImGui::Button(AudioEngine::Instance().IsPlaying() ? "[||] ПАУЗА" : "[>] ПРОИГРЫВАТЬ", ImVec2(140, 32))) {
+                AudioEngine::Instance().TogglePlay();
+            }
+            ImGui::SameLine();
+
+            char ch = AudioEngine::Instance().GetActiveChannel();
+            if (ch == 'a') {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
+            }
+            if (ImGui::Button("ТРЕК А [1]", ImVec2(140, 32))) {
+                AudioEngine::Instance().SetActiveChannel('a');
+            }
+            if (ch == 'a') ImGui::PopStyleColor(2);
+
+            ImGui::SameLine();
+            if (ch == 'b') {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
+            }
+            if (ImGui::Button("ТРЕК Б [2]", ImVec2(140, 32))) {
+                AudioEngine::Instance().SetActiveChannel('b');
+            }
+            if (ch == 'b') ImGui::PopStyleColor(2);
+
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(160);
+            float masterVolPercent = AudioEngine::Instance().GetMasterVolume() * 100.0f;
+            if (ImGui::SliderFloat("##MasterVolSlider", &masterVolPercent, 0.0f, 100.0f, "Vol: %.0f%%")) {
+                AudioEngine::Instance().SetMasterVolume(masterVolPercent / 100.0f);
+            }
+
+            ImGui::SameLine();
+            ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
+            ImGui::EndChild();
+        } else if (m_activeStageTab == 1) {
+            // Stage 2: PERFECT SIDE-BY-SIDE COVER ART COMPARISON IN CENTER!
+            if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
+                auto& item = m_tagItems[m_currentTagIndex];
+                
+                float availY = ImGui::GetContentRegionAvail().y;
+                float inspectorH = availY - 320.0f; // Give 320px to Logs console panel!
+                if (inspectorH < 400.0f) inspectorH = 400.0f;
+
+                ImGui::BeginChild("TagInspectorCardPerfectFit", ImVec2(0, inspectorH), true, ImGuiWindowFlags_NoScrollbar);
+                ImGui::TextDisabled("Инспектор тегов (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
+                ImGui::SameLine();
+                if (m_isTagScanning && !item.isFetchCompleted) {
+                    ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), "[ПОИСК MB / DISCOGS %zu/%zu...]", m_fetchedCount.load(), m_tagItems.size());
+                } else if (item.isMusicBrainzMatched) {
+                    ImGui::TextColored(GetTierColor(item.matchTier), "[%s]", GetTierName(item.matchTier));
+                } else {
+                    ImGui::TextColored(ImVec4(0.95f, 0.4f, 0.3f, 1.0f), "[NICHE / LOCAL]");
+                }
+
+                ImGui::SameLine();
+                ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
+                ImGui::Separator();
+
+                // Progress Bar and ETA for Tag Scanner
+                RenderTagScanProgressBar(false);
+                ImGui::Spacing();
+
+                // Manual MusicBrainz / Discogs URL / ID Input Row
+                ImGui::PushItemWidth(360);
+                ImGui::InputTextWithHint("##ManualMbUrlInput", "Ссылка MusicBrainz / Discogs или ID", m_manualMbUrlBuf, sizeof(m_manualMbUrlBuf));
+                ImGui::PopItemWidth();
+                ImGui::SameLine();
+                if (ImGui::Button("Загрузить метаданные", ImVec2(185, 24))) {
+                    if (strlen(m_manualMbUrlBuf) > 0) {
+                        std::string inputStr(m_manualMbUrlBuf);
+                        if (inputStr.find("discogs.com") != std::string::npos || (inputStr.find_first_not_of("0123456789") == std::string::npos && inputStr.length() >= 4 && inputStr.length() <= 12) || inputStr.find("r") == 0 || inputStr.find("m") == 0) {
+                            FetchManualDiscogsMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
+                        } else {
+                            FetchManualMusicBrainzMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
+                        }
+                    }
+                }
+                ImGui::SameLine();
+                ImGui::Checkbox("Ко всему альбому", &m_manualMbApplyToAlbum);
+                ImGui::Separator();
+
+                // Main 3-Column Layout: Left Column (Col 0) = Stacked Original & Proposed Tags | Middle (Col 1) = Local Cover | Right (Col 2) = Online Cover
+                float inspectorTopY = ImGui::GetCursorPosY();
+                ImGui::Columns(3, "Main3InspectorColumnsFixedTop", false);
+                ImGui::SetColumnWidth(0, 320.0f);
+                ImGui::SetColumnWidth(1, 265.0f);
+                ImGui::SetColumnWidth(2, 265.0f);
+
+                // ==================== COLUMN 0 (LEFT: BOTH TAG BLOCKS STACKED) ====================
+                ImGui::SetCursorPosY(inspectorTopY);
+                ImGui::BeginGroup();
+
+                // 1. ВЕРХНИЙ БЛОК: ИСХОДНЫЕ ТЕГИ
+                ImGui::TextDisabled("Исходные теги в файле");
+                ImGui::PushItemWidth(180);
+
+                char origArtist[256], origAlbum[256], origTitle[256], origTrack[32], origYear[32];
+                strncpy_s(origArtist, item.embeddedArtist.c_str(), sizeof(origArtist) - 1);
+                strncpy_s(origAlbum, item.embeddedAlbum.c_str(), sizeof(origAlbum) - 1);
+                strncpy_s(origTitle, item.embeddedTitle.c_str(), sizeof(origTitle) - 1);
+                strncpy_s(origTrack, item.embeddedTrackNo.c_str(), sizeof(origTrack) - 1);
+                strncpy_s(origYear, item.embeddedYear.c_str(), sizeof(origYear) - 1);
+
+                ImGui::InputText("Исполнитель##Orig", origArtist, sizeof(origArtist), ImGuiInputTextFlags_ReadOnly);
+                ImGui::InputText("Альбом##Orig", origAlbum, sizeof(origAlbum), ImGuiInputTextFlags_ReadOnly);
+                ImGui::InputText("Название##Orig", origTitle, sizeof(origTitle), ImGuiInputTextFlags_ReadOnly);
+                ImGui::PopItemWidth();
+
+                ImGui::PushItemWidth(60);
+                ImGui::InputText("№##Orig", origTrack, sizeof(origTrack), ImGuiInputTextFlags_ReadOnly);
+                ImGui::SameLine();
+                ImGui::PushItemWidth(90);
+                ImGui::InputText("Год/Дата##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
+                ImGui::PopItemWidth();
+                ImGui::PopItemWidth();
+
+                ImGui::Dummy(ImVec2(0, 8.0f));
+
+                // 2. НИЖНИЙ БЛОК: ПРЕДЛАГАЕМЫЕ ТЕГИ
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
+                ImGui::PushItemWidth(180);
+                ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
+                ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
+                ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
+                ImGui::PopItemWidth();
+
+                ImGui::PushItemWidth(60);
+                ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
+                ImGui::SameLine();
+                ImGui::PushItemWidth(90);
+                ImGui::InputText("Год/Дата##New", item.yearBuf, sizeof(item.yearBuf));
+                ImGui::PopItemWidth();
+                ImGui::PopItemWidth();
+
+                ImGui::EndGroup();
+
+                // ==================== COLUMN 1 (MIDDLE: LOCAL COVER ART) ====================
+                ImGui::NextColumn();
+                ImGui::SetCursorPosY(inspectorTopY);
+                ImGui::BeginGroup();
+                ImGui::TextDisabled("Локальная обложка:");
+                if (item.localTexture) {
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+                    if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(225, 225))) {
+                        item.selectedCoverChoice = 0;
+                    }
+                    ImGui::PopStyleVar();
+                    ImGui::Text(item.selectedCoverChoice == 0 ? "[X] Локальный скан" : "   Локальный скан");
+                    ImGui::TextDisabled("%dx%d px | %zu KB", item.localWidth, item.localHeight, item.localCoverBytes.size() / 1024);
+                    if (item.localScore >= item.onlineScore) {
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
+                    } else if (item.localWidth >= 1000 && item.localScore < item.onlineScore / 3) {
+                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ");
+                    }
+                } else {
+                    ImGui::TextDisabled("[Обложка отсутствует]");
+                }
+                ImGui::EndGroup();
+
+                // ==================== COLUMN 2 (RIGHT: ONLINE COVER ART) ====================
+                ImGui::NextColumn();
+                ImGui::SetCursorPosY(inspectorTopY);
+                ImGui::BeginGroup();
+                ImGui::TextDisabled("CoverArtArchive:");
+                if (item.onlineTexture) {
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+                    if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(225, 225))) {
+                        item.selectedCoverChoice = 1;
+                    }
+                    ImGui::PopStyleVar();
+                    ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
+                    ImGui::TextDisabled("%dx%d px | %zu KB", item.onlineWidth, item.onlineHeight, item.onlineCoverBytes.size() / 1024);
+                    if (item.onlineScore > item.localScore) {
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
+                    } else if (item.onlineWidth >= 1000 && item.onlineScore < item.localScore / 3) {
+                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ");
+                    }
+                } else if (m_isTagScanning && !item.isFetchCompleted) {
+                    ImGui::TextDisabled("[Загрузка обложки...]");
+                } else {
+                    ImGui::TextDisabled("[Обложка отсутствует]");
+                }
+                ImGui::EndGroup();
+
+                ImGui::Columns(1); // Reset main split
+                ImGui::Separator();
+
+                // Compact Secluded Lyrics Section at bottom
+                if (ImGui::TreeNode("Текст песни (LRC / Romaji)")) {
+                    ImGui::InputTextMultiline("##LyricsMultiLineSafe", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 60));
+                    ImGui::TreePop();
+                }
+
+                ImGui::Spacing();
+
+                if (ImGui::Button("Принять", ImVec2(160, 34))) {
+                    std::string newArtist(item.artistBuf);
+                    std::string newAlbum(item.albumBuf);
+                    std::string newTitle(item.titleBuf);
+                    std::string newTrackNo(item.trackNoBuf);
+                    std::string newYear(item.yearBuf);
+                    std::string newLyrics(item.lyricsBuf);
+                    std::string srcFilePath = item.filePath;
+                    std::string origFilename = item.originalFilename;
+
+                    const auto chosenCover = (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) ? item.onlineCoverBytes : item.localCoverBytes;
+
+                    std::thread([newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, srcFilePath, origFilename, chosenCover]() {
+                        fs::path srcFile(srcFilePath);
+                        std::string ext = srcFile.extension().string();
+                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+                        std::string safeArtist = SanitizeForFilename(newArtist);
+                        std::string safeAlbum  = SanitizeForFilename(newAlbum);
+                        std::string safeTitle  = SanitizeForFilename(newTitle);
+
+                        fs::path flacDir = fs::path(g_FlacDir) / safeArtist / safeAlbum;
+                        fs::path mp3Dir  = fs::path(g_Mp3Dir) / safeArtist / safeAlbum;
+                        fs::create_directories(flacDir);
+                        fs::create_directories(mp3Dir);
+
+                        std::string baseTrackName = newTrackNo + ". " + safeTitle;
+
+                        if (ext == ".flac") {
+                            fs::path flacFile = flacDir / (baseTrackName + ".flac");
+                            fs::path mp3File  = mp3Dir / (baseTrackName + ".mp3");
+
+                            // 1. Embed tags & picture into FLAC header
+                            bool embeddedOk = WriteFlacTagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
+                            if (embeddedOk) {
+                                LOG_INFO("[TAGS EMBEDDED] VorbisComment tags & cover art written to: " + origFilename);
+                            }
+
+                            // Move FLAC to flac/Artist/Album/
+                            try {
+                                if (fs::exists(flacFile)) fs::remove(flacFile);
+                                fs::rename(srcFile, flacFile);
+                                LOG_INFO("[FLAC MOVED] " + fs::relative(flacFile, g_BaseDir).string());
+                            } catch (const std::exception& ex) {
+                                LOG_INFO("[MOVE ERROR] Failed moving FLAC: " + std::string(ex.what()));
+                                return;
+                            }
+
+                            // 2. Convert FLAC -> MP3 320kbps in mp3/Artist/Album/
+                            LOG_INFO("[CONVERTING MP3] Encoding 320kbps MP3 for: " + baseTrackName + ".mp3 ...");
+                            if (ConvertFlacToMp3(flacFile.string(), mp3File.string())) {
+                                WriteMp3TagsAndPicture(mp3File.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
+                                LOG_INFO("[MP3 MIRRORED] Created 320kbps MP3: " + fs::relative(mp3File, g_BaseDir).string());
+                            } else {
+                                LOG_INFO("[CONVERT WARN] FFmpeg conversion failed for: " + baseTrackName);
+                            }
+
+                            // Save cover.jpg in both flac/ and mp3/
+                            if (!chosenCover.empty()) {
+                                for (const auto& dir : { flacDir, mp3Dir }) {
+                                    fs::path coverDst = dir / "cover.jpg";
+                                    if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
+                                        std::ofstream cOut(coverDst, std::ios::binary);
+                                        if (cOut.is_open()) {
+                                            cOut.write((const char*)chosenCover.data(), chosenCover.size());
+                                            cOut.close();
+                                            LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (ext == ".mp3") {
+                            fs::path mp3File  = mp3Dir / (baseTrackName + ".mp3");
+                            fs::path flacFallback = flacDir / (baseTrackName + ".mp3"); // Fallback rule: MP3 in flac/ folder!
+
+                            // 1. Embed ID3v2.4 tags & picture into MP3 header
+                            bool embeddedOk = WriteMp3TagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
+                            if (embeddedOk) {
+                                LOG_INFO("[TAGS EMBEDDED] ID3v2.4 tags & cover art written to: " + origFilename);
+                            }
+
+                            // Move MP3 to mp3/Artist/Album/
+                            try {
+                                if (fs::exists(mp3File)) fs::remove(mp3File);
+                                fs::rename(srcFile, mp3File);
+                                LOG_INFO("[MP3 MOVED] " + fs::relative(mp3File, g_BaseDir).string());
+
+                                // FLAC Fallback Rule: Copy MP3 into flac/ folder!
+                                fs::copy_file(mp3File, flacFallback, fs::copy_options::overwrite_existing);
+                                LOG_INFO("[FLAC FALLBACK] Copied MP3 fallback into: " + fs::relative(flacFallback, g_BaseDir).string());
+                            } catch (const std::exception& ex) {
+                                LOG_INFO("[MOVE ERROR] Failed moving MP3: " + std::string(ex.what()));
+                                return;
+                            }
+
+                            // Save cover.jpg in both mp3/ and flac/
+                            if (!chosenCover.empty()) {
+                                for (const auto& dir : { mp3Dir, flacDir }) {
+                                    fs::path coverDst = dir / "cover.jpg";
+                                    if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
+                                        std::ofstream cOut(coverDst, std::ios::binary);
+                                        if (cOut.is_open()) {
+                                            cOut.write((const char*)chosenCover.data(), chosenCover.size());
+                                            cOut.close();
+                                            LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }).detach();
+
+                    m_currentTagIndex++;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Пропустить", ImVec2(160, 34))) {
+                    LOG_INFO("[SKIPPED] Skipped track: " + item.originalFilename);
+                    m_currentTagIndex++;
+                }
+                ImGui::EndChild();
+            } else {
+                ImGui::BeginChild("TagInspectorCardEmpty", ImVec2(0, 180), true);
+                if (m_isTagScanning) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Идет сканирование и поиск метаданных в MusicBrainz / Discogs...");
+                    ImGui::Spacing();
+                    RenderTagScanProgressBar(false);
+                } else if (!m_tagItems.empty() && m_currentTagIndex >= m_tagItems.size()) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "Все треки в очереди успешно обработаны!");
+                    ImGui::Spacing();
+                    RenderTagScanProgressBar(false);
+                    ImGui::Spacing();
+                    if (ImGui::Button("Пересканировать папку TO SORT", ImVec2(250, 36))) {
+                        StartTagScan();
+                    }
+                } else {
+                    ImGui::TextUnformatted("Папка TO SORT не содержит необработанных аудиофайлов или сканирование еще не запускалось.");
+                    ImGui::Spacing();
+                    if (ImGui::Button("Запустить сканирование тегов", ImVec2(250, 36))) {
+                        StartTagScan();
+                    }
+                }
+                ImGui::EndChild();
+            }
+        } else if (m_activeStageTab == 2) {
+            ImGui::BeginChild("Stage3Child", ImVec2(0, 150), true);
+            ImGui::TextUnformatted("Этап 3: Нативный C++20 поиск и зеркалирование папок FLAC и MP3 активен.");
+            ImGui::EndChild();
+        } else if (m_activeStageTab == 3) {
+            ImGui::BeginChild("Stage4DBChild", ImVec2(0, 270), true);
+            
+            // Auto-initialize DB on first view
+            std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
+            DatabaseManager::GetInstance().InitDatabase(dbPath);
+
+            int totalCount = DatabaseManager::GetInstance().GetTotalTracksCount();
+            int dlCount = DatabaseManager::GetInstance().GetDownloadedCount();
+            int missCount = DatabaseManager::GetInstance().GetMissingCount();
+
+            ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "SQLite База данных коллекции (music_database.db)");
+            ImGui::SameLine();
+            ImGui::TextDisabled("|  Всего треков: %d  |  Скачано [x]: %d  |  Ожидают [ ]: %d", totalCount, dlCount, missCount);
+
+            ImGui::Separator();
+
+            // Controls Row: Search & Filters & Actions
+            static char searchBuf[128] = "";
+            static int filterStatus = 0; // 0 = Все, 1 = [x] Скачано, 2 = [ ] Ожидают
+            static int filterFormat = 0; // 0 = Все, 1 = FLAC, 2 = MP3
+
+            ImGui::PushItemWidth(200);
+            ImGui::InputText("Поиск##DBSearch", searchBuf, sizeof(searchBuf));
+            ImGui::PopItemWidth();
+
+            ImGui::SameLine();
+            if (ImGui::Button(filterStatus == 0 ? "[Все статусы]" : (filterStatus == 1 ? "[x] Скачано" : "[ ] Ожидают"))) {
+                filterStatus = (filterStatus + 1) % 3;
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button(filterFormat == 0 ? "[Все форматы]" : (filterFormat == 1 ? "FLAC" : "MP3"))) {
+                filterFormat = (filterFormat + 1) % 3;
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("🔄 Скан диска")) {
+                std::thread([]() {
+                    std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
+                    DatabaseManager::GetInstance().InitDatabase(dbPath);
+                    DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir, g_FlacDir, g_Mp3Dir, g_ToSortDir);
+                }).detach();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("📄 Экспорт в tracklist.md")) {
+                std::thread([]() {
+                    std::string tracklistPath = (fs::path(g_BaseDir) / "tracklist.md").string();
+                    DatabaseManager::GetInstance().ExportToCleanTracklistMarkdown(tracklistPath);
+                }).detach();
+            }
+
+            ImGui::Separator();
+
+            // Database ImGui Table
+            std::vector<TrackRecord> records = DatabaseManager::GetInstance().QueryTracks(filterStatus, filterFormat, searchBuf);
+
+            if (ImGui::BeginTable("DBTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable, ImVec2(0, 160))) {
+                ImGui::TableSetupColumn("Статус", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+                ImGui::TableSetupColumn("Исполнитель", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+                ImGui::TableSetupColumn("Альбом", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+                ImGui::TableSetupColumn("Название трека", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Формат", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Путь на диске", ImGuiTableColumnFlags_WidthFixed, 220.0f);
+                ImGui::TableHeadersRow();
+
+                for (const auto& rec : records) {
+                    ImGui::TableNextRow();
+                    
+                    // Status
+                    ImGui::TableSetColumnIndex(0);
+                    if (rec.status == 1) {
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "[x]");
+                    } else {
+                        ImGui::TextDisabled("[ ]");
+                    }
+
+                    // Artist
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(rec.artist.c_str());
+
+                    // Album
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::TextUnformatted(rec.album.c_str());
+
+                    // Title
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::TextUnformatted(rec.title.c_str());
+
+                    // Format
+                    ImGui::TableSetColumnIndex(4);
+                    if (rec.format == "FLAC") {
+                        ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "FLAC");
+                    } else if (rec.format == "MP3") {
+                        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "MP3 320k");
+                    } else {
+                        ImGui::TextDisabled("—");
+                    }
+
+                    // Path
+                    ImGui::TableSetColumnIndex(5);
+                    ImGui::TextDisabled("%s", rec.relPath.c_str());
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImGui::EndChild();
+        }
+
+        // Clean Syntax-Highlighted & Click-to-Copy Logs Panel with Left-Aligned 'Скопировать' Button
+        ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
+        ImGui::TextDisabled("Logs:");
+        ImGui::SameLine();
+
+        auto logs = Logger::Instance().GetLogs();
+
+        // Clean Compact 'Скопировать' Button Placed Immediately on the Left
+        if (ImGui::Button("Скопировать", ImVec2(110, 24))) {
+            std::string full_logs;
+            for (const auto& log : logs) {
+                full_logs += log + "\n";
+            }
+            CopyToClipboardWin32(full_logs);
+            LOG_INFO("[CLIPBOARD] All console logs copied to Windows clipboard!");
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Сохранить в файл", ImVec2(140, 24))) {
+            auto now = std::chrono::system_clock::now();
+            std::time_t t = std::chrono::system_clock::to_time_t(now);
+            std::tm tm;
+            localtime_s(&tm, &t);
+            char stamp[32];
+            std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm);
+            fs::path logPath = fs::path(g_BaseDir) / ("logs_" + std::string(stamp) + ".txt");
+            std::ofstream fOut(logPath);
+            if (fOut.is_open()) {
+                for (const auto& log : logs) {
+                    fOut << log << "\n";
+                }
+                fOut.close();
+                LOG_INFO("[LOGS SAVED] Written to: " + logPath.string());
+            } else {
+                LOG_WARN("[LOGS SAVE ERROR] Could not write: " + logPath.string());
+            }
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Сводная таблица релизов", ImVec2(200, 24))) {
+            OpenSummaryWindow();
+        }
+
+        ImGui::Separator();
+
+        ImGui::BeginChild("LogListRegion", ImVec2(0, 0), false, ImGuiWindowFlags_None);
+
+        bool isAtBottom = (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f);
+
+        for (size_t i = 0; i < logs.size(); ++i) {
+            const std::string& logLine = logs[i];
+            ImGui::PushID((int)i);
+
+            ImVec4 textColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+            if (logLine.find("[MUSICBRAINZ MATCHED]") != std::string::npos || logLine.find("[ACOUSTID MATCHED]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER A SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER B SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER C SUCCESS]") != std::string::npos || logLine.find("[TAGS EMBEDDED]") != std::string::npos) {
+                textColor = ImVec4(0.2f, 1.0f, 0.4f, 1.0f);
+            } else if (logLine.find("[COVER ART DOWNLOADED]") != std::string::npos || logLine.find("[COVER SAVED]") != std::string::npos) {
+                textColor = ImVec4(1.0f, 0.4f, 0.8f, 1.0f);
+            } else if (logLine.find("[MUSICBRAINZ FETCH") != std::string::npos || logLine.find("[MUSICBRAINZ TIER") != std::string::npos || logLine.find("[ACOUSTID FINGERPRINT]") != std::string::npos) {
+                textColor = ImVec4(0.9f, 0.8f, 0.2f, 1.0f);
+            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos || logLine.find("[HTTP 429") != std::string::npos || logLine.find("[HTTP 503") != std::string::npos || logLine.find("[HTTP ERROR") != std::string::npos || logLine.find("[COVER ART MISSING]") != std::string::npos || logLine.find("[SKIPPED]") != std::string::npos) {
+                textColor = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+            } else if (logLine.find("[LRC LYRICS FETCHED]") != std::string::npos) {
+                textColor = ImVec4(0.3f, 0.8f, 1.0f, 1.0f);
+            } else if (logLine.find("[TAGS APPLIED") != std::string::npos || logLine.find("[CLIPBOARD]") != std::string::npos || logLine.find("[ALBUM CACHE HIT]") != std::string::npos) {
+                textColor = ImVec4(0.4f, 0.9f, 1.0f, 1.0f);
+            }
+
+            ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+            // Interactive Selectable Line with Text Wrapped and Click-to-Copy!
+            ImGui::TextWrapped("%s", logLine.c_str());
+            if (ImGui::IsItemClicked()) {
+                CopyToClipboardWin32(logLine);
+                LOG_INFO("[CLIPBOARD] Copied line to clipboard: " + logLine);
+            }
+            ImGui::PopStyleColor();
+
+            ImGui::PopID();
+        }
+
+        static size_t last_log_size = 0;
+        if (isAtBottom && logs.size() != last_log_size) {
+            ImGui::SetScrollHereY(1.0f);
+        }
+        last_log_size = logs.size();
+
+        ImGui::EndChild(); // End LogListRegion
+        ImGui::EndChild(); // End LogConsoleHeader
+
+        ImGui::End(); // End MusicSorter Workspace
+
+        // Rendering Main Window Frame
+        ImGui::SetCurrentContext(m_mainImGuiContext);
+        ImGui::Render();
+        const float clear_color_with_alpha[4] = { 0.07f, 0.07f, 0.07f, 1.00f };
+        m_pd3dDeviceContext->OMSetRenderTargets(1, &m_mainRenderTargetView, NULL);
+        m_pd3dDeviceContext->ClearRenderTargetView(m_mainRenderTargetView, clear_color_with_alpha);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        m_pSwapChain->Present(1, 0); // Present with vsync 60 FPS
+
+        // Rendering Secondary Native Window if open
+        if (m_hSummaryWnd != NULL && IsWindow(m_hSummaryWnd) && m_summaryImGuiContext != NULL && m_summaryRenderTargetView != NULL) {
+            RECT rc;
+            GetClientRect(m_hSummaryWnd, &rc);
+            float w = (float)(rc.right - rc.left);
+            float h = (float)(rc.bottom - rc.top);
+            if (w > 0 && h > 0) {
+                ImGui::SetCurrentContext(m_summaryImGuiContext);
+                ImGui_ImplDX11_NewFrame();
+                ImGui_ImplWin32_NewFrame();
+                ImGui::NewFrame();
+
+                ImGui::SetNextWindowPos(ImVec2(0, 0));
+                ImGui::SetNextWindowSize(ImVec2(w, h));
+                ImGui::Begin("##SummaryNativeWindowCanvas", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+                RenderReleaseSummaryTable();
+                ImGui::End();
+
+                ImGui::Render();
+                m_pd3dDeviceContext->OMSetRenderTargets(1, &m_summaryRenderTargetView, NULL);
+                m_pd3dDeviceContext->ClearRenderTargetView(m_summaryRenderTargetView, clear_color_with_alpha);
+                ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+                m_pSummarySwapChain->Present(1, 0);
+
+                ImGui::SetCurrentContext(m_mainImGuiContext);
+            }
+        }
+
+        Sleep(1); // Yield CPU to OS scheduler to keep IDLE CPU usage at 0.0%!
+    }
+}
+
+LRESULT CALLBACK AppWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (Instance().m_mainImGuiContext) {
+        ImGuiContext* prevCtx = ImGui::GetCurrentContext();
+        ImGui::SetCurrentContext(Instance().m_mainImGuiContext);
+        LRESULT res = ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+        ImGui::SetCurrentContext(prevCtx);
+        if (res) return true;
+    }
+
+    switch (msg) {
+    case WM_SCAN_FINISHED:
+        Instance().HandleScanFinished();
+        return 0;
+    case WM_TAG_SCAN_FINISHED:
+        Instance().HandleTagScanFinished();
+        return 0;
+    case WM_BROWSE_RESULT: {
+        int target = (int)wParam;
+        std::string* pResult = (std::string*)lParam;
+        auto& app = Instance();
+        std::string result = pResult ? *pResult : "";
+        delete pResult;
+        switch (target) {
+            case 0:
+                strncpy_s(app.m_toSortBuf, result.c_str(), sizeof(app.m_toSortBuf) - 1);
+                break;
+            case 1:
+                strncpy_s(app.m_outputBuf, result.c_str(), sizeof(app.m_outputBuf) - 1);
+                strncpy_s(app.m_flacBuf, (fs::path(result) / "flac").string().c_str(), sizeof(app.m_flacBuf) - 1);
+                strncpy_s(app.m_mp3Buf, (fs::path(result) / "mp3").string().c_str(), sizeof(app.m_mp3Buf) - 1);
+                break;
+            case 2:
+                strncpy_s(app.m_flacBuf, result.c_str(), sizeof(app.m_flacBuf) - 1);
+                break;
+            case 3:
+                strncpy_s(app.m_mp3Buf, result.c_str(), sizeof(app.m_mp3Buf) - 1);
+                break;
+        }
+        return 0;
+    }
+    case WM_SIZE:
+        if (Instance().m_pd3dDevice != NULL && wParam != SIZE_MINIMIZED) {
+            Instance().CleanupRenderTarget();
+            Instance().m_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
+            Instance().CreateRenderTarget();
+        }
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
+        break;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+void AppWindow::HandleScanFinished() {
+    LOG_INFO("Scan process finished. Found " + std::to_string(m_candidates.size()) + " candidates for A/B comparison.");
+
+    // Deduplicate auto-delete list (same file may be matched against multiple others)
+    std::unordered_set<std::string> seen;
+    std::vector<std::string> uniqueAutoDelete;
+    for (const auto& pathStr : m_autoDelete) {
+        if (seen.insert(pathStr).second) {
+            uniqueAutoDelete.push_back(pathStr);
+        }
+    }
+
+    fs::path toSortParent = fs::path(g_ToSortDir).parent_path();
+
+    for (const std::string& pathStr : uniqueAutoDelete) {
+        fs::path p(pathStr);
+        if (fs::exists(p)) {
+            fs::path rel = fs::relative(p, toSortParent);
+            fs::path dst = fs::path(g_DeleteDir) / rel;
+
+            // Safety: never move a file onto itself
+            std::error_code ec;
+            if (fs::weakly_canonical(p, ec) == fs::weakly_canonical(dst, ec)) {
+                LOG_WARN("[AUTO-DELETE] Skipping self-move: " + rel.string());
+                continue;
+            }
+
+            fs::create_directories(dst.parent_path());
+            LOG_INFO("[AUTO-DELETE] Moving exact duplicate to delete/: " + rel.string());
+            try {
+                if (fs::exists(dst)) fs::remove(dst);
+                fs::rename(p, dst);
+            } catch (const std::exception& ex) {
+                LOG_WARN("[AUTO-DELETE] Failed moving " + rel.string() + ": " + ex.what());
+            }
+        }
+    }
+
+    if (!m_candidates.empty()) {
+        m_currentCandidateIndex = 0;
+        auto& pair = m_candidates[0];
+        AudioEngine::Instance().LoadTrackA(pair.trackA_path);
+        AudioEngine::Instance().LoadTrackB(pair.trackB_path);
+    }
+}
+
+void AppWindow::HandleTagScanFinished() {
+    LOG_INFO("Step 2 Tagging & Cover Art inspection initialized. Loaded " + std::to_string(m_tagItems.size()) + " items into Inspector.");
+
+    // Textures are now created lazily in the render loop for the current item only
+
+    if (!m_tagItems.empty()) {
+        m_currentTagIndex = 0;
+    }
+}
+
+
+void AppWindow::RenderTagScanProgressBar(bool compact) {
+    size_t total = m_tagScanTotal.load();
+    if (total == 0 && !m_tagItems.empty()) total = m_tagItems.size();
+    size_t done = m_fetchedCount.load();
+    if (done > total && total > 0) done = total;
+
+    float fraction = (total > 0) ? ((float)done / (float)total) : 0.0f;
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_tagScanStartTime).count();
+    double elapsedSec = (elapsedMs > 0 && m_tagScanStartTime.time_since_epoch().count() > 0) ? (elapsedMs / 1000.0) : 0.0;
+
+    int elapsedM = (int)elapsedSec / 60;
+    int elapsedS = (int)elapsedSec % 60;
+    char elapsedBuf[32];
+    snprintf(elapsedBuf, sizeof(elapsedBuf), "%02d:%02d", elapsedM, elapsedS);
+
+    char etaBuf[32];
+    if (done == 0 || elapsedSec < 0.5) {
+        snprintf(etaBuf, sizeof(etaBuf), "Расчёт...");
+    } else if (done >= total && total > 0) {
+        snprintf(etaBuf, sizeof(etaBuf), "00:00");
+    } else {
+        double speed = (double)done / elapsedSec;
+        if (speed > 0.0001) {
+            int etaSec = (int)(((double)(total - done)) / speed);
+            if (etaSec < 0) etaSec = 0;
+            int etaH = etaSec / 3600;
+            int etaM = (etaSec % 3600) / 60;
+            int etaS = etaSec % 60;
+            if (etaH > 0) {
+                snprintf(etaBuf, sizeof(etaBuf), "%02d:%02d:%02d", etaH, etaM, etaS);
+            } else {
+                snprintf(etaBuf, sizeof(etaBuf), "%02d:%02d", etaM, etaS);
+            }
+        } else {
+            snprintf(etaBuf, sizeof(etaBuf), "Расчёт...");
+        }
+    }
+
+    char progressOverlay[160];
+    if (compact) {
+        if (m_isTagScanning) {
+            snprintf(progressOverlay, sizeof(progressOverlay), "%zu/%zu (%.0f%%) | ETA: %s", done, total, fraction * 100.0f, etaBuf);
+        } else if (total > 0 && done >= total) {
+            snprintf(progressOverlay, sizeof(progressOverlay), "100%% (%zu/%zu)", total, total);
+        } else {
+            snprintf(progressOverlay, sizeof(progressOverlay), "%zu/%zu", done, total);
+        }
+    } else {
+        if (m_isTagScanning) {
+            double speed = (elapsedSec > 0.5 && done > 0) ? ((double)done / elapsedSec) : 0.0;
+            if (speed > 0.05) {
+                snprintf(progressOverlay, sizeof(progressOverlay), "%zu / %zu (%.0f%%)  |  Прошло: %s  |  ETA: %s  (%.1f тр/сек)",
+                         done, total, fraction * 100.0f, elapsedBuf, etaBuf, speed);
+            } else {
+                snprintf(progressOverlay, sizeof(progressOverlay), "%zu / %zu (%.0f%%)  |  Прошло: %s  |  ETA: %s",
+                         done, total, fraction * 100.0f, elapsedBuf, etaBuf);
+            }
+        } else if (total > 0 && done >= total) {
+            snprintf(progressOverlay, sizeof(progressOverlay), "Сканирование завершено: %zu / %zu (100%%)  |  Затрачено: %s",
+                     total, total, elapsedBuf);
+        } else if (total > 0) {
+            snprintf(progressOverlay, sizeof(progressOverlay), "%zu / %zu (%.0f%%)", done, total, fraction * 100.0f);
+        } else {
+            snprintf(progressOverlay, sizeof(progressOverlay), "0 / 0 (0%%)");
+        }
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.20f, 0.65f, 0.95f, 1.0f));
+    ImGui::ProgressBar(fraction, compact ? ImVec2(240, 22.0f) : ImVec2(-1, 22.0f), progressOverlay);
+    ImGui::PopStyleColor();
+}
+
+void AppWindow::StartTagScan() {
+    if (m_isTagScanning) return;
+    m_isTagScanning = true;
+    LOG_INFO("Step 2: Instant local scan + UI-sequential priority MusicBrainz lookup...");
+    m_tagItems.clear();
+    m_currentTagIndex = 0;
+    m_fetchedCount = 0;
+    m_tagScanTotal = 0;
+    m_tagScanStartTime = std::chrono::steady_clock::now();
+
+    std::thread([this]() {
                     std::vector<std::string> files;
                     if (fs::exists(g_ToSortDir)) {
                         for (auto& p : fs::recursive_directory_iterator(g_ToSortDir)) {
@@ -3030,6 +3915,7 @@ void AppWindow::RunMessageLoop() {
                         }
                     }
 
+                    m_tagScanTotal = files.size();
                     LOG_INFO("[LOCAL INITIALIZATION] Scanned " + std::to_string(files.size()) + " audio files in TO SORT/");
 
                     // FAST LOCAL INITIALIZATION (0.01 seconds!)
@@ -3135,7 +4021,7 @@ void AppWindow::RunMessageLoop() {
                             continue;
                         }
 
-                        size_t currentNum = ++m_fetchedCount;
+                        size_t currentNum = i + 1;
                         LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] [UI ORDER PRIORITY #" + std::to_string(i + 1) + "] Querying: " + artistClean + " - " + albumClean + " (File: " + item.originalFilename + ")");
 
                         // 1. AcoustID Fingerprint Lookup via HTTP POST (Fixes HTTP 414 Request-URI Too Long!)
@@ -3627,782 +4513,10 @@ void AppWindow::RunMessageLoop() {
                         item.matchTier = detectedTier;
                         item.releaseGroupMbId = releaseGroupMbId;
                         item.isFetchCompleted = true;
+                        m_fetchedCount++;
                     }
 
                     m_isTagScanning = false;
                     LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz & Discogs queries finished.");
-                }).detach();
-            }
-        }
-        if (pushed1) ImGui::PopStyleColor();
-
-        ImGui::SameLine();
-
-        bool pushed2 = (m_activeStageTab == 2);
-        if (pushed2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
-        if (ImGui::Button("3. Зеркалирование", ImVec2(170, 32))) {
-            m_activeStageTab = 2;
-            std::thread([]() {
-                NativeMirrorCollections();
-            }).detach();
-        }
-        if (pushed2) ImGui::PopStyleColor();
-
-        ImGui::SameLine();
-
-        bool pushed3 = (m_activeStageTab == 3);
-        if (pushed3) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.35f, 0.35f, 1.00f));
-        if (ImGui::Button("4. База данных & Tracklist", ImVec2(220, 32))) {
-            m_activeStageTab = 3;
-            std::thread([]() {
-                std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
-                DatabaseManager::GetInstance().InitDatabase(dbPath);
-                DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir, g_FlacDir, g_Mp3Dir, g_ToSortDir);
-            }).detach();
-        }
-        if (pushed3) ImGui::PopStyleColor();
-
-        ImGui::Separator();
-
-        // DYNAMIC WORKFLOW INTERFACE SWITCHING
-        if (m_activeStageTab == 0) {
-            // Stage 1 Interface: Dual A/B Comparison Cards Layout
-            float halfWidth = (ImGui::GetContentRegionAvail().x - 16.0f) * 0.5f;
-
-            // Card A (Left)
-            ImGui::BeginChild("CardA", ImVec2(halfWidth, 230), true);
-            ImGui::TextDisabled("ТРЕК А (Левый)");
-            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
-                auto& pair = m_candidates[m_currentCandidateIndex];
-                ImGui::TextUnformatted(fs::path(pair.trackA_path).filename().string().c_str());
-                ImGui::Text("%s | %.1fs", pair.extA.c_str(), pair.durA);
-                ImGui::TextDisabled("%s", pair.relA.c_str());
-                ImGui::Spacing();
-                if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК А (Б -> delete)", ImVec2(-1, 36))) {
-                    MakeDecisionA();
-                }
-            } else {
-                ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
-            }
-            ImGui::EndChild();
-
-            ImGui::SameLine();
-
-            // Card B (Right)
-            ImGui::BeginChild("CardB", ImVec2(halfWidth, 230), true);
-            ImGui::TextDisabled("ТРЕК Б (Правый)");
-            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
-                auto& pair = m_candidates[m_currentCandidateIndex];
-                ImGui::TextUnformatted(fs::path(pair.trackB_path).filename().string().c_str());
-                ImGui::Text("%s | %.1fs", pair.extB.c_str(), pair.durB);
-                ImGui::TextDisabled("%s", pair.relB.c_str());
-                ImGui::Spacing();
-                if (ImGui::Button("[X] ОСТАВИТЬ ТРЕК Б (А -> delete)", ImVec2(-1, 36))) {
-                    MakeDecisionB();
-                }
-            } else {
-                ImGui::TextUnformatted("Ожидание сканирования дубликатов...");
-            }
-            ImGui::EndChild();
-
-            // Audio Player Controls
-            ImGui::BeginChild("PlayerControls", ImVec2(0, 115), true);
-            if (!m_candidates.empty() && m_currentCandidateIndex < m_candidates.size()) {
-                auto& pair = m_candidates[m_currentCandidateIndex];
-                ImGui::Text("Сходство волн: %.1f%% | Смещение фазы: %d кадров", pair.similarity, pair.offset);
-            } else {
-                ImGui::TextDisabled("Сходство волн: --- % | Смещение фазы: --- кадров");
-            }
-
-            double cur = AudioEngine::Instance().GetCurrentPositionSeconds();
-            double dur = AudioEngine::Instance().GetDurationSeconds();
-            float seek_val = (dur > 0.0) ? (float)(cur / dur) : 0.0f;
-
-            int cur_m = (int)cur / 60;
-            int cur_s = (int)cur % 60;
-            int dur_m = (int)dur / 60;
-            int dur_s = (int)dur % 60;
-
-            char time_buf[64];
-            snprintf(time_buf, sizeof(time_buf), "Position: %02d:%02d / %02d:%02d", cur_m, cur_s, dur_m, dur_s);
-
-            if (ImGui::SliderFloat("##SeekSlider", &seek_val, 0.0f, 1.0f, time_buf)) {
-                AudioEngine::Instance().SeekToPercentage((double)seek_val * 100.0);
-            }
-
-            if (ImGui::Button(AudioEngine::Instance().IsPlaying() ? "[||] ПАУЗА" : "[>] ПРОИГРЫВАТЬ", ImVec2(140, 32))) {
-                AudioEngine::Instance().TogglePlay();
-            }
-            ImGui::SameLine();
-
-            char ch = AudioEngine::Instance().GetActiveChannel();
-            if (ch == 'a') {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
-            }
-            if (ImGui::Button("ТРЕК А [1]", ImVec2(140, 32))) {
-                AudioEngine::Instance().SetActiveChannel('a');
-            }
-            if (ch == 'a') ImGui::PopStyleColor(2);
-
-            ImGui::SameLine();
-            if (ch == 'b') {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.00f, 0.00f, 1.00f));
-            }
-            if (ImGui::Button("ТРЕК Б [2]", ImVec2(140, 32))) {
-                AudioEngine::Instance().SetActiveChannel('b');
-            }
-            if (ch == 'b') ImGui::PopStyleColor(2);
-
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(160);
-            float masterVolPercent = AudioEngine::Instance().GetMasterVolume() * 100.0f;
-            if (ImGui::SliderFloat("##MasterVolSlider", &masterVolPercent, 0.0f, 100.0f, "Vol: %.0f%%")) {
-                AudioEngine::Instance().SetMasterVolume(masterVolPercent / 100.0f);
-            }
-
-            ImGui::SameLine();
-            ImGui::TextDisabled("Hotkeys: Tab / S (Hot-Swap) | Space (Play) | 1/2 (Keep)");
-            ImGui::EndChild();
-        } else if (m_activeStageTab == 1) {
-            // Stage 2: PERFECT SIDE-BY-SIDE COVER ART COMPARISON IN CENTER!
-            if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
-                auto& item = m_tagItems[m_currentTagIndex];
-                
-                float availY = ImGui::GetContentRegionAvail().y;
-                float inspectorH = availY - 320.0f; // Give 320px to Logs console panel!
-                if (inspectorH < 400.0f) inspectorH = 400.0f;
-
-                ImGui::BeginChild("TagInspectorCardPerfectFit", ImVec2(0, inspectorH), true, ImGuiWindowFlags_NoScrollbar);
-                ImGui::TextDisabled("Инспектор тегов (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
-                ImGui::SameLine();
-                if (m_isTagScanning && !item.isFetchCompleted) {
-                    ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), "[ПОИСК MB / DISCOGS %zu/%zu...]", m_fetchedCount.load(), m_tagItems.size());
-                } else if (item.isMusicBrainzMatched) {
-                    ImGui::TextColored(GetTierColor(item.matchTier), "[%s]", GetTierName(item.matchTier));
-                } else {
-                    ImGui::TextColored(ImVec4(0.95f, 0.4f, 0.3f, 1.0f), "[NICHE / LOCAL]");
-                }
-
-                ImGui::SameLine();
-                ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
-                ImGui::Separator();
-
-                // Manual MusicBrainz / Discogs URL / ID Input Row
-                ImGui::PushItemWidth(360);
-                ImGui::InputTextWithHint("##ManualMbUrlInput", "Ссылка MusicBrainz / Discogs или ID", m_manualMbUrlBuf, sizeof(m_manualMbUrlBuf));
-                ImGui::PopItemWidth();
-                ImGui::SameLine();
-                if (ImGui::Button("Загрузить метаданные", ImVec2(185, 24))) {
-                    if (strlen(m_manualMbUrlBuf) > 0) {
-                        std::string inputStr(m_manualMbUrlBuf);
-                        if (inputStr.find("discogs.com") != std::string::npos || (inputStr.find_first_not_of("0123456789") == std::string::npos && inputStr.length() >= 4 && inputStr.length() <= 12) || inputStr.find("r") == 0 || inputStr.find("m") == 0) {
-                            FetchManualDiscogsMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
-                        } else {
-                            FetchManualMusicBrainzMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
-                        }
-                    }
-                }
-                ImGui::SameLine();
-                ImGui::Checkbox("Ко всему альбому", &m_manualMbApplyToAlbum);
-                ImGui::Separator();
-
-                // Main 3-Column Layout: Left Column (Col 0) = Stacked Original & Proposed Tags | Middle (Col 1) = Local Cover | Right (Col 2) = Online Cover
-                float inspectorTopY = ImGui::GetCursorPosY();
-                ImGui::Columns(3, "Main3InspectorColumnsFixedTop", false);
-                ImGui::SetColumnWidth(0, 320.0f);
-                ImGui::SetColumnWidth(1, 265.0f);
-                ImGui::SetColumnWidth(2, 265.0f);
-
-                // ==================== COLUMN 0 (LEFT: BOTH TAG BLOCKS STACKED) ====================
-                ImGui::SetCursorPosY(inspectorTopY);
-                ImGui::BeginGroup();
-
-                // 1. ВЕРХНИЙ БЛОК: ИСХОДНЫЕ ТЕГИ
-                ImGui::TextDisabled("Исходные теги в файле");
-                ImGui::PushItemWidth(180);
-
-                char origArtist[256], origAlbum[256], origTitle[256], origTrack[32], origYear[32];
-                strncpy_s(origArtist, item.embeddedArtist.c_str(), sizeof(origArtist) - 1);
-                strncpy_s(origAlbum, item.embeddedAlbum.c_str(), sizeof(origAlbum) - 1);
-                strncpy_s(origTitle, item.embeddedTitle.c_str(), sizeof(origTitle) - 1);
-                strncpy_s(origTrack, item.embeddedTrackNo.c_str(), sizeof(origTrack) - 1);
-                strncpy_s(origYear, item.embeddedYear.c_str(), sizeof(origYear) - 1);
-
-                ImGui::InputText("Исполнитель##Orig", origArtist, sizeof(origArtist), ImGuiInputTextFlags_ReadOnly);
-                ImGui::InputText("Альбом##Orig", origAlbum, sizeof(origAlbum), ImGuiInputTextFlags_ReadOnly);
-                ImGui::InputText("Название##Orig", origTitle, sizeof(origTitle), ImGuiInputTextFlags_ReadOnly);
-                ImGui::PopItemWidth();
-
-                ImGui::PushItemWidth(60);
-                ImGui::InputText("№##Orig", origTrack, sizeof(origTrack), ImGuiInputTextFlags_ReadOnly);
-                ImGui::SameLine();
-                ImGui::PushItemWidth(90);
-                ImGui::InputText("Год/Дата##Orig", origYear, sizeof(origYear), ImGuiInputTextFlags_ReadOnly);
-                ImGui::PopItemWidth();
-                ImGui::PopItemWidth();
-
-                ImGui::Dummy(ImVec2(0, 8.0f));
-
-                // 2. НИЖНИЙ БЛОК: ПРЕДЛАГАЕМЫЕ ТЕГИ
-                ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
-                ImGui::PushItemWidth(180);
-                ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
-                ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
-                ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
-                ImGui::PopItemWidth();
-
-                ImGui::PushItemWidth(60);
-                ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
-                ImGui::SameLine();
-                ImGui::PushItemWidth(90);
-                ImGui::InputText("Год/Дата##New", item.yearBuf, sizeof(item.yearBuf));
-                ImGui::PopItemWidth();
-                ImGui::PopItemWidth();
-
-                ImGui::EndGroup();
-
-                // ==================== COLUMN 1 (MIDDLE: LOCAL COVER ART) ====================
-                ImGui::NextColumn();
-                ImGui::SetCursorPosY(inspectorTopY);
-                ImGui::BeginGroup();
-                ImGui::TextDisabled("Локальная обложка:");
-                if (item.localTexture) {
-                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-                    if (ImGui::ImageButton("##LocalCoverBtnLeftLarge", (ImTextureID)item.localTexture, ImVec2(225, 225))) {
-                        item.selectedCoverChoice = 0;
-                    }
-                    ImGui::PopStyleVar();
-                    ImGui::Text(item.selectedCoverChoice == 0 ? "[X] Локальный скан" : "   Локальный скан");
-                    ImGui::TextDisabled("%dx%d px | %zu KB", item.localWidth, item.localHeight, item.localCoverBytes.size() / 1024);
-                    if (item.localScore >= item.onlineScore) {
-                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
-                    } else if (item.localWidth >= 1000 && item.localScore < item.onlineScore / 3) {
-                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ");
-                    }
-                } else {
-                    ImGui::TextDisabled("[Обложка отсутствует]");
-                }
-                ImGui::EndGroup();
-
-                // ==================== COLUMN 2 (RIGHT: ONLINE COVER ART) ====================
-                ImGui::NextColumn();
-                ImGui::SetCursorPosY(inspectorTopY);
-                ImGui::BeginGroup();
-                ImGui::TextDisabled("CoverArtArchive:");
-                if (item.onlineTexture) {
-                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-                    if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(225, 225))) {
-                        item.selectedCoverChoice = 1;
-                    }
-                    ImGui::PopStyleVar();
-                    ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
-                    ImGui::TextDisabled("%dx%d px | %zu KB", item.onlineWidth, item.onlineHeight, item.onlineCoverBytes.size() / 1024);
-                    if (item.onlineScore > item.localScore) {
-                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
-                    } else if (item.onlineWidth >= 1000 && item.onlineScore < item.localScore / 3) {
-                        ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "[!] ФАЛЬШИВЫЙ АПСКЕЙЛ");
-                    }
-                } else if (m_isTagScanning && !item.isFetchCompleted) {
-                    ImGui::TextDisabled("[Загрузка обложки...]");
-                } else {
-                    ImGui::TextDisabled("[Обложка отсутствует]");
-                }
-                ImGui::EndGroup();
-
-                ImGui::Columns(1); // Reset main split
-                ImGui::Separator();
-
-                // Compact Secluded Lyrics Section at bottom
-                if (ImGui::TreeNode("Текст песни (LRC / Romaji)")) {
-                    ImGui::InputTextMultiline("##LyricsMultiLineSafe", item.lyricsBuf, sizeof(item.lyricsBuf), ImVec2(-1, 60));
-                    ImGui::TreePop();
-                }
-
-                ImGui::Spacing();
-
-                if (ImGui::Button("Принять", ImVec2(160, 34))) {
-                    std::string newArtist(item.artistBuf);
-                    std::string newAlbum(item.albumBuf);
-                    std::string newTitle(item.titleBuf);
-                    std::string newTrackNo(item.trackNoBuf);
-                    std::string newYear(item.yearBuf);
-                    std::string newLyrics(item.lyricsBuf);
-                    std::string srcFilePath = item.filePath;
-                    std::string origFilename = item.originalFilename;
-
-                    const auto chosenCover = (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) ? item.onlineCoverBytes : item.localCoverBytes;
-
-                    std::thread([newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, srcFilePath, origFilename, chosenCover]() {
-                        fs::path srcFile(srcFilePath);
-                        std::string ext = srcFile.extension().string();
-                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-                        std::string safeArtist = SanitizeForFilename(newArtist);
-                        std::string safeAlbum  = SanitizeForFilename(newAlbum);
-                        std::string safeTitle  = SanitizeForFilename(newTitle);
-
-                        fs::path flacDir = fs::path(g_FlacDir) / safeArtist / safeAlbum;
-                        fs::path mp3Dir  = fs::path(g_Mp3Dir) / safeArtist / safeAlbum;
-                        fs::create_directories(flacDir);
-                        fs::create_directories(mp3Dir);
-
-                        std::string baseTrackName = newTrackNo + ". " + safeTitle;
-
-                        if (ext == ".flac") {
-                            fs::path flacFile = flacDir / (baseTrackName + ".flac");
-                            fs::path mp3File  = mp3Dir / (baseTrackName + ".mp3");
-
-                            // 1. Embed tags & picture into FLAC header
-                            bool embeddedOk = WriteFlacTagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
-                            if (embeddedOk) {
-                                LOG_INFO("[TAGS EMBEDDED] VorbisComment tags & cover art written to: " + origFilename);
-                            }
-
-                            // Move FLAC to flac/Artist/Album/
-                            try {
-                                if (fs::exists(flacFile)) fs::remove(flacFile);
-                                fs::rename(srcFile, flacFile);
-                                LOG_INFO("[FLAC MOVED] " + fs::relative(flacFile, g_BaseDir).string());
-                            } catch (const std::exception& ex) {
-                                LOG_INFO("[MOVE ERROR] Failed moving FLAC: " + std::string(ex.what()));
-                                return;
-                            }
-
-                            // 2. Convert FLAC -> MP3 320kbps in mp3/Artist/Album/
-                            LOG_INFO("[CONVERTING MP3] Encoding 320kbps MP3 for: " + baseTrackName + ".mp3 ...");
-                            if (ConvertFlacToMp3(flacFile.string(), mp3File.string())) {
-                                WriteMp3TagsAndPicture(mp3File.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
-                                LOG_INFO("[MP3 MIRRORED] Created 320kbps MP3: " + fs::relative(mp3File, g_BaseDir).string());
-                            } else {
-                                LOG_INFO("[CONVERT WARN] FFmpeg conversion failed for: " + baseTrackName);
-                            }
-
-                            // Save cover.jpg in both flac/ and mp3/
-                            if (!chosenCover.empty()) {
-                                for (const auto& dir : { flacDir, mp3Dir }) {
-                                    fs::path coverDst = dir / "cover.jpg";
-                                    if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
-                                        std::ofstream cOut(coverDst, std::ios::binary);
-                                        if (cOut.is_open()) {
-                                            cOut.write((const char*)chosenCover.data(), chosenCover.size());
-                                            cOut.close();
-                                            LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
-                                        }
-                                    }
-                                }
-                            }
-                        } else if (ext == ".mp3") {
-                            fs::path mp3File  = mp3Dir / (baseTrackName + ".mp3");
-                            fs::path flacFallback = flacDir / (baseTrackName + ".mp3"); // Fallback rule: MP3 in flac/ folder!
-
-                            // 1. Embed ID3v2.4 tags & picture into MP3 header
-                            bool embeddedOk = WriteMp3TagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
-                            if (embeddedOk) {
-                                LOG_INFO("[TAGS EMBEDDED] ID3v2.4 tags & cover art written to: " + origFilename);
-                            }
-
-                            // Move MP3 to mp3/Artist/Album/
-                            try {
-                                if (fs::exists(mp3File)) fs::remove(mp3File);
-                                fs::rename(srcFile, mp3File);
-                                LOG_INFO("[MP3 MOVED] " + fs::relative(mp3File, g_BaseDir).string());
-
-                                // FLAC Fallback Rule: Copy MP3 into flac/ folder!
-                                fs::copy_file(mp3File, flacFallback, fs::copy_options::overwrite_existing);
-                                LOG_INFO("[FLAC FALLBACK] Copied MP3 fallback into: " + fs::relative(flacFallback, g_BaseDir).string());
-                            } catch (const std::exception& ex) {
-                                LOG_INFO("[MOVE ERROR] Failed moving MP3: " + std::string(ex.what()));
-                                return;
-                            }
-
-                            // Save cover.jpg in both mp3/ and flac/
-                            if (!chosenCover.empty()) {
-                                for (const auto& dir : { mp3Dir, flacDir }) {
-                                    fs::path coverDst = dir / "cover.jpg";
-                                    if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
-                                        std::ofstream cOut(coverDst, std::ios::binary);
-                                        if (cOut.is_open()) {
-                                            cOut.write((const char*)chosenCover.data(), chosenCover.size());
-                                            cOut.close();
-                                            LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }).detach();
-
-                    m_currentTagIndex++;
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Пропустить", ImVec2(160, 34))) {
-                    LOG_INFO("[SKIPPED] Skipped track: " + item.originalFilename);
-                    m_currentTagIndex++;
-                }
-                ImGui::EndChild();
-            } else {
-                ImGui::BeginChild("TagInspectorCardEmpty", ImVec2(0, 150), true);
-                ImGui::TextUnformatted("Нажмите кнопку '2. Инспектор тегов' выше, чтобы начать сканирование и обработку тегов.");
-                ImGui::EndChild();
-            }
-        } else if (m_activeStageTab == 2) {
-            ImGui::BeginChild("Stage3Child", ImVec2(0, 150), true);
-            ImGui::TextUnformatted("Этап 3: Нативный C++20 поиск и зеркалирование папок FLAC и MP3 активен.");
-            ImGui::EndChild();
-        } else if (m_activeStageTab == 3) {
-            ImGui::BeginChild("Stage4DBChild", ImVec2(0, 270), true);
-            
-            // Auto-initialize DB on first view
-            std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
-            DatabaseManager::GetInstance().InitDatabase(dbPath);
-
-            int totalCount = DatabaseManager::GetInstance().GetTotalTracksCount();
-            int dlCount = DatabaseManager::GetInstance().GetDownloadedCount();
-            int missCount = DatabaseManager::GetInstance().GetMissingCount();
-
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "SQLite База данных коллекции (music_database.db)");
-            ImGui::SameLine();
-            ImGui::TextDisabled("|  Всего треков: %d  |  Скачано [x]: %d  |  Ожидают [ ]: %d", totalCount, dlCount, missCount);
-
-            ImGui::Separator();
-
-            // Controls Row: Search & Filters & Actions
-            static char searchBuf[128] = "";
-            static int filterStatus = 0; // 0 = Все, 1 = [x] Скачано, 2 = [ ] Ожидают
-            static int filterFormat = 0; // 0 = Все, 1 = FLAC, 2 = MP3
-
-            ImGui::PushItemWidth(200);
-            ImGui::InputText("Поиск##DBSearch", searchBuf, sizeof(searchBuf));
-            ImGui::PopItemWidth();
-
-            ImGui::SameLine();
-            if (ImGui::Button(filterStatus == 0 ? "[Все статусы]" : (filterStatus == 1 ? "[x] Скачано" : "[ ] Ожидают"))) {
-                filterStatus = (filterStatus + 1) % 3;
-            }
-
-            ImGui::SameLine();
-            if (ImGui::Button(filterFormat == 0 ? "[Все форматы]" : (filterFormat == 1 ? "FLAC" : "MP3"))) {
-                filterFormat = (filterFormat + 1) % 3;
-            }
-
-            ImGui::SameLine();
-            if (ImGui::Button("🔄 Скан диска")) {
-                std::thread([]() {
-                    std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
-                    DatabaseManager::GetInstance().InitDatabase(dbPath);
-                    DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir, g_FlacDir, g_Mp3Dir, g_ToSortDir);
-                }).detach();
-            }
-
-            ImGui::SameLine();
-            if (ImGui::Button("📄 Экспорт в tracklist.md")) {
-                std::thread([]() {
-                    std::string tracklistPath = (fs::path(g_BaseDir) / "tracklist.md").string();
-                    DatabaseManager::GetInstance().ExportToCleanTracklistMarkdown(tracklistPath);
-                }).detach();
-            }
-
-            ImGui::Separator();
-
-            // Database ImGui Table
-            std::vector<TrackRecord> records = DatabaseManager::GetInstance().QueryTracks(filterStatus, filterFormat, searchBuf);
-
-            if (ImGui::BeginTable("DBTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable, ImVec2(0, 160))) {
-                ImGui::TableSetupColumn("Статус", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-                ImGui::TableSetupColumn("Исполнитель", ImGuiTableColumnFlags_WidthFixed, 180.0f);
-                ImGui::TableSetupColumn("Альбом", ImGuiTableColumnFlags_WidthFixed, 200.0f);
-                ImGui::TableSetupColumn("Название трека", ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableSetupColumn("Формат", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-                ImGui::TableSetupColumn("Путь на диске", ImGuiTableColumnFlags_WidthFixed, 220.0f);
-                ImGui::TableHeadersRow();
-
-                for (const auto& rec : records) {
-                    ImGui::TableNextRow();
-                    
-                    // Status
-                    ImGui::TableSetColumnIndex(0);
-                    if (rec.status == 1) {
-                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "[x]");
-                    } else {
-                        ImGui::TextDisabled("[ ]");
-                    }
-
-                    // Artist
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(rec.artist.c_str());
-
-                    // Album
-                    ImGui::TableSetColumnIndex(2);
-                    ImGui::TextUnformatted(rec.album.c_str());
-
-                    // Title
-                    ImGui::TableSetColumnIndex(3);
-                    ImGui::TextUnformatted(rec.title.c_str());
-
-                    // Format
-                    ImGui::TableSetColumnIndex(4);
-                    if (rec.format == "FLAC") {
-                        ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "FLAC");
-                    } else if (rec.format == "MP3") {
-                        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "MP3 320k");
-                    } else {
-                        ImGui::TextDisabled("—");
-                    }
-
-                    // Path
-                    ImGui::TableSetColumnIndex(5);
-                    ImGui::TextDisabled("%s", rec.relPath.c_str());
-                }
-
-                ImGui::EndTable();
-            }
-
-            ImGui::EndChild();
-        }
-
-        // Clean Syntax-Highlighted & Click-to-Copy Logs Panel with Left-Aligned 'Скопировать' Button
-        ImGui::BeginChild("LogConsoleHeader", ImVec2(0, 0), true);
-        ImGui::TextDisabled("Logs:");
-        ImGui::SameLine();
-
-        auto logs = Logger::Instance().GetLogs();
-
-        // Clean Compact 'Скопировать' Button Placed Immediately on the Left
-        if (ImGui::Button("Скопировать", ImVec2(110, 24))) {
-            std::string full_logs;
-            for (const auto& log : logs) {
-                full_logs += log + "\n";
-            }
-            CopyToClipboardWin32(full_logs);
-            LOG_INFO("[CLIPBOARD] All console logs copied to Windows clipboard!");
-        }
-
-        ImGui::SameLine();
-        if (ImGui::Button("Сохранить в файл", ImVec2(140, 24))) {
-            auto now = std::chrono::system_clock::now();
-            std::time_t t = std::chrono::system_clock::to_time_t(now);
-            std::tm tm;
-            localtime_s(&tm, &t);
-            char stamp[32];
-            std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm);
-            fs::path logPath = fs::path(g_BaseDir) / ("logs_" + std::string(stamp) + ".txt");
-            std::ofstream fOut(logPath);
-            if (fOut.is_open()) {
-                for (const auto& log : logs) {
-                    fOut << log << "\n";
-                }
-                fOut.close();
-                LOG_INFO("[LOGS SAVED] Written to: " + logPath.string());
-            } else {
-                LOG_WARN("[LOGS SAVE ERROR] Could not write: " + logPath.string());
-            }
-        }
-
-        ImGui::SameLine();
-        if (ImGui::Button("Сводная таблица релизов", ImVec2(200, 24))) {
-            OpenSummaryWindow();
-        }
-
-        ImGui::Separator();
-
-        ImGui::BeginChild("LogListRegion", ImVec2(0, 0), false, ImGuiWindowFlags_None);
-
-        bool isAtBottom = (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20.0f);
-
-        for (size_t i = 0; i < logs.size(); ++i) {
-            const std::string& logLine = logs[i];
-            ImGui::PushID((int)i);
-
-            ImVec4 textColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
-            if (logLine.find("[MUSICBRAINZ MATCHED]") != std::string::npos || logLine.find("[ACOUSTID MATCHED]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER A SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER B SUCCESS]") != std::string::npos || logLine.find("[MUSICBRAINZ TIER C SUCCESS]") != std::string::npos || logLine.find("[TAGS EMBEDDED]") != std::string::npos) {
-                textColor = ImVec4(0.2f, 1.0f, 0.4f, 1.0f);
-            } else if (logLine.find("[COVER ART DOWNLOADED]") != std::string::npos || logLine.find("[COVER SAVED]") != std::string::npos) {
-                textColor = ImVec4(1.0f, 0.4f, 0.8f, 1.0f);
-            } else if (logLine.find("[MUSICBRAINZ FETCH") != std::string::npos || logLine.find("[MUSICBRAINZ TIER") != std::string::npos || logLine.find("[ACOUSTID FINGERPRINT]") != std::string::npos) {
-                textColor = ImVec4(0.9f, 0.8f, 0.2f, 1.0f);
-            } else if (logLine.find("[AUTO-DELETE]") != std::string::npos || logLine.find("[DECISION]") != std::string::npos || logLine.find("[HTTP 429") != std::string::npos || logLine.find("[HTTP 503") != std::string::npos || logLine.find("[HTTP ERROR") != std::string::npos || logLine.find("[COVER ART MISSING]") != std::string::npos || logLine.find("[SKIPPED]") != std::string::npos) {
-                textColor = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
-            } else if (logLine.find("[LRC LYRICS FETCHED]") != std::string::npos) {
-                textColor = ImVec4(0.3f, 0.8f, 1.0f, 1.0f);
-            } else if (logLine.find("[TAGS APPLIED") != std::string::npos || logLine.find("[CLIPBOARD]") != std::string::npos || logLine.find("[ALBUM CACHE HIT]") != std::string::npos) {
-                textColor = ImVec4(0.4f, 0.9f, 1.0f, 1.0f);
-            }
-
-            ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-            // Interactive Selectable Line with Text Wrapped and Click-to-Copy!
-            ImGui::TextWrapped("%s", logLine.c_str());
-            if (ImGui::IsItemClicked()) {
-                CopyToClipboardWin32(logLine);
-                LOG_INFO("[CLIPBOARD] Copied line to clipboard: " + logLine);
-            }
-            ImGui::PopStyleColor();
-
-            ImGui::PopID();
-        }
-
-        static size_t last_log_size = 0;
-        if (isAtBottom && logs.size() != last_log_size) {
-            ImGui::SetScrollHereY(1.0f);
-        }
-        last_log_size = logs.size();
-
-        ImGui::EndChild(); // End LogListRegion
-        ImGui::EndChild(); // End LogConsoleHeader
-
-        ImGui::End(); // End MusicSorter Workspace
-
-        // Rendering Main Window Frame
-        ImGui::SetCurrentContext(m_mainImGuiContext);
-        ImGui::Render();
-        const float clear_color_with_alpha[4] = { 0.07f, 0.07f, 0.07f, 1.00f };
-        m_pd3dDeviceContext->OMSetRenderTargets(1, &m_mainRenderTargetView, NULL);
-        m_pd3dDeviceContext->ClearRenderTargetView(m_mainRenderTargetView, clear_color_with_alpha);
-        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        m_pSwapChain->Present(1, 0); // Present with vsync 60 FPS
-
-        // Rendering Secondary Native Window if open
-        if (m_hSummaryWnd != NULL && IsWindow(m_hSummaryWnd) && m_summaryImGuiContext != NULL && m_summaryRenderTargetView != NULL) {
-            RECT rc;
-            GetClientRect(m_hSummaryWnd, &rc);
-            float w = (float)(rc.right - rc.left);
-            float h = (float)(rc.bottom - rc.top);
-            if (w > 0 && h > 0) {
-                ImGui::SetCurrentContext(m_summaryImGuiContext);
-                ImGui_ImplDX11_NewFrame();
-                ImGui_ImplWin32_NewFrame();
-                ImGui::NewFrame();
-
-                ImGui::SetNextWindowPos(ImVec2(0, 0));
-                ImGui::SetNextWindowSize(ImVec2(w, h));
-                ImGui::Begin("##SummaryNativeWindowCanvas", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
-                RenderReleaseSummaryTable();
-                ImGui::End();
-
-                ImGui::Render();
-                m_pd3dDeviceContext->OMSetRenderTargets(1, &m_summaryRenderTargetView, NULL);
-                m_pd3dDeviceContext->ClearRenderTargetView(m_summaryRenderTargetView, clear_color_with_alpha);
-                ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-                m_pSummarySwapChain->Present(1, 0);
-
-                ImGui::SetCurrentContext(m_mainImGuiContext);
-            }
-        }
-
-        Sleep(1); // Yield CPU to OS scheduler to keep IDLE CPU usage at 0.0%!
-    }
-}
-
-LRESULT CALLBACK AppWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (Instance().m_mainImGuiContext) {
-        ImGuiContext* prevCtx = ImGui::GetCurrentContext();
-        ImGui::SetCurrentContext(Instance().m_mainImGuiContext);
-        LRESULT res = ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
-        ImGui::SetCurrentContext(prevCtx);
-        if (res) return true;
-    }
-
-    switch (msg) {
-    case WM_SCAN_FINISHED:
-        Instance().HandleScanFinished();
-        return 0;
-    case WM_TAG_SCAN_FINISHED:
-        Instance().HandleTagScanFinished();
-        return 0;
-    case WM_BROWSE_RESULT: {
-        int target = (int)wParam;
-        std::string* pResult = (std::string*)lParam;
-        auto& app = Instance();
-        std::string result = pResult ? *pResult : "";
-        delete pResult;
-        switch (target) {
-            case 0:
-                strncpy_s(app.m_toSortBuf, result.c_str(), sizeof(app.m_toSortBuf) - 1);
-                break;
-            case 1:
-                strncpy_s(app.m_outputBuf, result.c_str(), sizeof(app.m_outputBuf) - 1);
-                strncpy_s(app.m_flacBuf, (fs::path(result) / "flac").string().c_str(), sizeof(app.m_flacBuf) - 1);
-                strncpy_s(app.m_mp3Buf, (fs::path(result) / "mp3").string().c_str(), sizeof(app.m_mp3Buf) - 1);
-                break;
-            case 2:
-                strncpy_s(app.m_flacBuf, result.c_str(), sizeof(app.m_flacBuf) - 1);
-                break;
-            case 3:
-                strncpy_s(app.m_mp3Buf, result.c_str(), sizeof(app.m_mp3Buf) - 1);
-                break;
-        }
-        return 0;
-    }
-    case WM_SIZE:
-        if (Instance().m_pd3dDevice != NULL && wParam != SIZE_MINIMIZED) {
-            Instance().CleanupRenderTarget();
-            Instance().m_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
-            Instance().CreateRenderTarget();
-        }
-        return 0;
-    case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
-        break;
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        return 0;
-    }
-    return DefWindowProcW(hWnd, msg, wParam, lParam);
-}
-
-void AppWindow::HandleScanFinished() {
-    LOG_INFO("Scan process finished. Found " + std::to_string(m_candidates.size()) + " candidates for A/B comparison.");
-
-    // Deduplicate auto-delete list (same file may be matched against multiple others)
-    std::unordered_set<std::string> seen;
-    std::vector<std::string> uniqueAutoDelete;
-    for (const auto& pathStr : m_autoDelete) {
-        if (seen.insert(pathStr).second) {
-            uniqueAutoDelete.push_back(pathStr);
-        }
-    }
-
-    fs::path toSortParent = fs::path(g_ToSortDir).parent_path();
-
-    for (const std::string& pathStr : uniqueAutoDelete) {
-        fs::path p(pathStr);
-        if (fs::exists(p)) {
-            fs::path rel = fs::relative(p, toSortParent);
-            fs::path dst = fs::path(g_DeleteDir) / rel;
-
-            // Safety: never move a file onto itself
-            std::error_code ec;
-            if (fs::weakly_canonical(p, ec) == fs::weakly_canonical(dst, ec)) {
-                LOG_WARN("[AUTO-DELETE] Skipping self-move: " + rel.string());
-                continue;
-            }
-
-            fs::create_directories(dst.parent_path());
-            LOG_INFO("[AUTO-DELETE] Moving exact duplicate to delete/: " + rel.string());
-            try {
-                if (fs::exists(dst)) fs::remove(dst);
-                fs::rename(p, dst);
-            } catch (const std::exception& ex) {
-                LOG_WARN("[AUTO-DELETE] Failed moving " + rel.string() + ": " + ex.what());
-            }
-        }
-    }
-
-    if (!m_candidates.empty()) {
-        m_currentCandidateIndex = 0;
-        auto& pair = m_candidates[0];
-        AudioEngine::Instance().LoadTrackA(pair.trackA_path);
-        AudioEngine::Instance().LoadTrackB(pair.trackB_path);
-    }
-}
-
-void AppWindow::HandleTagScanFinished() {
-    LOG_INFO("Step 2 Tagging & Cover Art inspection initialized. Loaded " + std::to_string(m_tagItems.size()) + " items into Inspector.");
-
-    // Textures are now created lazily in the render loop for the current item only
-
-    if (!m_tagItems.empty()) {
-        m_currentTagIndex = 0;
-    }
+    }).detach();
 }
