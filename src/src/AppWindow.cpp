@@ -3826,7 +3826,8 @@ void AppWindow::RenderTagScanProgressBar(bool compact) {
     float fraction = (total > 0) ? ((float)done / (float)total) : 0.0f;
 
     auto now = std::chrono::steady_clock::now();
-    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_tagScanStartTime).count();
+    auto effectiveEndTime = (m_isTagScanning || m_tagScanEndTime.time_since_epoch().count() == 0) ? now : m_tagScanEndTime;
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(effectiveEndTime - m_tagScanStartTime).count();
     double elapsedSec = (elapsedMs > 0 && m_tagScanStartTime.time_since_epoch().count() > 0) ? (elapsedMs / 1000.0) : 0.0;
 
     int elapsedM = (int)elapsedSec / 60;
@@ -3900,6 +3901,7 @@ void AppWindow::StartTagScan() {
     m_fetchedCount = 0;
     m_tagScanTotal = 0;
     m_tagScanStartTime = std::chrono::steady_clock::now();
+    m_tagScanEndTime = {};
 
     std::thread([this]() {
                     std::vector<std::string> files;
@@ -3917,6 +3919,13 @@ void AppWindow::StartTagScan() {
 
                     m_tagScanTotal = files.size();
                     LOG_INFO("[LOCAL INITIALIZATION] Scanned " + std::to_string(files.size()) + " audio files in TO SORT/");
+
+                    if (files.empty()) {
+                        m_tagScanEndTime = std::chrono::steady_clock::now();
+                        m_isTagScanning = false;
+                        PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
+                        return;
+                    }
 
                     // FAST LOCAL INITIALIZATION (0.01 seconds!)
                     m_tagItems.resize(files.size());
@@ -4516,6 +4525,7 @@ void AppWindow::StartTagScan() {
                         m_fetchedCount++;
                     }
 
+                    m_tagScanEndTime = std::chrono::steady_clock::now();
                     m_isTagScanning = false;
                     LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz & Discogs queries finished.");
     }).detach();

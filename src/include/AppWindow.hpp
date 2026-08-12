@@ -130,6 +130,7 @@ private:
     std::atomic<size_t> m_fetchedCount{0};
     std::atomic<size_t> m_tagScanTotal{0};
     std::chrono::steady_clock::time_point m_tagScanStartTime{};
+    std::chrono::steady_clock::time_point m_tagScanEndTime{};
 
     // Active Stage Tab (0 = Step 1 Duplicates, 1 = Step 2 Inspector, 2 = Step 3 Mirror, 3 = Step 4 Tracklist)
     int m_activeStageTab = 0;
