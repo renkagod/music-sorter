@@ -15,7 +15,7 @@ std::string g_DeleteDir;
 std::string g_OutputDir;
 std::string g_FlacDir;
 std::string g_Mp3Dir;
-std::string g_AcoustIdKey = "8Xa1nV0f";
+std::string g_AcoustIdKey;
 std::string g_DiscogsToken;
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
