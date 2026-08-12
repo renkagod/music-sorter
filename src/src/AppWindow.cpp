@@ -1311,13 +1311,35 @@ static bool FetchDiscogsReleaseDetails(const std::string& releaseId, bool isMast
     outInfo.id = releaseId;
     outInfo.title = doc.get("title").strVal;
     
-    // Year / Released date
+    // Year / Released date (prefer ISO full date YYYY-MM-DD from "released", or "released_formatted", or "year")
     if (doc.get("released").type == JsonVal::String && !doc.get("released").strVal.empty()) {
         outInfo.year = doc.get("released").strVal;
+    } else if (doc.get("released_formatted").type == JsonVal::String && !doc.get("released_formatted").strVal.empty()) {
+        outInfo.year = doc.get("released_formatted").strVal;
     } else if (doc.get("year").type == JsonVal::Number && doc.get("year").numVal > 0) {
         outInfo.year = std::to_string((int)doc.get("year").numVal);
     } else if (doc.get("year").type == JsonVal::String) {
         outInfo.year = doc.get("year").strVal;
+    }
+
+    // Master fallback if date still empty
+    if (outInfo.year.empty() || outInfo.year == "0") {
+        std::string masterId;
+        if (doc.get("master_id").type == JsonVal::Number && doc.get("master_id").numVal > 0) {
+            masterId = std::to_string((int)doc.get("master_id").numVal);
+        }
+        if (!masterId.empty()) {
+            std::string masterUrl = "https://api.discogs.com/masters/" + masterId;
+            if (!g_DiscogsToken.empty()) masterUrl += "?token=" + g_DiscogsToken;
+            std::string masterJson = HttpGetString(Utf8ToWide(masterUrl));
+            if (!masterJson.empty()) {
+                size_t mp = 0;
+                JsonVal mDoc = ParseJsonSimple(masterJson, mp);
+                if (mDoc.get("year").type == JsonVal::Number && mDoc.get("year").numVal > 0) {
+                    outInfo.year = std::to_string((int)mDoc.get("year").numVal);
+                }
+            }
+        }
     }
 
     // Artist
@@ -1427,6 +1449,7 @@ static bool SearchDiscogsRelease(const std::string& artist, const std::string& a
         return false;
     }
 
+    int bestScore = -10000;
     std::string pickedId;
     std::string pickedCover;
     std::string pickedYear;
@@ -1450,24 +1473,50 @@ static bool SearchDiscogsRelease(const std::string& artist, const std::string& a
         bool isMaster = (r.get("type").strVal == "master");
 
         std::string rTitleNorm = NormalizeKey(rTitle);
-        bool match = false;
-        if (!albNorm.empty() && (rTitleNorm.find(albNorm) != std::string::npos || albNorm.find(rTitleNorm) != std::string::npos)) {
-            match = true;
+        bool titleMatch = (!albNorm.empty() && (rTitleNorm.find(albNorm) != std::string::npos || albNorm.find(rTitleNorm) != std::string::npos));
+
+        int score = 0;
+        if (titleMatch) score += 100;
+        if (!rYear.empty() && rYear != "0") score += 30;
+        if (!rCover.empty()) score += 20;
+
+        // Check format descriptions to prioritize official standard Album over test pressings/promos
+        const auto& fmtArr = r.get("formats");
+        if (fmtArr.type == JsonVal::Array) {
+            for (size_t f = 0; f < fmtArr.arrVal.size(); ++f) {
+                const auto& fObj = fmtArr.get(f);
+                const auto& descArr = fObj.get("descriptions");
+                if (descArr.type == JsonVal::Array) {
+                    for (size_t d = 0; d < descArr.arrVal.size(); ++d) {
+                        std::string dLower = descArr.get(d).strVal;
+                        std::transform(dLower.begin(), dLower.end(), dLower.begin(), ::tolower);
+                        if (dLower == "album") score += 15;
+                        if (dLower.find("test") != std::string::npos) score -= 50;
+                        if (dLower.find("promo") != std::string::npos) score -= 30;
+                        if (dLower.find("unofficial") != std::string::npos) score -= 60;
+                    }
+                }
+            }
         }
 
-        if (pickedId.empty() || match) {
+        // Community popularity score
+        double haveCount = r.get("community").get("have").numVal;
+        double wantCount = r.get("community").get("want").numVal;
+        score += (int)((haveCount + wantCount) / 2.0);
+
+        if (score > bestScore) {
+            bestScore = score;
             pickedId = rId;
             pickedCover = rCover;
             pickedYear = rYear;
             pickedTitle = rTitle;
             isMasterPicked = isMaster;
-            if (match) break;
         }
     }
 
     if (pickedId.empty()) return false;
 
-    LOG_INFO("[DISCOGS MATCHED] Found release ID: " + pickedId + " (" + pickedTitle + "). Fetching details...");
+    LOG_INFO("[DISCOGS MATCHED] Selected release ID: " + pickedId + " (" + pickedTitle + ", Score: " + std::to_string(bestScore) + "). Fetching details...");
     bool ok = FetchDiscogsReleaseDetails(pickedId, isMasterPicked, outInfo);
     if (!ok && !pickedTitle.empty()) {
         outInfo.id = pickedId;
