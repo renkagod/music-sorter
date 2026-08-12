@@ -1396,8 +1396,10 @@ static bool FetchDiscogsReleaseDetails(const std::string& releaseId, bool isMast
 static bool SearchDiscogsRelease(const std::string& artist, const std::string& album, DiscogsReleaseInfo& outInfo) {
     if (album.empty()) return false;
 
+    bool isArtistUnknown = (artist.empty() || artist == "Unknown Artist" || artist == "Various Artists" || artist == "V.A." || artist == "VA");
+
     std::string queryUrl = "https://api.discogs.com/database/search?release_title=" + UrlEncode(album);
-    if (!artist.empty() && artist != "Unknown Artist" && artist != "Various Artists" && artist != "V.A.") {
+    if (!isArtistUnknown) {
         queryUrl += "&artist=" + UrlEncode(artist);
     }
     queryUrl += "&type=release";
@@ -1408,7 +1410,8 @@ static bool SearchDiscogsRelease(const std::string& artist, const std::string& a
     LOG_INFO("[DISCOGS SEARCH] Querying: " + queryUrl);
     std::string resJson = HttpGetString(Utf8ToWide(queryUrl));
     if (resJson.empty() || resJson.find("\"results\":[]") != std::string::npos) {
-        std::string broadUrl = "https://api.discogs.com/database/search?q=" + UrlEncode(artist + " " + album) + "&type=release";
+        std::string broadQuery = isArtistUnknown ? album : (artist + " " + album);
+        std::string broadUrl = "https://api.discogs.com/database/search?q=" + UrlEncode(broadQuery) + "&type=release";
         if (!g_DiscogsToken.empty()) broadUrl += "&token=" + g_DiscogsToken;
         LOG_INFO("[DISCOGS SEARCH FALLBACK] Querying: " + broadUrl);
         resJson = HttpGetString(Utf8ToWide(broadUrl));
@@ -1428,6 +1431,7 @@ static bool SearchDiscogsRelease(const std::string& artist, const std::string& a
     std::string pickedCover;
     std::string pickedYear;
     std::string pickedTitle;
+    bool isMasterPicked = false;
 
     std::string albNorm = NormalizeKey(album);
 
@@ -1443,10 +1447,11 @@ static bool SearchDiscogsRelease(const std::string& artist, const std::string& a
         if (r.get("year").type == JsonVal::Number) rYear = std::to_string((int)r.get("year").numVal);
         else rYear = r.get("year").strVal;
         std::string rCover = r.get("cover_image").strVal;
+        bool isMaster = (r.get("type").strVal == "master");
 
         std::string rTitleNorm = NormalizeKey(rTitle);
         bool match = false;
-        if (!albNorm.empty() && rTitleNorm.find(albNorm) != std::string::npos) {
+        if (!albNorm.empty() && (rTitleNorm.find(albNorm) != std::string::npos || albNorm.find(rTitleNorm) != std::string::npos)) {
             match = true;
         }
 
@@ -1455,6 +1460,7 @@ static bool SearchDiscogsRelease(const std::string& artist, const std::string& a
             pickedCover = rCover;
             pickedYear = rYear;
             pickedTitle = rTitle;
+            isMasterPicked = isMaster;
             if (match) break;
         }
     }
@@ -1462,7 +1468,7 @@ static bool SearchDiscogsRelease(const std::string& artist, const std::string& a
     if (pickedId.empty()) return false;
 
     LOG_INFO("[DISCOGS MATCHED] Found release ID: " + pickedId + " (" + pickedTitle + "). Fetching details...");
-    bool ok = FetchDiscogsReleaseDetails(pickedId, false, outInfo);
+    bool ok = FetchDiscogsReleaseDetails(pickedId, isMasterPicked, outInfo);
     if (!ok && !pickedTitle.empty()) {
         outInfo.id = pickedId;
         outInfo.title = pickedTitle;
@@ -3236,6 +3242,8 @@ void AppWindow::RunMessageLoop() {
                                 searchTitle = acoustRecTitle;
                             }
 
+                            std::vector<MBReleaseGroupCandidate> tierBCandidates;
+
                             // Tier A: Strict Release Group Search
                             if (!searchArtist.empty() && searchArtist != "Unknown Artist") {
                                 std::string artistLucene = EscapeLuceneQuery(searchArtist);
@@ -3263,7 +3271,7 @@ void AppWindow::RunMessageLoop() {
                                 std::string mbAlbumUrl = "https://musicbrainz.org/ws/2/release-group?query=release:\"" + UrlEncode(albumClean) + "\"&fmt=json";
                                 LOG_INFO("[MUSICBRAINZ TIER B FALLBACK] Querying release:\"" + albumClean + "\"");
                                 std::string mbAlbumRes = HttpGetString(Utf8ToWide(mbAlbumUrl));
-                                auto tierBCandidates = ParseMusicBrainzReleaseGroups(mbAlbumRes);
+                                tierBCandidates = ParseMusicBrainzReleaseGroups(mbAlbumRes);
                                 LOG_INFO("[MUSICBRAINZ TIER B] Found " + std::to_string(tierBCandidates.size()) + " candidate release-groups");
 
                                 auto artistKnown = [&]() { return !searchArtist.empty() && searchArtist != "Unknown Artist"; };
@@ -3331,14 +3339,6 @@ void AppWindow::RunMessageLoop() {
                                         }
                                     }
 
-                                    if (candMbIdPicked.empty() && !tierBCandidates.empty()) {
-                                        candMbIdPicked = tierBCandidates[0].id;
-                                        candTitlePicked = tierBCandidates[0].title;
-                                        candDatePicked = tierBCandidates[0].firstReleaseDate;
-                                        tierBPicked = MatchTier::TierB_Fallback;
-                                        LOG_INFO("[MUSICBRAINZ TIER B FALLBACK FIRST] MBID: " + candMbIdPicked + " (" + candTitlePicked + ", no artist/track verification)");
-                                    }
-
                                     if (!candMbIdPicked.empty()) {
                                         releaseGroupMbId = candMbIdPicked;
                                         if (!candDatePicked.empty()) {
@@ -3347,7 +3347,7 @@ void AppWindow::RunMessageLoop() {
                                         }
                                         isMatched = true;
                                         detectedTier = tierBPicked;
-                                        LOG_INFO("[MUSICBRAINZ TIER B SUCCESS] MBID: " + releaseGroupMbId + " (" + candTitlePicked + ")");
+                                        LOG_INFO("[MUSICBRAINZ TIER B VERIFIED SUCCESS] MBID: " + releaseGroupMbId + " (" + candTitlePicked + ")");
                                     }
                                 }
 
@@ -3373,8 +3373,57 @@ void AppWindow::RunMessageLoop() {
                                 }
                             }
 
-                            // Tier C: Loose Text Search
+                            // Prioritize Discogs Database Search before Loose/Unverified MusicBrainz Fallbacks
                             if (releaseGroupMbId.empty()) {
+                                LOG_INFO("[DISCOGS PIPELINE] Searching Discogs Database for: " + searchArtist + " - " + albumClean);
+                                DiscogsReleaseInfo discInfo;
+                                if (SearchDiscogsRelease(searchArtist, albumClean, discInfo)) {
+                                    LOG_INFO("[DISCOGS METADATA FOUND] Matched release: " + discInfo.artist + " - " + discInfo.title + " (Year: " + discInfo.year + ", Tracks: " + std::to_string(discInfo.tracks.size()) + ")");
+                                    releaseGroupMbId = "discogs_" + discInfo.id;
+                                    if (!discInfo.year.empty()) {
+                                        firstReleaseDate = discInfo.year;
+                                    }
+                                    if (!discInfo.coverUrl.empty()) {
+                                        coverData = HttpGetBytes(Utf8ToWide(discInfo.coverUrl));
+                                        if (!coverData.empty()) {
+                                            LOG_INFO("[DISCOGS COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from Discogs via " + discInfo.coverUrl);
+                                        }
+                                    }
+                                    isMatched = true;
+                                    detectedTier = MatchTier::Discogs;
+
+                                    for (size_t k = 0; k < files.size(); ++k) {
+                                        std::string aKey = NormalizeKey(m_tagItems[k].albumBuf);
+                                        if (aKey.empty() || aKey == "unknown" || aKey == "tosort" || aKey == "music" || aKey == "media") {
+                                            aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
+                                        }
+                                        if (aKey == albumKey) {
+                                            if (!discInfo.artist.empty()) {
+                                                strncpy_s(m_tagItems[k].artistBuf, discInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
+                                            }
+                                            if (!discInfo.title.empty()) {
+                                                strncpy_s(m_tagItems[k].albumBuf, discInfo.title.c_str(), sizeof(m_tagItems[k].albumBuf) - 1);
+                                            }
+                                            if (!discInfo.year.empty()) {
+                                                strncpy_s(m_tagItems[k].yearBuf, discInfo.year.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
+                                            }
+                                            if (!discInfo.tracks.empty()) {
+                                                ApplyTrackMatch(m_tagItems[k], discInfo.tracks);
+                                            }
+                                            m_tagItems[k].matchTier = detectedTier;
+                                            m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
+                                        }
+                                    }
+
+                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, discInfo.tracks, isMatched, true, detectedTier };
+                                    if (!releaseGroupMbId.empty()) {
+                                        albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, discInfo.tracks, isMatched, true, detectedTier };
+                                    }
+                                }
+                            }
+
+                            // Tier C: Loose Text Search (ONLY when Artist is known to avoid random keyword matches)
+                            if (releaseGroupMbId.empty() && !searchArtist.empty() && searchArtist != "Unknown Artist") {
                                 std::string mbLooseQuery = EscapeLuceneQuery(searchArtist) + " " + EscapeLuceneQuery(albumClean);
                                 std::string mbLooseUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbLooseQuery) + "&fmt=json";
                                 LOG_INFO("[MUSICBRAINZ TIER C LOOSE] Querying: " + mbLooseQuery);
@@ -3382,33 +3431,36 @@ void AppWindow::RunMessageLoop() {
                                 auto looseCandidates = ParseMusicBrainzReleaseGroups(mbLooseRes);
                                 for (const auto& c : looseCandidates) {
                                     bool artistMatched = true;
-                                    if (!searchArtist.empty() && searchArtist != "Unknown Artist") {
-                                        std::string baseArtist = searchArtist;
-                                        size_t semiPos = baseArtist.find(';');
-                                        if (semiPos != std::string::npos) baseArtist = baseArtist.substr(0, semiPos);
-                                        while (!baseArtist.empty() && (baseArtist.back() == ' ' || baseArtist.back() == '\t')) baseArtist.pop_back();
+                                    std::string baseArtist = searchArtist;
+                                    size_t semiPos = baseArtist.find(';');
+                                    if (semiPos != std::string::npos) baseArtist = baseArtist.substr(0, semiPos);
+                                    while (!baseArtist.empty() && (baseArtist.back() == ' ' || baseArtist.back() == '\t')) baseArtist.pop_back();
 
-                                        std::string acLower = c.artistCredit;
-                                        std::transform(acLower.begin(), acLower.end(), acLower.begin(), ::tolower);
-                                        std::string baseLower = baseArtist;
-                                        std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), ::tolower);
-                                        bool isVA = (acLower.find("various artists") != std::string::npos || acLower.find("v.a.") != std::string::npos);
-                                        if (!baseLower.empty() && acLower.find(baseLower) == std::string::npos && !isVA) {
-                                            artistMatched = false;
-                                            LOG_INFO("[MUSICBRAINZ TIER C REJECTED] Mismatched artist credit: " + c.artistCredit + " (Expected: " + baseArtist + ")");
-                                        }
+                                    std::string acLower = c.artistCredit;
+                                    std::transform(acLower.begin(), acLower.end(), acLower.begin(), ::tolower);
+                                    std::string baseLower = baseArtist;
+                                    std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), ::tolower);
+                                    bool isVA = (acLower.find("various artists") != std::string::npos || acLower.find("v.a.") != std::string::npos);
+                                    if (!baseLower.empty() && acLower.find(baseLower) == std::string::npos && !isVA) {
+                                        artistMatched = false;
+                                        LOG_INFO("[MUSICBRAINZ TIER C REJECTED] Mismatched artist credit: " + c.artistCredit + " (Expected: " + baseArtist + ")");
                                     }
 
-                                    bool titleMatched = true;
+                                    bool titleMatched = false;
                                     if (!albumClean.empty()) {
-                                        std::string candTitleLower = c.title;
-                                        std::transform(candTitleLower.begin(), candTitleLower.end(), candTitleLower.begin(), ::tolower);
-                                        std::string albumCleanLower = albumClean;
-                                        std::transform(albumCleanLower.begin(), albumCleanLower.end(), albumCleanLower.begin(), ::tolower);
-
-                                        if (candTitleLower.find(albumCleanLower) == std::string::npos &&
-                                            albumCleanLower.find(candTitleLower) == std::string::npos) {
-                                            titleMatched = false;
+                                        std::string candTitleNorm = NormalizeKey(c.title);
+                                        std::string albumCleanNorm = NormalizeKey(albumClean);
+                                        if (candTitleNorm == albumCleanNorm) {
+                                            titleMatched = true;
+                                        } else if (candTitleNorm.length() >= 4 && albumCleanNorm.length() >= 4 &&
+                                                   (candTitleNorm.find(albumCleanNorm) != std::string::npos || albumCleanNorm.find(candTitleNorm) != std::string::npos)) {
+                                            double lenRatio = (double)(std::min)(candTitleNorm.length(), albumCleanNorm.length()) / 
+                                                              (double)(std::max)(candTitleNorm.length(), albumCleanNorm.length());
+                                            if (lenRatio >= 0.75) {
+                                                titleMatched = true;
+                                            }
+                                        }
+                                        if (!titleMatched) {
                                             LOG_INFO("[MUSICBRAINZ TIER C REJECTED] Mismatched album title: " + c.title + " (Expected: " + albumClean + ")");
                                         }
                                     }
@@ -3426,10 +3478,21 @@ void AppWindow::RunMessageLoop() {
                                     }
                                 }
                             }
+
+                            // Tier B Unverified Fallback: Last Resort if artist was known
+                            if (releaseGroupMbId.empty() && !tierBCandidates.empty() && !searchArtist.empty() && searchArtist != "Unknown Artist") {
+                                releaseGroupMbId = tierBCandidates[0].id;
+                                if (!tierBCandidates[0].firstReleaseDate.empty()) {
+                                    firstReleaseDate = tierBCandidates[0].firstReleaseDate;
+                                }
+                                isMatched = true;
+                                detectedTier = MatchTier::TierB_Fallback;
+                                LOG_INFO("[MUSICBRAINZ TIER B FALLBACK FIRST] MBID: " + releaseGroupMbId + " (" + tierBCandidates[0].title + ")");
+                            }
                         }
 
                         // 3. Fetch Cover Art from CoverArtArchive.org (Cascading Fallback: Original -> 1200px -> 500px -> 250px)
-                        if (!releaseGroupMbId.empty()) {
+                        if (!releaseGroupMbId.empty() && releaseGroupMbId.rfind("discogs_", 0) != 0) {
                             LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive image...");
                             
                             const char* endpoints[] = {
@@ -3490,57 +3553,10 @@ void AppWindow::RunMessageLoop() {
                             if (!releaseGroupMbId.empty()) {
                                 albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, mbTracks, isMatched, true, detectedTier };
                             }
-                        } else {
-                            // Discogs Database Search Fallback
-                            LOG_INFO("[MUSICBRAINZ NOT FOUND] Querying Discogs Database API for: " + artistClean + " - " + albumClean);
-                            DiscogsReleaseInfo discInfo;
-                            if (SearchDiscogsRelease(artistClean, albumClean, discInfo)) {
-                                LOG_INFO("[DISCOGS METADATA FOUND] Matched release: " + discInfo.artist + " - " + discInfo.title + " (Year: " + discInfo.year + ")");
-                                releaseGroupMbId = "discogs_" + discInfo.id;
-                                if (!discInfo.year.empty()) {
-                                    firstReleaseDate = discInfo.year;
-                                }
-                                if (!discInfo.coverUrl.empty()) {
-                                    coverData = HttpGetBytes(Utf8ToWide(discInfo.coverUrl));
-                                    if (!coverData.empty()) {
-                                        LOG_INFO("[DISCOGS COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from Discogs via " + discInfo.coverUrl);
-                                    }
-                                }
-                                isMatched = true;
-                                detectedTier = MatchTier::Discogs;
-
-                                for (size_t k = 0; k < files.size(); ++k) {
-                                    std::string aKey = NormalizeKey(m_tagItems[k].albumBuf);
-                                    if (aKey.empty() || aKey == "unknown" || aKey == "tosort" || aKey == "music" || aKey == "media") {
-                                        aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
-                                    }
-                                    if (aKey == albumKey) {
-                                        if (!discInfo.artist.empty()) {
-                                            strncpy_s(m_tagItems[k].artistBuf, discInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
-                                        }
-                                        if (!discInfo.title.empty()) {
-                                            strncpy_s(m_tagItems[k].albumBuf, discInfo.title.c_str(), sizeof(m_tagItems[k].albumBuf) - 1);
-                                        }
-                                        if (!discInfo.year.empty()) {
-                                            strncpy_s(m_tagItems[k].yearBuf, discInfo.year.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
-                                        }
-                                        if (!discInfo.tracks.empty()) {
-                                            ApplyTrackMatch(m_tagItems[k], discInfo.tracks);
-                                        }
-                                        m_tagItems[k].matchTier = detectedTier;
-                                        m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
-                                    }
-                                }
-
-                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, discInfo.tracks, isMatched, true, detectedTier };
-                                if (!releaseGroupMbId.empty()) {
-                                    albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, discInfo.tracks, isMatched, true, detectedTier };
-                                }
-                            } else {
-                                detectedTier = MatchTier::Niche_Local;
-                                LOG_INFO("[NICHE TRACK] MusicBrainz and Discogs records not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
-                                albumCache[albumKey] = { "", "", {}, {}, false, true, MatchTier::Niche_Local };
-                            }
+                        } else if (releaseGroupMbId.empty()) {
+                            detectedTier = MatchTier::Niche_Local;
+                            LOG_INFO("[NICHE TRACK] MusicBrainz and Discogs records not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
+                            albumCache[albumKey] = { "", "", {}, {}, false, true, MatchTier::Niche_Local };
                         }
 
                         // 4. Fetch Synced Romanized LRC Lyrics via LrcLib REST API
