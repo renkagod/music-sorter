@@ -192,7 +192,7 @@ static ImVec4 GetTierColor(MatchTier tier) {
         case MatchTier::TierC_Loose:
             return ImVec4(1.0f, 0.55f, 0.2f, 1.0f);
         case MatchTier::Discogs:
-            return ImVec4(1.0f, 0.65f, 0.2f, 1.0f);
+            return ImVec4(0.2f, 0.9f, 0.3f, 1.0f);
         case MatchTier::Niche_Local:
             return ImVec4(0.95f, 0.4f, 0.3f, 1.0f);
     }
@@ -2304,7 +2304,7 @@ void AppWindow::RenderReleaseSummaryTable() {
     ImGui::SameLine();
     drawFilterBtn("Tier C", 3, countTierC, ImVec4(1.0f, 0.55f, 0.2f, 1.0f));
     ImGui::SameLine();
-    drawFilterBtn("Discogs", 5, countDiscogs, ImVec4(1.0f, 0.65f, 0.2f, 1.0f));
+    drawFilterBtn("Discogs", 5, countDiscogs, ImVec4(0.2f, 0.9f, 0.3f, 1.0f));
     ImGui::SameLine();
     drawFilterBtn("Niche", 4, countNiche, ImVec4(0.95f, 0.4f, 0.3f, 1.0f));
 
