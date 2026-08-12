@@ -2246,6 +2246,248 @@ void AppWindow::Cleanup() {
     UnregisterClassW(L"MusicSorterImGuiClass", m_hInstance);
 }
 
+std::vector<size_t> AppWindow::GetAlbumTrackIndices(size_t referenceIndex) const {
+    std::vector<size_t> result;
+    if (referenceIndex >= m_tagItems.size()) return result;
+
+    const auto& ref = m_tagItems[referenceIndex];
+    std::string refFolder = fs::path(ref.filePath).parent_path().string();
+    std::string refAlbumKey = NormalizeKey(ref.albumBuf);
+    std::string refMbId = ref.releaseGroupMbId;
+
+    for (size_t i = 0; i < m_tagItems.size(); ++i) {
+        const auto& item = m_tagItems[i];
+        if (item.isProcessed) continue;
+
+        bool match = false;
+        if (!refFolder.empty() && fs::path(item.filePath).parent_path().string() == refFolder) {
+            match = true;
+        } else if (!refMbId.empty() && item.releaseGroupMbId == refMbId) {
+            match = true;
+        } else if (!refAlbumKey.empty() && refAlbumKey != "unknown" && refAlbumKey != "tosort" && refAlbumKey != "music" && refAlbumKey != "media") {
+            std::string itemAlbumKey = NormalizeKey(item.albumBuf);
+            if (itemAlbumKey == refAlbumKey) {
+                match = true;
+            }
+        }
+
+        if (match) {
+            result.push_back(i);
+        }
+    }
+
+    if (result.empty() && !ref.isProcessed) {
+        result.push_back(referenceIndex);
+    }
+
+    return result;
+}
+
+void AppWindow::AdvanceToNextUnprocessedTrack() {
+    while (m_currentTagIndex < m_tagItems.size() && m_tagItems[m_currentTagIndex].isProcessed) {
+        m_currentTagIndex++;
+    }
+}
+
+void AppWindow::SkipTracks(const std::vector<size_t>& indices) {
+    if (indices.empty()) return;
+    for (size_t idx : indices) {
+        if (idx < m_tagItems.size()) {
+            m_tagItems[idx].isProcessed = true;
+            LOG_INFO("[SKIPPED] Skipped track: " + m_tagItems[idx].originalFilename);
+        }
+    }
+    AdvanceToNextUnprocessedTrack();
+}
+
+void AppWindow::ApproveTracks(const std::vector<size_t>& indices) {
+    if (indices.empty()) return;
+
+    struct TrackTask {
+        std::string newArtist;
+        std::string newAlbum;
+        std::string newTitle;
+        std::string newTrackNo;
+        std::string newYear;
+        std::string newLyrics;
+        std::string srcFilePath;
+        std::string origFilename;
+        std::vector<unsigned char> chosenCover;
+    };
+
+    std::vector<TrackTask> tasks;
+    tasks.reserve(indices.size());
+
+    // Reference cover preference from items
+    std::vector<unsigned char> fallbackCover;
+    for (size_t idx : indices) {
+        if (idx < m_tagItems.size()) {
+            const auto& it = m_tagItems[idx];
+            if (it.selectedCoverChoice == 1 && !it.onlineCoverBytes.empty()) {
+                fallbackCover = it.onlineCoverBytes;
+                break;
+            } else if (it.selectedCoverChoice == 0 && !it.localCoverBytes.empty()) {
+                fallbackCover = it.localCoverBytes;
+                break;
+            } else if (!it.onlineCoverBytes.empty() && fallbackCover.empty()) {
+                fallbackCover = it.onlineCoverBytes;
+            } else if (!it.localCoverBytes.empty() && fallbackCover.empty()) {
+                fallbackCover = it.localCoverBytes;
+            }
+        }
+    }
+
+    for (size_t idx : indices) {
+        if (idx >= m_tagItems.size()) continue;
+        auto& item = m_tagItems[idx];
+        if (item.isProcessed) continue;
+
+        TrackTask task;
+        task.newArtist = item.artistBuf;
+        task.newAlbum = item.albumBuf;
+        task.newTitle = item.titleBuf;
+        task.newTrackNo = item.trackNoBuf;
+        task.newYear = item.yearBuf;
+        task.newLyrics = item.lyricsBuf;
+        task.srcFilePath = item.filePath;
+        task.origFilename = item.originalFilename;
+
+        if (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) {
+            task.chosenCover = item.onlineCoverBytes;
+        } else if (item.selectedCoverChoice == 0 && !item.localCoverBytes.empty()) {
+            task.chosenCover = item.localCoverBytes;
+        } else if (!fallbackCover.empty()) {
+            task.chosenCover = fallbackCover;
+        } else if (!item.onlineCoverBytes.empty()) {
+            task.chosenCover = item.onlineCoverBytes;
+        } else {
+            task.chosenCover = item.localCoverBytes;
+        }
+
+        tasks.push_back(task);
+        item.isProcessed = true;
+    }
+
+    if (tasks.empty()) return;
+
+    LOG_INFO("[BATCH APPROVAL] Approving batch of " + std::to_string(tasks.size()) + " track(s)...");
+
+    AdvanceToNextUnprocessedTrack();
+
+    std::thread([tasks]() {
+        for (const auto& t : tasks) {
+            fs::path srcFile(t.srcFilePath);
+            if (!fs::exists(srcFile)) {
+                LOG_WARN("[APPROVE WARN] Source file no longer exists: " + t.srcFilePath);
+                continue;
+            }
+
+            std::string ext = srcFile.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+            std::string safeArtist = SanitizeForFilename(t.newArtist);
+            std::string safeAlbum  = SanitizeForFilename(t.newAlbum);
+            std::string safeTitle  = SanitizeForFilename(t.newTitle);
+
+            fs::path flacDir = fs::path(g_FlacDir) / safeArtist / safeAlbum;
+            fs::path mp3Dir  = fs::path(g_Mp3Dir) / safeArtist / safeAlbum;
+            fs::create_directories(flacDir);
+            fs::create_directories(mp3Dir);
+
+            std::string baseTrackName = t.newTrackNo + ". " + safeTitle;
+
+            std::string finalLyrics = t.newLyrics;
+            if (finalLyrics.empty()) {
+                finalLyrics = FetchLrcLibSyncedLyrics(t.newArtist, t.newTitle, t.newAlbum);
+            }
+
+            if (ext == ".flac") {
+                fs::path flacFile = flacDir / (baseTrackName + ".flac");
+                fs::path mp3File  = mp3Dir / (baseTrackName + ".mp3");
+
+                // 1. Embed tags & picture into FLAC header
+                bool embeddedOk = WriteFlacTagsAndPicture(srcFile.string(), t.newArtist, t.newAlbum, t.newTitle, t.newTrackNo, t.newYear, finalLyrics, t.chosenCover);
+                if (embeddedOk) {
+                    LOG_INFO("[TAGS EMBEDDED] VorbisComment tags & cover art written to: " + t.origFilename);
+                }
+
+                // Move FLAC to flac/Artist/Album/
+                try {
+                    if (fs::exists(flacFile)) fs::remove(flacFile);
+                    fs::rename(srcFile, flacFile);
+                    LOG_INFO("[FLAC MOVED] " + fs::relative(flacFile, g_BaseDir).string());
+                } catch (const std::exception& ex) {
+                    LOG_INFO("[MOVE ERROR] Failed moving FLAC: " + std::string(ex.what()));
+                    continue;
+                }
+
+                // 2. Convert FLAC -> MP3 320kbps in mp3/Artist/Album/
+                LOG_INFO("[CONVERTING MP3] Encoding 320kbps MP3 for: " + baseTrackName + ".mp3 ...");
+                if (ConvertFlacToMp3(flacFile.string(), mp3File.string())) {
+                    WriteMp3TagsAndPicture(mp3File.string(), t.newArtist, t.newAlbum, t.newTitle, t.newTrackNo, t.newYear, finalLyrics, t.chosenCover);
+                    LOG_INFO("[MP3 MIRRORED] Created 320kbps MP3: " + fs::relative(mp3File, g_BaseDir).string());
+                } else {
+                    LOG_INFO("[CONVERT WARN] FFmpeg conversion failed for: " + baseTrackName);
+                }
+
+                // Save cover.jpg in both flac/ and mp3/
+                if (!t.chosenCover.empty()) {
+                    for (const auto& dir : { flacDir, mp3Dir }) {
+                        fs::path coverDst = dir / "cover.jpg";
+                        if (!fs::exists(coverDst) || fs::file_size(coverDst) != t.chosenCover.size()) {
+                            std::ofstream cOut(coverDst, std::ios::binary);
+                            if (cOut.is_open()) {
+                                cOut.write((const char*)t.chosenCover.data(), t.chosenCover.size());
+                                cOut.close();
+                                LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                            }
+                        }
+                    }
+                }
+            } else if (ext == ".mp3") {
+                fs::path mp3File  = mp3Dir / (baseTrackName + ".mp3");
+                fs::path flacFallback = flacDir / (baseTrackName + ".mp3"); // Fallback rule: MP3 in flac/ folder!
+
+                // 1. Embed ID3v2.4 tags & picture into MP3 header
+                bool embeddedOk = WriteMp3TagsAndPicture(srcFile.string(), t.newArtist, t.newAlbum, t.newTitle, t.newTrackNo, t.newYear, finalLyrics, t.chosenCover);
+                if (embeddedOk) {
+                    LOG_INFO("[TAGS EMBEDDED] ID3v2.4 tags & cover art written to: " + t.origFilename);
+                }
+
+                // Move MP3 to mp3/Artist/Album/
+                try {
+                    if (fs::exists(mp3File)) fs::remove(mp3File);
+                    fs::rename(srcFile, mp3File);
+                    LOG_INFO("[MP3 MOVED] " + fs::relative(mp3File, g_BaseDir).string());
+
+                    // FLAC Fallback Rule: Copy MP3 into flac/ folder!
+                    fs::copy_file(mp3File, flacFallback, fs::copy_options::overwrite_existing);
+                    LOG_INFO("[FLAC FALLBACK] Copied MP3 fallback into: " + fs::relative(flacFallback, g_BaseDir).string());
+                } catch (const std::exception& ex) {
+                    LOG_INFO("[MOVE ERROR] Failed moving MP3: " + std::string(ex.what()));
+                    continue;
+                }
+
+                // Save cover.jpg in both mp3/ and flac/
+                if (!t.chosenCover.empty()) {
+                    for (const auto& dir : { mp3Dir, flacDir }) {
+                        fs::path coverDst = dir / "cover.jpg";
+                        if (!fs::exists(coverDst) || fs::file_size(coverDst) != t.chosenCover.size()) {
+                            std::ofstream cOut(coverDst, std::ios::binary);
+                            if (cOut.is_open()) {
+                                cOut.write((const char*)t.chosenCover.data(), t.chosenCover.size());
+                                cOut.close();
+                                LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        LOG_INFO("[BATCH APPROVAL DONE] Finished processing " + std::to_string(tasks.size()) + " track(s).");
+    }).detach();
+}
+
 void AppWindow::RenderReleaseSummaryTable() {
     struct ReleaseGroupInfo {
         std::string albumKey;
@@ -2267,9 +2509,13 @@ void AppWindow::RenderReleaseSummaryTable() {
     size_t countTierC = 0;
     size_t countDiscogs = 0;
     size_t countNiche = 0;
+    size_t totalUnprocessedFiles = 0;
 
     for (size_t i = 0; i < m_tagItems.size(); ++i) {
         const auto& itm = m_tagItems[i];
+        if (itm.isProcessed) continue;
+        totalUnprocessedFiles++;
+
         std::string albumClean(itm.albumBuf);
         std::string albumKey = NormalizeKey(albumClean);
         if (albumKey.empty() || albumKey == "unknown" || albumKey == "tosort" || albumKey == "music" || albumKey == "media") {
@@ -2322,7 +2568,7 @@ void AppWindow::RenderReleaseSummaryTable() {
 
     ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Аудит распознавания релизов");
     ImGui::SameLine();
-    ImGui::TextDisabled("| Всего релизов: %zu (файлов: %zu)", groups.size(), m_tagItems.size());
+    ImGui::TextDisabled("| Всего релизов: %zu (файлов: %zu)", groups.size(), totalUnprocessedFiles);
 
     ImGui::Spacing();
 
@@ -2357,6 +2603,26 @@ void AppWindow::RenderReleaseSummaryTable() {
     ImGui::SameLine();
     drawFilterBtn("Niche", 4, countNiche, ImVec4(0.95f, 0.4f, 0.3f, 1.0f));
 
+    if (countTierA > 0) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.65f, 0.32f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.78f, 0.38f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.55f, 0.26f, 1.0f));
+        char allTierABtn[64];
+        sprintf_s(allTierABtn, sizeof(allTierABtn), "Принять все Tier A (%zu)", countTierA);
+        if (ImGui::Button(allTierABtn)) {
+            std::vector<size_t> allTierAIndices;
+            for (const auto& g : groups) {
+                if (g.matchTier == MatchTier::AcoustId || g.matchTier == MatchTier::TierA) {
+                    auto idxs = GetAlbumTrackIndices(g.firstTrackIndex);
+                    allTierAIndices.insert(allTierAIndices.end(), idxs.begin(), idxs.end());
+                }
+            }
+            ApproveTracks(allTierAIndices);
+        }
+        ImGui::PopStyleColor(3);
+    }
+
     ImGui::SameLine();
     ImGui::SetNextItemWidth(150);
     ImGui::InputTextWithHint("##ReleaseSearchFilter", "Поиск...", searchFilter, sizeof(searchFilter));
@@ -2367,11 +2633,11 @@ void AppWindow::RenderReleaseSummaryTable() {
         ImGui::TextDisabled("Текущая очередь пуста. Перейдите во вкладку '2. Инспектор тегов' для сканирования файлов.");
     } else {
         if (ImGui::BeginTable("ReleaseSummaryTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable, ImVec2(0, 0))) {
-            ImGui::TableSetupColumn("Альбом и исполнитель", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+            ImGui::TableSetupColumn("Альбом и исполнитель", ImGuiTableColumnFlags_WidthStretch, 0.35f);
             ImGui::TableSetupColumn("Файлов", ImGuiTableColumnFlags_WidthFixed, 55.0f);
             ImGui::TableSetupColumn("Уровень распознавания", ImGuiTableColumnFlags_WidthFixed, 175.0f);
             ImGui::TableSetupColumn("MBID / Источник и дата", ImGuiTableColumnFlags_WidthFixed, 185.0f);
-            ImGui::TableSetupColumn("Действие", ImGuiTableColumnFlags_WidthFixed, 105.0f);
+            ImGui::TableSetupColumn("Действия", ImGuiTableColumnFlags_WidthFixed, 170.0f);
             ImGui::TableHeadersRow();
 
             std::string filterLower = searchFilter;
@@ -2421,6 +2687,7 @@ void AppWindow::RenderReleaseSummaryTable() {
 
                 if (ImGui::Selectable(selId, isSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
                     m_currentTagIndex = g.firstTrackIndex;
+                    AdvanceToNextUnprocessedTrack();
                     m_activeStageTab = 1;
                 }
                 ImGui::SameLine();
@@ -2452,12 +2719,18 @@ void AppWindow::RenderReleaseSummaryTable() {
                     ImGui::TextDisabled("Источник отсутствует");
                 }
 
-                // Column 4: Open in Web
+                // Column 4: Actions
                 ImGui::TableSetColumnIndex(4);
+                char aprBtnId[64];
+                sprintf_s(aprBtnId, sizeof(aprBtnId), "Принять##Rel_%zu", gi);
+                if (ImGui::Button(aprBtnId, ImVec2(75, 24))) {
+                    ApproveTracks(GetAlbumTrackIndices(g.firstTrackIndex));
+                }
                 if (!g.releaseGroupMbId.empty()) {
+                    ImGui::SameLine();
                     char btnId[64];
-                    sprintf_s(btnId, sizeof(btnId), "Открыть##%zu", gi);
-                    if (ImGui::Button(btnId, ImVec2(-1, 24))) {
+                    sprintf_s(btnId, sizeof(btnId), "Web##%zu", gi);
+                    if (ImGui::Button(btnId, ImVec2(55, 24))) {
                         std::string targetUrl;
                         if (g.releaseGroupMbId.rfind("discogs_", 0) == 0) {
                             targetUrl = "https://www.discogs.com/release/" + g.releaseGroupMbId.substr(8);
@@ -2466,8 +2739,6 @@ void AppWindow::RenderReleaseSummaryTable() {
                         }
                         ShellExecuteA(NULL, "open", targetUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
                     }
-                } else {
-                    ImGui::TextDisabled("-");
                 }
             }
 
@@ -2798,7 +3069,8 @@ void AppWindow::RunMessageLoop() {
         if (done) break;
 
         // Lazy Texture Creation — only for the currently displayed item to avoid UI freezes
-        if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size()) {
+        AdvanceToNextUnprocessedTrack();
+        if (!m_tagItems.empty() && m_currentTagIndex < m_tagItems.size() && !m_tagItems[m_currentTagIndex].isProcessed) {
             auto& item = m_tagItems[m_currentTagIndex];
             if (item.localTexture == NULL && !item.localCoverBytes.empty()) {
                 item.localTexture = CreateTextureFromMemory(m_pd3dDevice, item.localCoverBytes.data(), item.localCoverBytes.size(), &item.localWidth, &item.localHeight);
@@ -3313,124 +3585,41 @@ void AppWindow::RunMessageLoop() {
 
                 ImGui::Spacing();
 
-                if (ImGui::Button("Принять", ImVec2(160, 34))) {
-                    std::string newArtist(item.artistBuf);
-                    std::string newAlbum(item.albumBuf);
-                    std::string newTitle(item.titleBuf);
-                    std::string newTrackNo(item.trackNoBuf);
-                    std::string newYear(item.yearBuf);
-                    std::string newLyrics(item.lyricsBuf);
-                    std::string srcFilePath = item.filePath;
-                    std::string origFilename = item.originalFilename;
+                auto albumIndices = GetAlbumTrackIndices(m_currentTagIndex);
+                size_t albumCount = albumIndices.size();
+                bool isTierA = (item.matchTier == MatchTier::TierA || item.matchTier == MatchTier::AcoustId);
 
-                    const auto chosenCover = (item.selectedCoverChoice == 1 && !item.onlineCoverBytes.empty()) ? item.onlineCoverBytes : item.localCoverBytes;
-
-                    std::thread([newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, srcFilePath, origFilename, chosenCover]() {
-                        fs::path srcFile(srcFilePath);
-                        std::string ext = srcFile.extension().string();
-                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-                        std::string safeArtist = SanitizeForFilename(newArtist);
-                        std::string safeAlbum  = SanitizeForFilename(newAlbum);
-                        std::string safeTitle  = SanitizeForFilename(newTitle);
-
-                        fs::path flacDir = fs::path(g_FlacDir) / safeArtist / safeAlbum;
-                        fs::path mp3Dir  = fs::path(g_Mp3Dir) / safeArtist / safeAlbum;
-                        fs::create_directories(flacDir);
-                        fs::create_directories(mp3Dir);
-
-                        std::string baseTrackName = newTrackNo + ". " + safeTitle;
-
-                        if (ext == ".flac") {
-                            fs::path flacFile = flacDir / (baseTrackName + ".flac");
-                            fs::path mp3File  = mp3Dir / (baseTrackName + ".mp3");
-
-                            // 1. Embed tags & picture into FLAC header
-                            bool embeddedOk = WriteFlacTagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
-                            if (embeddedOk) {
-                                LOG_INFO("[TAGS EMBEDDED] VorbisComment tags & cover art written to: " + origFilename);
-                            }
-
-                            // Move FLAC to flac/Artist/Album/
-                            try {
-                                if (fs::exists(flacFile)) fs::remove(flacFile);
-                                fs::rename(srcFile, flacFile);
-                                LOG_INFO("[FLAC MOVED] " + fs::relative(flacFile, g_BaseDir).string());
-                            } catch (const std::exception& ex) {
-                                LOG_INFO("[MOVE ERROR] Failed moving FLAC: " + std::string(ex.what()));
-                                return;
-                            }
-
-                            // 2. Convert FLAC -> MP3 320kbps in mp3/Artist/Album/
-                            LOG_INFO("[CONVERTING MP3] Encoding 320kbps MP3 for: " + baseTrackName + ".mp3 ...");
-                            if (ConvertFlacToMp3(flacFile.string(), mp3File.string())) {
-                                WriteMp3TagsAndPicture(mp3File.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
-                                LOG_INFO("[MP3 MIRRORED] Created 320kbps MP3: " + fs::relative(mp3File, g_BaseDir).string());
-                            } else {
-                                LOG_INFO("[CONVERT WARN] FFmpeg conversion failed for: " + baseTrackName);
-                            }
-
-                            // Save cover.jpg in both flac/ and mp3/
-                            if (!chosenCover.empty()) {
-                                for (const auto& dir : { flacDir, mp3Dir }) {
-                                    fs::path coverDst = dir / "cover.jpg";
-                                    if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
-                                        std::ofstream cOut(coverDst, std::ios::binary);
-                                        if (cOut.is_open()) {
-                                            cOut.write((const char*)chosenCover.data(), chosenCover.size());
-                                            cOut.close();
-                                            LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
-                                        }
-                                    }
-                                }
-                            }
-                        } else if (ext == ".mp3") {
-                            fs::path mp3File  = mp3Dir / (baseTrackName + ".mp3");
-                            fs::path flacFallback = flacDir / (baseTrackName + ".mp3"); // Fallback rule: MP3 in flac/ folder!
-
-                            // 1. Embed ID3v2.4 tags & picture into MP3 header
-                            bool embeddedOk = WriteMp3TagsAndPicture(srcFile.string(), newArtist, newAlbum, newTitle, newTrackNo, newYear, newLyrics, chosenCover);
-                            if (embeddedOk) {
-                                LOG_INFO("[TAGS EMBEDDED] ID3v2.4 tags & cover art written to: " + origFilename);
-                            }
-
-                            // Move MP3 to mp3/Artist/Album/
-                            try {
-                                if (fs::exists(mp3File)) fs::remove(mp3File);
-                                fs::rename(srcFile, mp3File);
-                                LOG_INFO("[MP3 MOVED] " + fs::relative(mp3File, g_BaseDir).string());
-
-                                // FLAC Fallback Rule: Copy MP3 into flac/ folder!
-                                fs::copy_file(mp3File, flacFallback, fs::copy_options::overwrite_existing);
-                                LOG_INFO("[FLAC FALLBACK] Copied MP3 fallback into: " + fs::relative(flacFallback, g_BaseDir).string());
-                            } catch (const std::exception& ex) {
-                                LOG_INFO("[MOVE ERROR] Failed moving MP3: " + std::string(ex.what()));
-                                return;
-                            }
-
-                            // Save cover.jpg in both mp3/ and flac/
-                            if (!chosenCover.empty()) {
-                                for (const auto& dir : { mp3Dir, flacDir }) {
-                                    fs::path coverDst = dir / "cover.jpg";
-                                    if (!fs::exists(coverDst) || fs::file_size(coverDst) != chosenCover.size()) {
-                                        std::ofstream cOut(coverDst, std::ios::binary);
-                                        if (cOut.is_open()) {
-                                            cOut.write((const char*)chosenCover.data(), chosenCover.size());
-                                            cOut.close();
-                                            LOG_INFO("[COVER SAVED] Saved cover art to: " + fs::relative(coverDst, g_BaseDir).string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }).detach();
-
-                    m_currentTagIndex++;
+                if (ImGui::Button("Принять трек", ImVec2(130, 36))) {
+                    ApproveTracks({ m_currentTagIndex });
                 }
+
+                if (albumCount > 1) {
+                    ImGui::SameLine();
+                    if (isTierA) {
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.65f, 0.32f, 1.0f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.78f, 0.38f, 1.0f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.55f, 0.26f, 1.0f));
+                    }
+                    char albumBtnLabel[64];
+                    sprintf_s(albumBtnLabel, sizeof(albumBtnLabel), "Принять весь альбом (%zu)%s", albumCount, isTierA ? " [Tier A]" : "");
+                    if (ImGui::Button(albumBtnLabel, ImVec2(isTierA ? 250.0f : 220.0f, 36))) {
+                        ApproveTracks(albumIndices);
+                    }
+                    if (isTierA) {
+                        ImGui::PopStyleColor(3);
+                    }
+                }
+
                 ImGui::SameLine();
-                if (ImGui::Button("Пропустить", ImVec2(160, 34))) {
-                    LOG_INFO("[SKIPPED] Skipped track: " + item.originalFilename);
-                    m_currentTagIndex++;
+                if (ImGui::Button("Пропустить трек", ImVec2(140, 36))) {
+                    SkipTracks({ m_currentTagIndex });
+                }
+
+                if (albumCount > 1) {
+                    ImGui::SameLine();
+                    if (ImGui::Button("Пропустить альбом", ImVec2(150, 36))) {
+                        SkipTracks(albumIndices);
+                    }
                 }
                 ImGui::EndChild();
             } else {
@@ -3999,6 +4188,10 @@ void AppWindow::StartTagScan() {
 
                     for (size_t i = 0; i < files.size(); ++i) {
                         auto& item = m_tagItems[i];
+                        if (item.isProcessed) {
+                            m_fetchedCount++;
+                            continue;
+                        }
                         std::string artistClean(item.artistBuf);
                         std::string albumClean(item.albumBuf);
                         std::string titleClean(item.titleBuf);
@@ -4222,6 +4415,10 @@ void AppWindow::StartTagScan() {
                                         }
                                         m_tagItems[k].matchTier = detectedTier;
                                         m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
+                                        if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
+                                            m_tagItems[k].onlineCoverBytes = coverData;
+                                        }
+                                        m_tagItems[k].isMusicBrainzMatched = isMatched;
                                     }
                                 }
 
@@ -4498,6 +4695,10 @@ void AppWindow::StartTagScan() {
                                     }
                                     m_tagItems[k].matchTier = detectedTier;
                                     m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
+                                    if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
+                                        m_tagItems[k].onlineCoverBytes = coverData;
+                                    }
+                                    m_tagItems[k].isMusicBrainzMatched = isMatched;
                                 }
                             }
                             

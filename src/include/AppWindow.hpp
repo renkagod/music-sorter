@@ -43,6 +43,7 @@ struct TagReviewItem {
 
     bool isMusicBrainzMatched = false;
     bool isFetchCompleted = false;
+    bool isProcessed = false;
     bool hasLyrics = false;
     double duration = 0.0;
     MatchTier matchTier = MatchTier::Niche_Local;
@@ -80,6 +81,11 @@ public:
     void HandleTagScanFinished();
     void StartTagScan();
     void RenderTagScanProgressBar(bool compact = false);
+
+    std::vector<size_t> GetAlbumTrackIndices(size_t referenceIndex) const;
+    void ApproveTracks(const std::vector<size_t>& indices);
+    void SkipTracks(const std::vector<size_t>& indices);
+    void AdvanceToNextUnprocessedTrack();
 
 private:
     AppWindow() = default;
