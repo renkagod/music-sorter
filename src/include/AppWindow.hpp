@@ -18,6 +18,7 @@ enum class MatchTier {
     TierB_Fallback,
     TierB_Katakana,
     TierC_Loose,
+    Discogs,
     Niche_Local
 };
 
@@ -140,10 +141,12 @@ private:
     char m_flacBuf[512] = {0};
     char m_mp3Buf[512] = {0};
     char m_acoustIdKeyBuf[64] = {0};
+    char m_discogsTokenBuf[128] = {0};
     bool m_foldersInited = false;
 
-    // Manual MusicBrainz Release URL / MBID Input
+    // Manual MusicBrainz / Discogs Release URL / ID Input
     char m_manualMbUrlBuf[512] = {0};
     bool m_manualMbApplyToAlbum = true;
     void FetchManualMusicBrainzMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
+    void FetchManualDiscogsMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
 };

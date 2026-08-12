@@ -37,6 +37,7 @@ extern std::string g_OutputDir;
 extern std::string g_FlacDir;
 extern std::string g_Mp3Dir;
 extern std::string g_AcoustIdKey;
+extern std::string g_DiscogsToken;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -108,6 +109,7 @@ static void SaveFolderSettings() {
     out << "flac=" << g_FlacDir << "\n";
     out << "mp3=" << g_Mp3Dir << "\n";
     out << "acoustid_key=" << g_AcoustIdKey << "\n";
+    out << "discogs_token=" << g_DiscogsToken << "\n";
     out.close();
     LOG_INFO("[FOLDERS] Settings saved to folders.cfg");
 }
@@ -129,6 +131,7 @@ static void LoadFolderSettings() {
         else if (key == "flac" && !val.empty()) g_FlacDir = val;
         else if (key == "mp3" && !val.empty()) g_Mp3Dir = val;
         else if (key == "acoustid_key" && !val.empty()) g_AcoustIdKey = val;
+        else if (key == "discogs_token" && !val.empty()) g_DiscogsToken = val;
     }
     in.close();
     LOG_INFO("[FOLDERS] Loaded settings from folders.cfg");
@@ -140,6 +143,9 @@ static void LoadFolderSettings() {
         LOG_WARN("[FOLDERS] AcoustID key is the demo key (8Xa1nV0f) which returns 'invalid API key'. Get an application key at https://acoustid.org/new-application (NOT the user key from /api-key -- lookups need the APPLICATION key).");
     } else {
         LOG_INFO("[FOLDERS] AcoustID API key loaded from folders.cfg");
+    }
+    if (!g_DiscogsToken.empty()) {
+        LOG_INFO("[FOLDERS] Discogs token loaded from folders.cfg");
     }
 }
 
@@ -168,6 +174,7 @@ static const char* GetTierName(MatchTier tier) {
         case MatchTier::TierB_Fallback: return "Tier B (По названию)";
         case MatchTier::TierB_Katakana: return "Tier B (Катакана)";
         case MatchTier::TierC_Loose: return "Tier C (Нечеткий поиск)";
+        case MatchTier::Discogs: return "Discogs (База данных)";
         case MatchTier::Niche_Local: return "Niche (Локальные теги)";
     }
     return "Неизвестно";
@@ -184,6 +191,8 @@ static ImVec4 GetTierColor(MatchTier tier) {
             return ImVec4(0.95f, 0.85f, 0.2f, 1.0f);
         case MatchTier::TierC_Loose:
             return ImVec4(1.0f, 0.55f, 0.2f, 1.0f);
+        case MatchTier::Discogs:
+            return ImVec4(1.0f, 0.65f, 0.2f, 1.0f);
         case MatchTier::Niche_Local:
             return ImVec4(0.95f, 0.4f, 0.3f, 1.0f);
     }
@@ -802,6 +811,21 @@ static void MusicBrainzThrottle() {
     g_lastMbRequestTime = std::chrono::steady_clock::now();
 }
 
+// Discogs API rate limit is 60 requests/min (1 req/sec) with auth or 25 requests/min without auth.
+static std::mutex g_discogsThrottleMutex;
+static std::chrono::steady_clock::time_point g_lastDiscogsRequestTime;
+static void DiscogsThrottle() {
+    std::lock_guard<std::mutex> lock(g_discogsThrottleMutex);
+    auto now = std::chrono::steady_clock::now();
+    auto sinceLast = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastDiscogsRequestTime).count();
+    const long long kMinGapMs = 1100;
+    if (sinceLast < kMinGapMs) {
+        long long sleepMs = kMinGapMs - sinceLast;
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+    }
+    g_lastDiscogsRequestTime = std::chrono::steady_clock::now();
+}
+
 // Robust HTTP GET with Ultra-Detailed Step-by-Step Logging & Rate Limit Backoff
 std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries = 3) {
     std::vector<unsigned char> result;
@@ -810,14 +834,21 @@ std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries 
     bool isMusicBrainz = (narrowUrl.find("musicbrainz.org") != std::string::npos);
     if (isMusicBrainz) MusicBrainzThrottle();
 
+    bool isDiscogs = (narrowUrl.find("api.discogs.com") != std::string::npos);
+    if (isDiscogs) DiscogsThrottle();
+
     for (int attempt = 0; attempt < maxRetries; ++attempt) {
         HINTERNET hNet = InternetOpenW(L"MusicSorterApp/1.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (hNet) {
             DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
-            HINTERNET hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, flags, 0);
+            std::wstring customHeaders;
+            if (isDiscogs && !g_DiscogsToken.empty()) {
+                customHeaders = L"Authorization: Discogs token=" + Utf8ToWide(g_DiscogsToken) + L"\r\nUser-Agent: MusicSorterApp/1.0 (https://github.com/renkagod/music-sorter)\r\n";
+            }
+            HINTERNET hFile = InternetOpenUrlW(hNet, url.c_str(), customHeaders.empty() ? NULL : customHeaders.c_str(), (DWORD)customHeaders.length(), flags, 0);
             if (!hFile) {
                 flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
-                hFile = InternetOpenUrlW(hNet, url.c_str(), NULL, 0, flags, 0);
+                hFile = InternetOpenUrlW(hNet, url.c_str(), customHeaders.empty() ? NULL : customHeaders.c_str(), (DWORD)customHeaders.length(), flags, 0);
             }
             if (hFile) {
                 DWORD statusCode = 0;
@@ -825,7 +856,7 @@ std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries 
                 HttpQueryInfoW(hFile, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, NULL);
 
                 if (statusCode == 429 || statusCode == 503) {
-                    long long backoffMs = isMusicBrainz ? (1500 * (attempt + 1)) : (400 * (attempt + 1));
+                    long long backoffMs = (isMusicBrainz || isDiscogs) ? (1500 * (attempt + 1)) : (400 * (attempt + 1));
                     LOG_INFO("[HTTP " + std::to_string(statusCode) + " RATE LIMIT] Backing off " + std::to_string(backoffMs) + "ms for URL: " + narrowUrl);
                     InternetCloseHandle(hFile);
                     InternetCloseHandle(hNet);
@@ -833,6 +864,10 @@ std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries 
                     if (isMusicBrainz) {
                         std::lock_guard<std::mutex> lock(g_mbThrottleMutex);
                         g_lastMbRequestTime = std::chrono::steady_clock::now();
+                    }
+                    if (isDiscogs) {
+                        std::lock_guard<std::mutex> lock(g_discogsThrottleMutex);
+                        g_lastDiscogsRequestTime = std::chrono::steady_clock::now();
                     }
                     continue;
                 }
@@ -1220,6 +1255,225 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
         }
         LOG_INFO("[MUSICBRAINZ TRACK MATCHED] Track #" + std::string(trackStr) + ": " + std::string(albItem.artistBuf) + " - " + std::string(albItem.titleBuf) + " for file: " + albItem.originalFilename);
     }
+}
+
+struct DiscogsReleaseInfo {
+    std::string id;
+    std::string title;
+    std::string artist;
+    std::string year;
+    std::string coverUrl;
+    std::vector<MBTrackEntry> tracks;
+};
+
+static int ParseDurationMs(const std::string& durStr) {
+    if (durStr.empty()) return 0;
+    int totalSec = 0;
+    std::stringstream ss(durStr);
+    std::string part;
+    std::vector<int> parts;
+    while (std::getline(ss, part, ':')) {
+        try { parts.push_back(std::stoi(part)); } catch (...) {}
+    }
+    if (parts.size() == 2) {
+        totalSec = parts[0] * 60 + parts[1];
+    } else if (parts.size() == 3) {
+        totalSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
+    } else if (parts.size() == 1) {
+        totalSec = parts[0];
+    }
+    return totalSec * 1000;
+}
+
+static int ParseDiscogsPosition(const std::string& posStr, int defaultPos) {
+    if (posStr.empty()) return defaultPos;
+    int num = 0;
+    for (char c : posStr) {
+        if (c >= '0' && c <= '9') {
+            num = num * 10 + (c - '0');
+        }
+    }
+    return (num > 0) ? num : defaultPos;
+}
+
+static bool FetchDiscogsReleaseDetails(const std::string& releaseId, bool isMaster, DiscogsReleaseInfo& outInfo) {
+    std::string endpoint = isMaster ? 
+        ("https://api.discogs.com/masters/" + releaseId) : 
+        ("https://api.discogs.com/releases/" + releaseId);
+    if (!g_DiscogsToken.empty()) {
+        endpoint += "?token=" + g_DiscogsToken;
+    }
+    std::string jsonStr = HttpGetString(Utf8ToWide(endpoint));
+    if (jsonStr.empty()) return false;
+
+    size_t p = 0;
+    JsonVal doc = ParseJsonSimple(jsonStr, p);
+    outInfo.id = releaseId;
+    outInfo.title = doc.get("title").strVal;
+    
+    // Year / Released date
+    if (doc.get("released").type == JsonVal::String && !doc.get("released").strVal.empty()) {
+        outInfo.year = doc.get("released").strVal;
+    } else if (doc.get("year").type == JsonVal::Number && doc.get("year").numVal > 0) {
+        outInfo.year = std::to_string((int)doc.get("year").numVal);
+    } else if (doc.get("year").type == JsonVal::String) {
+        outInfo.year = doc.get("year").strVal;
+    }
+
+    // Artist
+    const auto& artists = doc.get("artists");
+    if (artists.type == JsonVal::Array && !artists.arrVal.empty()) {
+        std::string artName;
+        for (size_t a = 0; a < artists.arrVal.size(); ++a) {
+            std::string name = artists.get(a).get("name").strVal;
+            size_t paren = name.rfind(" (");
+            if (paren != std::string::npos && paren + 3 < name.size() && name.back() == ')') {
+                bool isNum = true;
+                for (size_t k = paren + 2; k < name.size() - 1; ++k) {
+                    if (!std::isdigit((unsigned char)name[k])) { isNum = false; break; }
+                }
+                if (isNum) name = name.substr(0, paren);
+            }
+            if (!artName.empty()) artName += ", ";
+            artName += name;
+        }
+        outInfo.artist = artName;
+    }
+
+    // Images
+    const auto& images = doc.get("images");
+    if (images.type == JsonVal::Array && !images.arrVal.empty()) {
+        for (size_t imgIdx = 0; imgIdx < images.arrVal.size(); ++imgIdx) {
+            const auto& img = images.get(imgIdx);
+            std::string imgType = img.get("type").strVal;
+            std::string uri = img.get("uri").strVal;
+            if (uri.empty()) uri = img.get("resource_url").strVal;
+            if (!uri.empty()) {
+                if (imgType == "primary" || outInfo.coverUrl.empty()) {
+                    outInfo.coverUrl = uri;
+                    if (imgType == "primary") break;
+                }
+            }
+        }
+    }
+
+    // Tracklist
+    const auto& trkList = doc.get("tracklist");
+    if (trkList.type == JsonVal::Array) {
+        int trackPosCounter = 1;
+        for (size_t t = 0; t < trkList.arrVal.size(); ++t) {
+            const auto& trk = trkList.get(t);
+            std::string trkType = trk.get("type_").strVal;
+            if (!trkType.empty() && trkType != "track") continue;
+
+            std::string posStr = trk.get("position").strVal;
+            std::string trkTitle = trk.get("title").strVal;
+            std::string durStr = trk.get("duration").strVal;
+            int durMs = ParseDurationMs(durStr);
+            int pos = ParseDiscogsPosition(posStr, trackPosCounter);
+
+            std::string trkArtist = outInfo.artist;
+            const auto& trkArtists = trk.get("artists");
+            if (trkArtists.type == JsonVal::Array && !trkArtists.arrVal.empty()) {
+                std::string tArt = trkArtists.get(0).get("name").strVal;
+                size_t paren = tArt.rfind(" (");
+                if (paren != std::string::npos && paren + 3 < tArt.size() && tArt.back() == ')') {
+                    tArt = tArt.substr(0, paren);
+                }
+                if (!tArt.empty()) trkArtist = tArt;
+            }
+
+            if (!trkTitle.empty()) {
+                outInfo.tracks.push_back({ pos, trkTitle, trkArtist, durMs });
+            }
+            trackPosCounter++;
+        }
+    }
+
+    return !outInfo.title.empty() || !outInfo.tracks.empty();
+}
+
+static bool SearchDiscogsRelease(const std::string& artist, const std::string& album, DiscogsReleaseInfo& outInfo) {
+    if (album.empty()) return false;
+
+    std::string queryUrl = "https://api.discogs.com/database/search?release_title=" + UrlEncode(album);
+    if (!artist.empty() && artist != "Unknown Artist" && artist != "Various Artists" && artist != "V.A.") {
+        queryUrl += "&artist=" + UrlEncode(artist);
+    }
+    queryUrl += "&type=release";
+    if (!g_DiscogsToken.empty()) {
+        queryUrl += "&token=" + g_DiscogsToken;
+    }
+
+    LOG_INFO("[DISCOGS SEARCH] Querying: " + queryUrl);
+    std::string resJson = HttpGetString(Utf8ToWide(queryUrl));
+    if (resJson.empty() || resJson.find("\"results\":[]") != std::string::npos) {
+        std::string broadUrl = "https://api.discogs.com/database/search?q=" + UrlEncode(artist + " " + album) + "&type=release";
+        if (!g_DiscogsToken.empty()) broadUrl += "&token=" + g_DiscogsToken;
+        LOG_INFO("[DISCOGS SEARCH FALLBACK] Querying: " + broadUrl);
+        resJson = HttpGetString(Utf8ToWide(broadUrl));
+    }
+
+    if (resJson.empty()) return false;
+
+    size_t p = 0;
+    JsonVal doc = ParseJsonSimple(resJson, p);
+    const auto& results = doc.get("results");
+    if (results.type != JsonVal::Array || results.arrVal.empty()) {
+        LOG_INFO("[DISCOGS SEARCH] No results found for: " + artist + " - " + album);
+        return false;
+    }
+
+    std::string pickedId;
+    std::string pickedCover;
+    std::string pickedYear;
+    std::string pickedTitle;
+
+    std::string albNorm = NormalizeKey(album);
+
+    for (size_t i = 0; i < results.arrVal.size(); ++i) {
+        const auto& r = results.get(i);
+        std::string rId;
+        if (r.get("id").type == JsonVal::Number) rId = std::to_string((int)r.get("id").numVal);
+        else rId = r.get("id").strVal;
+        if (rId.empty()) continue;
+
+        std::string rTitle = r.get("title").strVal;
+        std::string rYear;
+        if (r.get("year").type == JsonVal::Number) rYear = std::to_string((int)r.get("year").numVal);
+        else rYear = r.get("year").strVal;
+        std::string rCover = r.get("cover_image").strVal;
+
+        std::string rTitleNorm = NormalizeKey(rTitle);
+        bool match = false;
+        if (!albNorm.empty() && rTitleNorm.find(albNorm) != std::string::npos) {
+            match = true;
+        }
+
+        if (pickedId.empty() || match) {
+            pickedId = rId;
+            pickedCover = rCover;
+            pickedYear = rYear;
+            pickedTitle = rTitle;
+            if (match) break;
+        }
+    }
+
+    if (pickedId.empty()) return false;
+
+    LOG_INFO("[DISCOGS MATCHED] Found release ID: " + pickedId + " (" + pickedTitle + "). Fetching details...");
+    bool ok = FetchDiscogsReleaseDetails(pickedId, false, outInfo);
+    if (!ok && !pickedTitle.empty()) {
+        outInfo.id = pickedId;
+        outInfo.title = pickedTitle;
+        outInfo.year = pickedYear;
+        outInfo.coverUrl = pickedCover;
+        return true;
+    }
+    if (outInfo.coverUrl.empty() && !pickedCover.empty()) {
+        outInfo.coverUrl = pickedCover;
+    }
+    return ok;
 }
 
 ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const unsigned char* data, size_t size, int* outWidth, int* outHeight) {
@@ -1956,6 +2210,7 @@ void AppWindow::RenderReleaseSummaryTable() {
     size_t countTierA = 0;
     size_t countTierB = 0;
     size_t countTierC = 0;
+    size_t countDiscogs = 0;
     size_t countNiche = 0;
 
     for (size_t i = 0; i < m_tagItems.size(); ++i) {
@@ -2003,6 +2258,8 @@ void AppWindow::RenderReleaseSummaryTable() {
             countTierB++;
         } else if (g.matchTier == MatchTier::TierC_Loose) {
             countTierC++;
+        } else if (g.matchTier == MatchTier::Discogs) {
+            countDiscogs++;
         } else {
             countNiche++;
         }
@@ -2041,6 +2298,8 @@ void AppWindow::RenderReleaseSummaryTable() {
     ImGui::SameLine();
     drawFilterBtn("Tier C", 3, countTierC, ImVec4(1.0f, 0.55f, 0.2f, 1.0f));
     ImGui::SameLine();
+    drawFilterBtn("Discogs", 5, countDiscogs, ImVec4(1.0f, 0.65f, 0.2f, 1.0f));
+    ImGui::SameLine();
     drawFilterBtn("Niche", 4, countNiche, ImVec4(0.95f, 0.4f, 0.3f, 1.0f));
 
     ImGui::SameLine();
@@ -2056,7 +2315,7 @@ void AppWindow::RenderReleaseSummaryTable() {
             ImGui::TableSetupColumn("Альбом и исполнитель", ImGuiTableColumnFlags_WidthStretch, 0.38f);
             ImGui::TableSetupColumn("Файлов", ImGuiTableColumnFlags_WidthFixed, 55.0f);
             ImGui::TableSetupColumn("Уровень распознавания", ImGuiTableColumnFlags_WidthFixed, 175.0f);
-            ImGui::TableSetupColumn("MBID и дата", ImGuiTableColumnFlags_WidthFixed, 185.0f);
+            ImGui::TableSetupColumn("MBID / Источник и дата", ImGuiTableColumnFlags_WidthFixed, 185.0f);
             ImGui::TableSetupColumn("Действие", ImGuiTableColumnFlags_WidthFixed, 105.0f);
             ImGui::TableHeadersRow();
 
@@ -2076,6 +2335,9 @@ void AppWindow::RenderReleaseSummaryTable() {
                     continue;
                 }
                 if (m_releaseSummaryTierFilter == 4 && !(g.matchTier == MatchTier::Niche_Local)) {
+                    continue;
+                }
+                if (m_releaseSummaryTierFilter == 5 && !(g.matchTier == MatchTier::Discogs)) {
                     continue;
                 }
 
@@ -2123,22 +2385,31 @@ void AppWindow::RenderReleaseSummaryTable() {
                 // Column 3: MBID & Date
                 ImGui::TableSetColumnIndex(3);
                 if (!g.releaseGroupMbId.empty()) {
-                    ImGui::TextUnformatted(g.releaseGroupMbId.c_str());
+                    if (g.releaseGroupMbId.rfind("discogs_", 0) == 0) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.2f, 1.0f), "Discogs: %s", g.releaseGroupMbId.substr(8).c_str());
+                    } else {
+                        ImGui::TextUnformatted(g.releaseGroupMbId.c_str());
+                    }
                     if (!g.releaseDate.empty()) {
                         ImGui::TextDisabled("Дата: %s", g.releaseDate.c_str());
                     }
                 } else {
-                    ImGui::TextDisabled("MBID отсутствует");
+                    ImGui::TextDisabled("Источник отсутствует");
                 }
 
-                // Column 4: Open in MusicBrainz
+                // Column 4: Open in Web
                 ImGui::TableSetColumnIndex(4);
                 if (!g.releaseGroupMbId.empty()) {
                     char btnId[64];
                     sprintf_s(btnId, sizeof(btnId), "Открыть##%zu", gi);
                     if (ImGui::Button(btnId, ImVec2(-1, 24))) {
-                        std::string mbUrl = "https://musicbrainz.org/release-group/" + g.releaseGroupMbId;
-                        ShellExecuteA(NULL, "open", mbUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+                        std::string targetUrl;
+                        if (g.releaseGroupMbId.rfind("discogs_", 0) == 0) {
+                            targetUrl = "https://www.discogs.com/release/" + g.releaseGroupMbId.substr(8);
+                        } else {
+                            targetUrl = "https://musicbrainz.org/release-group/" + g.releaseGroupMbId;
+                        }
+                        ShellExecuteA(NULL, "open", targetUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
                     }
                 } else {
                     ImGui::TextDisabled("-");
@@ -2368,6 +2639,98 @@ void AppWindow::FetchManualMusicBrainzMetadata(const std::string& inputUrl, bool
     }).detach();
 }
 
+void AppWindow::FetchManualDiscogsMetadata(const std::string& inputUrl, bool applyToAllInAlbum) {
+    if (m_tagItems.empty() || m_currentTagIndex >= m_tagItems.size()) {
+        LOG_WARN("[MANUAL DISCOGS] Очередь треков пуста или индекс некорректен.");
+        return;
+    }
+
+    bool isMaster = (inputUrl.find("/master/") != std::string::npos || inputUrl.find("/master") != std::string::npos || inputUrl.find("m") == 0);
+
+    // Extract ID (digits)
+    std::string releaseId;
+    std::regex idRegex(R"((\d{3,12}))");
+    std::smatch match;
+    if (std::regex_search(inputUrl, match, idRegex)) {
+        releaseId = match.str(1);
+    }
+
+    if (releaseId.empty()) {
+        LOG_WARN("[MANUAL DISCOGS] В строке не найден ID релиза Discogs: " + inputUrl);
+        return;
+    }
+
+    LOG_INFO("[MANUAL DISCOGS] Запуск ручной загрузки метаданных для Discogs ID: " + releaseId + " (isMaster=" + std::to_string(isMaster) + ")");
+
+    std::thread([this, releaseId, isMaster, applyToAllInAlbum]() {
+        DiscogsReleaseInfo discInfo;
+        if (!FetchDiscogsReleaseDetails(releaseId, isMaster, discInfo)) {
+            LOG_WARN("[MANUAL DISCOGS ERROR] Не удалось получить данные с Discogs для ID: " + releaseId);
+            return;
+        }
+
+        std::vector<unsigned char> coverData;
+        if (!discInfo.coverUrl.empty()) {
+            LOG_INFO("[MANUAL DISCOGS] Загрузка обложки с Discogs: " + discInfo.coverUrl);
+            coverData = HttpGetBytes(Utf8ToWide(discInfo.coverUrl));
+        }
+
+        auto& currentItem = m_tagItems[m_currentTagIndex];
+        std::string targetFolder = fs::path(currentItem.filePath).parent_path().string();
+
+        std::vector<size_t> targetIndices;
+        if (applyToAllInAlbum) {
+            for (size_t i = 0; i < m_tagItems.size(); ++i) {
+                if (fs::path(m_tagItems[i].filePath).parent_path().string() == targetFolder) {
+                    targetIndices.push_back(i);
+                }
+            }
+        } else {
+            targetIndices.push_back(m_currentTagIndex);
+        }
+
+        for (size_t idx : targetIndices) {
+            auto& item = m_tagItems[idx];
+            if (!discInfo.artist.empty()) {
+                strncpy_s(item.artistBuf, discInfo.artist.c_str(), sizeof(item.artistBuf) - 1);
+            }
+            if (!discInfo.title.empty()) {
+                strncpy_s(item.albumBuf, discInfo.title.c_str(), sizeof(item.albumBuf) - 1);
+            }
+            if (!discInfo.year.empty()) {
+                strncpy_s(item.yearBuf, discInfo.year.c_str(), sizeof(item.yearBuf) - 1);
+            }
+
+            if (!discInfo.tracks.empty()) {
+                ApplyTrackMatch(item, discInfo.tracks);
+            }
+
+            item.matchTier = MatchTier::Discogs;
+            item.releaseGroupMbId = "discogs_" + releaseId;
+            item.isMusicBrainzMatched = true;
+            item.isFetchCompleted = true;
+
+            if (!coverData.empty()) {
+                item.onlineCoverBytes = coverData;
+                if (item.onlineTexture) {
+                    item.onlineTexture->Release();
+                    item.onlineTexture = NULL;
+                }
+                item.selectedCoverChoice = 1;
+            }
+
+            // Fetch LRC lyrics
+            std::string lrcLyrics = FetchLrcLibSyncedLyrics(item.artistBuf, item.titleBuf, item.albumBuf);
+            if (!lrcLyrics.empty()) {
+                item.hasLyrics = true;
+                strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+            }
+        }
+
+        LOG_INFO("[MANUAL DISCOGS MATCHED] Успешно загружен релиз Discogs: \"" + discInfo.title + "\" (" + discInfo.artist + ", год: " + discInfo.year + ", треков: " + std::to_string(discInfo.tracks.size()) + ")");
+    }).detach();
+}
+
 void AppWindow::RunMessageLoop() {
     bool done = false;
     while (!done) {
@@ -2488,10 +2851,11 @@ void AppWindow::RunMessageLoop() {
             strncpy_s(m_flacBuf, g_FlacDir.c_str(), sizeof(m_flacBuf) - 1);
             strncpy_s(m_mp3Buf, g_Mp3Dir.c_str(), sizeof(m_mp3Buf) - 1);
             strncpy_s(m_acoustIdKeyBuf, g_AcoustIdKey.c_str(), sizeof(m_acoustIdKeyBuf) - 1);
+            strncpy_s(m_discogsTokenBuf, g_DiscogsToken.c_str(), sizeof(m_discogsTokenBuf) - 1);
             m_foldersInited = true;
         }
 
-        if (ImGui::CollapsingHeader("Папки")) {
+        if (ImGui::CollapsingHeader("Папки и ключи API")) {
             ImGui::PushItemWidth(420);
 
             ImGui::Text("TO SORT (вход):");
@@ -2533,12 +2897,22 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("(демо-ключ мёртв — получи APPLICATION ключ на https://acoustid.org/new-application)");
             }
 
-            if (ImGui::Button("Сохранить пути")) {
+            ImGui::TextDisabled("Discogs Personal Access Token (для поиска метаданных и обложек Discogs)");
+            ImGui::PushItemWidth(420);
+            ImGui::InputText("##DiscogsToken", m_discogsTokenBuf, sizeof(m_discogsTokenBuf));
+            ImGui::PopItemWidth();
+            if (m_discogsTokenBuf[0] == '\0') {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(токен можно получить на https://www.discogs.com/settings/developers)");
+            }
+
+            if (ImGui::Button("Сохранить настройки")) {
                 g_ToSortDir = std::string(m_toSortBuf);
                 g_OutputDir = std::string(m_outputBuf);
                 g_FlacDir = std::string(m_flacBuf);
                 g_Mp3Dir = std::string(m_mp3Buf);
                 g_AcoustIdKey = std::string(m_acoustIdKeyBuf);
+                g_DiscogsToken = std::string(m_discogsTokenBuf);
                 SaveFolderSettings();
             }
         }
@@ -2548,6 +2922,7 @@ void AppWindow::RunMessageLoop() {
         g_OutputDir = std::string(m_outputBuf);
         g_FlacDir = std::string(m_flacBuf);
         g_Mp3Dir = std::string(m_mp3Buf);
+        g_DiscogsToken = std::string(m_discogsTokenBuf);
         g_DeleteDir = (fs::path(g_ToSortDir).parent_path() / "delete").string();
 
         ImGui::Separator();
@@ -3079,7 +3454,14 @@ void AppWindow::RunMessageLoop() {
                             }
 
                             if (coverData.empty()) {
-                                LOG_INFO("[COVER ART MISSING] CoverArtArchive image not available for MBID: " + releaseGroupMbId);
+                                LOG_INFO("[COVER ART MISSING] CoverArtArchive image not available for MBID: " + releaseGroupMbId + ". Trying Discogs fallback...");
+                                DiscogsReleaseInfo discCoverInfo;
+                                if (SearchDiscogsRelease(artistClean, albumClean, discCoverInfo) && !discCoverInfo.coverUrl.empty()) {
+                                    coverData = HttpGetBytes(Utf8ToWide(discCoverInfo.coverUrl));
+                                    if (!coverData.empty()) {
+                                        LOG_INFO("[DISCOGS COVER FALLBACK SUCCESS] " + std::to_string(coverData.size()) + " bytes cover art downloaded from Discogs via " + discCoverInfo.coverUrl);
+                                    }
+                                }
                             }
 
                             // Fetch Release Tracklist from MusicBrainz to enrich track numbers, titles, and individual track artists
@@ -3109,9 +3491,56 @@ void AppWindow::RunMessageLoop() {
                                 albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, mbTracks, isMatched, true, detectedTier };
                             }
                         } else {
-                            detectedTier = MatchTier::Niche_Local;
-                            LOG_INFO("[NICHE TRACK] MusicBrainz record not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
-                            albumCache[albumKey] = { "", "", {}, {}, false, true, MatchTier::Niche_Local };
+                            // Discogs Database Search Fallback
+                            LOG_INFO("[MUSICBRAINZ NOT FOUND] Querying Discogs Database API for: " + artistClean + " - " + albumClean);
+                            DiscogsReleaseInfo discInfo;
+                            if (SearchDiscogsRelease(artistClean, albumClean, discInfo)) {
+                                LOG_INFO("[DISCOGS METADATA FOUND] Matched release: " + discInfo.artist + " - " + discInfo.title + " (Year: " + discInfo.year + ")");
+                                releaseGroupMbId = "discogs_" + discInfo.id;
+                                if (!discInfo.year.empty()) {
+                                    firstReleaseDate = discInfo.year;
+                                }
+                                if (!discInfo.coverUrl.empty()) {
+                                    coverData = HttpGetBytes(Utf8ToWide(discInfo.coverUrl));
+                                    if (!coverData.empty()) {
+                                        LOG_INFO("[DISCOGS COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from Discogs via " + discInfo.coverUrl);
+                                    }
+                                }
+                                isMatched = true;
+                                detectedTier = MatchTier::Discogs;
+
+                                for (size_t k = 0; k < files.size(); ++k) {
+                                    std::string aKey = NormalizeKey(m_tagItems[k].albumBuf);
+                                    if (aKey.empty() || aKey == "unknown" || aKey == "tosort" || aKey == "music" || aKey == "media") {
+                                        aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
+                                    }
+                                    if (aKey == albumKey) {
+                                        if (!discInfo.artist.empty()) {
+                                            strncpy_s(m_tagItems[k].artistBuf, discInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
+                                        }
+                                        if (!discInfo.title.empty()) {
+                                            strncpy_s(m_tagItems[k].albumBuf, discInfo.title.c_str(), sizeof(m_tagItems[k].albumBuf) - 1);
+                                        }
+                                        if (!discInfo.year.empty()) {
+                                            strncpy_s(m_tagItems[k].yearBuf, discInfo.year.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
+                                        }
+                                        if (!discInfo.tracks.empty()) {
+                                            ApplyTrackMatch(m_tagItems[k], discInfo.tracks);
+                                        }
+                                        m_tagItems[k].matchTier = detectedTier;
+                                        m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
+                                    }
+                                }
+
+                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, discInfo.tracks, isMatched, true, detectedTier };
+                                if (!releaseGroupMbId.empty()) {
+                                    albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, discInfo.tracks, isMatched, true, detectedTier };
+                                }
+                            } else {
+                                detectedTier = MatchTier::Niche_Local;
+                                LOG_INFO("[NICHE TRACK] MusicBrainz and Discogs records not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
+                                albumCache[albumKey] = { "", "", {}, {}, false, true, MatchTier::Niche_Local };
+                            }
                         }
 
                         // 4. Fetch Synced Romanized LRC Lyrics via LrcLib REST API
@@ -3136,7 +3565,7 @@ void AppWindow::RunMessageLoop() {
                     }
 
                     m_isTagScanning = false;
-                    LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz queries finished.");
+                    LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz & Discogs queries finished.");
                 }).detach();
             }
         }
@@ -3284,7 +3713,7 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("Инспектор тегов (%zu из %zu)", m_currentTagIndex + 1, m_tagItems.size());
                 ImGui::SameLine();
                 if (m_isTagScanning && !item.isFetchCompleted) {
-                    ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), "[SEARCHING MUSICBRAINZ %zu/%zu...]", m_fetchedCount.load(), m_tagItems.size());
+                    ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), "[ПОИСК MB / DISCOGS %zu/%zu...]", m_fetchedCount.load(), m_tagItems.size());
                 } else if (item.isMusicBrainzMatched) {
                     ImGui::TextColored(GetTierColor(item.matchTier), "[%s]", GetTierName(item.matchTier));
                 } else {
@@ -3295,14 +3724,19 @@ void AppWindow::RunMessageLoop() {
                 ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
                 ImGui::Separator();
 
-                // Manual MusicBrainz URL / MBID Input Row
+                // Manual MusicBrainz / Discogs URL / ID Input Row
                 ImGui::PushItemWidth(360);
-                ImGui::InputTextWithHint("##ManualMbUrlInput", "Вставьте ссылку или MBID (https://musicbrainz.org/release/...)", m_manualMbUrlBuf, sizeof(m_manualMbUrlBuf));
+                ImGui::InputTextWithHint("##ManualMbUrlInput", "Ссылка MusicBrainz / Discogs или ID", m_manualMbUrlBuf, sizeof(m_manualMbUrlBuf));
                 ImGui::PopItemWidth();
                 ImGui::SameLine();
-                if (ImGui::Button("Загрузить с MusicBrainz", ImVec2(185, 24))) {
+                if (ImGui::Button("Загрузить метаданные", ImVec2(185, 24))) {
                     if (strlen(m_manualMbUrlBuf) > 0) {
-                        FetchManualMusicBrainzMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
+                        std::string inputStr(m_manualMbUrlBuf);
+                        if (inputStr.find("discogs.com") != std::string::npos || (inputStr.find_first_not_of("0123456789") == std::string::npos && inputStr.length() >= 4 && inputStr.length() <= 12) || inputStr.find("r") == 0 || inputStr.find("m") == 0) {
+                            FetchManualDiscogsMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
+                        } else {
+                            FetchManualMusicBrainzMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
+                        }
                     }
                 }
                 ImGui::SameLine();
