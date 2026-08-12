@@ -19,6 +19,8 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <map>
+#include <algorithm>
 #include <sstream>
 #include <filesystem>
 #include <fstream>
@@ -98,6 +100,96 @@ static void LaunchBrowseThread(HWND hwnd, int target, const std::string& title) 
             PostMessageW(hwnd, WM_BROWSE_RESULT, (WPARAM)target, (LPARAM)pStr);
         }
     }).detach();
+}
+
+static bool HasAudioFiles(const fs::path& dir) {
+    std::error_code ec;
+    if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return false;
+    for (auto& p : fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec)) {
+        if (p.is_regular_file(ec)) {
+            std::string ext = p.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".flac" || ext == ".mp3" || ext == ".wav" || ext == ".m4a" ||
+                ext == ".aac" || ext == ".ogg" || ext == ".opus" || ext == ".wma" ||
+                ext == ".alac" || ext == ".ape" || ext == ".wv") {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool RemoveEmptySubdirectories(const fs::path& dir) {
+    std::error_code ec;
+    if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return false;
+
+    bool allChildrenRemoved = true;
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+        if (entry.is_directory(ec)) {
+            if (!RemoveEmptySubdirectories(entry.path())) {
+                allChildrenRemoved = false;
+            }
+        } else {
+            allChildrenRemoved = false;
+        }
+    }
+
+    if (allChildrenRemoved) {
+        LOG_INFO("[CLEANUP] Removing empty folder: " + dir.string());
+        fs::remove(dir, ec);
+        return true;
+    }
+    return false;
+}
+
+static void CleanupEmptyParentDirectories(fs::path curDir, const fs::path& stopDir) {
+    std::error_code ec;
+    fs::path canonicalStop = fs::weakly_canonical(stopDir, ec);
+    while (!curDir.empty()) {
+        fs::path canonicalCur = fs::weakly_canonical(curDir, ec);
+        if (canonicalCur == canonicalStop) break;
+
+        if (!fs::exists(curDir, ec) || !fs::is_directory(curDir, ec)) {
+            curDir = curDir.parent_path();
+            continue;
+        }
+
+        if (fs::is_empty(curDir, ec)) {
+            LOG_INFO("[CLEANUP] Removing empty parent folder: " + curDir.string());
+            fs::remove(curDir, ec);
+            curDir = curDir.parent_path();
+        } else {
+            break;
+        }
+    }
+}
+
+static void CleanupOrphanToSortFolders(const fs::path& toSortDir) {
+    std::error_code ec;
+    if (!fs::exists(toSortDir, ec) || !fs::is_directory(toSortDir, ec)) return;
+
+    std::vector<fs::path> subDirs;
+    for (auto& p : fs::recursive_directory_iterator(toSortDir, fs::directory_options::skip_permission_denied, ec)) {
+        if (p.is_directory(ec)) {
+            subDirs.push_back(p.path());
+        }
+    }
+
+    std::sort(subDirs.begin(), subDirs.end(), [](const fs::path& a, const fs::path& b) {
+        return a.string().length() > b.string().length();
+    });
+
+    for (const auto& d : subDirs) {
+        if (!fs::exists(d, ec)) continue;
+        if (!HasAudioFiles(d)) {
+            for (auto& entry : fs::directory_iterator(d, ec)) {
+                if (entry.is_regular_file(ec)) {
+                    fs::remove(entry.path(), ec);
+                }
+            }
+            RemoveEmptySubdirectories(d);
+        }
+    }
 }
 
 static void SaveFolderSettings() {
@@ -2375,6 +2467,12 @@ void AppWindow::ApproveTracks(const std::vector<size_t>& indices) {
     AdvanceToNextUnprocessedTrack();
 
     std::thread([tasks]() {
+        struct AlbumTargets {
+            fs::path flacDir;
+            fs::path mp3Dir;
+        };
+        std::map<fs::path, AlbumTargets> processedSourceDirs;
+
         for (const auto& t : tasks) {
             fs::path srcFile(t.srcFilePath);
             if (!fs::exists(srcFile)) {
@@ -2393,6 +2491,8 @@ void AppWindow::ApproveTracks(const std::vector<size_t>& indices) {
             fs::path mp3Dir  = fs::path(g_Mp3Dir) / safeArtist / safeAlbum;
             fs::create_directories(flacDir);
             fs::create_directories(mp3Dir);
+
+            processedSourceDirs[srcFile.parent_path()] = { flacDir, mp3Dir };
 
             std::string baseTrackName = t.newTrackNo + ". " + safeTitle;
 
@@ -2484,6 +2584,55 @@ void AppWindow::ApproveTracks(const std::vector<size_t>& indices) {
                 }
             }
         }
+
+        // Process leftover non-audio files and cleanup empty folders in TO SORT
+        for (const auto& [srcDir, targetDirs] : processedSourceDirs) {
+            if (!HasAudioFiles(srcDir)) {
+                std::error_code ec;
+                std::vector<fs::path> remainingFiles;
+                for (auto& p : fs::recursive_directory_iterator(srcDir, fs::directory_options::skip_permission_denied, ec)) {
+                    if (p.is_regular_file(ec)) {
+                        remainingFiles.push_back(p.path());
+                    }
+                }
+
+                for (const auto& f : remainingFiles) {
+                    fs::path rel = fs::relative(f, srcDir, ec);
+                    fs::path targetFlac = targetDirs.flacDir / rel;
+                    fs::path targetMp3 = targetDirs.mp3Dir / rel;
+
+                    std::string fnLower = f.filename().string();
+                    std::transform(fnLower.begin(), fnLower.end(), fnLower.begin(), ::tolower);
+
+                    try {
+                        fs::create_directories(targetFlac.parent_path(), ec);
+                        if (fs::exists(targetFlac, ec)) {
+                            if (fnLower == "cover.jpg" || fnLower == "cover.jpeg" || fnLower == "cover.png") {
+                                fs::remove(f, ec);
+                                continue;
+                            }
+                            fs::remove(targetFlac, ec);
+                        }
+                        fs::rename(f, targetFlac, ec);
+                        LOG_INFO("[NON-AUDIO MOVED] " + fs::relative(targetFlac, g_BaseDir).string());
+
+                        fs::create_directories(targetMp3.parent_path(), ec);
+                        fs::copy_file(targetFlac, targetMp3, fs::copy_options::overwrite_existing, ec);
+                    } catch (const std::exception& ex) {
+                        LOG_WARN("[NON-AUDIO MOVE ERROR] " + f.filename().string() + ": " + ex.what());
+                        if (fs::exists(targetFlac, ec)) {
+                            fs::remove(f, ec);
+                        }
+                    }
+                }
+
+                RemoveEmptySubdirectories(srcDir);
+                CleanupEmptyParentDirectories(srcDir.parent_path(), fs::path(g_ToSortDir));
+            }
+        }
+
+        CleanupOrphanToSortFolders(fs::path(g_ToSortDir));
+
         LOG_INFO("[BATCH APPROVAL DONE] Finished processing " + std::to_string(tasks.size()) + " track(s).");
     }).detach();
 }
@@ -3118,6 +3267,7 @@ void AppWindow::RunMessageLoop() {
                 try {
                     if (fs::exists(dst)) fs::remove(dst);
                     fs::rename(pair.trackB_path, dst);
+                    CleanupEmptyParentDirectories(fs::path(pair.trackB_path).parent_path(), fs::path(g_ToSortDir));
                 } catch (const std::exception& ex) {
                     LOG_WARN("[DECISION] Failed moving Track B: " + std::string(ex.what()));
                 }
@@ -3142,6 +3292,7 @@ void AppWindow::RunMessageLoop() {
                 try {
                     if (fs::exists(dst)) fs::remove(dst);
                     fs::rename(pair.trackA_path, dst);
+                    CleanupEmptyParentDirectories(fs::path(pair.trackA_path).parent_path(), fs::path(g_ToSortDir));
                 } catch (const std::exception& ex) {
                     LOG_WARN("[DECISION] Failed moving Track A: " + std::string(ex.what()));
                 }
@@ -3981,11 +4132,14 @@ void AppWindow::HandleScanFinished() {
             try {
                 if (fs::exists(dst)) fs::remove(dst);
                 fs::rename(p, dst);
+                CleanupEmptyParentDirectories(p.parent_path(), fs::path(g_ToSortDir));
             } catch (const std::exception& ex) {
                 LOG_WARN("[AUTO-DELETE] Failed moving " + rel.string() + ": " + ex.what());
             }
         }
     }
+
+    CleanupOrphanToSortFolders(fs::path(g_ToSortDir));
 
     if (!m_candidates.empty()) {
         m_currentCandidateIndex = 0;
@@ -4110,6 +4264,7 @@ void AppWindow::StartTagScan() {
                     LOG_INFO("[LOCAL INITIALIZATION] Scanned " + std::to_string(files.size()) + " audio files in TO SORT/");
 
                     if (files.empty()) {
+                        CleanupOrphanToSortFolders(fs::path(g_ToSortDir));
                         m_tagScanEndTime = std::chrono::steady_clock::now();
                         m_isTagScanning = false;
                         PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
