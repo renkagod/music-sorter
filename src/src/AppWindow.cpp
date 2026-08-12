@@ -3163,7 +3163,6 @@ void AppWindow::RunMessageLoop() {
             std::thread([]() {
                 std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
                 DatabaseManager::GetInstance().InitDatabase(dbPath);
-                DatabaseManager::GetInstance().ImportFromTracklistMarkdown((fs::path(g_BaseDir) / "tracklist.md").string());
                 DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir, g_FlacDir, g_Mp3Dir, g_ToSortDir);
             }).detach();
         }
@@ -3594,7 +3593,6 @@ void AppWindow::RunMessageLoop() {
                 std::thread([]() {
                     std::string dbPath = (fs::path(g_BaseDir) / "music_database.db").string();
                     DatabaseManager::GetInstance().InitDatabase(dbPath);
-                    DatabaseManager::GetInstance().ImportFromTracklistMarkdown((fs::path(g_BaseDir) / "tracklist.md").string());
                     DatabaseManager::GetInstance().SyncCollectionWithDisk(g_BaseDir, g_FlacDir, g_Mp3Dir, g_ToSortDir);
                 }).detach();
             }

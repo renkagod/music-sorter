@@ -36,3 +36,4 @@ CMakeFiles/
 folders.cfg
 imgui.ini
 logs_*.txt
+*.db

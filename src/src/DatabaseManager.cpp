@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cctype>
 
+#include <unordered_map>
+
 namespace fs = std::filesystem;
 
 static std::string TrimString(const std::string& str) {
@@ -173,80 +175,126 @@ bool DatabaseManager::ImportFromTracklistMarkdown(const std::string& tracklistPa
 void DatabaseManager::SyncCollectionWithDisk(const std::string& baseDir, const std::string& flacDir, const std::string& mp3Dir, const std::string& toSortDir) {
     if (!m_db) return;
 
-    sqlite3_exec((sqlite3*)m_db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
+    fs::path targetDir;
+    if (!flacDir.empty() && fs::exists(flacDir)) {
+        targetDir = fs::path(flacDir);
+    } else if (!mp3Dir.empty() && fs::exists(mp3Dir)) {
+        targetDir = fs::path(mp3Dir);
+    } else if (!baseDir.empty() && fs::exists(baseDir)) {
+        targetDir = fs::path(baseDir);
+    } else {
+        return;
+    }
 
-    const char* updateSql = 
-        "INSERT INTO tracks (artist, album, title, track_no, year, duration_sec, format, bitrate_kbps, status, rel_path) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?) "
-        "ON CONFLICT(artist, album, title) DO UPDATE SET "
-        "status=1, format=excluded.format, bitrate_kbps=excluded.bitrate_kbps, rel_path=excluded.rel_path;";
+    struct ScannedTrackInfo {
+        std::string artist;
+        std::string album;
+        std::string title;
+        std::string trackNo;
+        std::string year;
+        int durationSec = 0;
+        std::string format;
+        int bitrateKbps = 0;
+        int status = 1;
+        std::string relPath;
+    };
 
-    sqlite3_stmt* stmt = nullptr;
-    sqlite3_prepare_v2((sqlite3*)m_db, updateSql, -1, &stmt, nullptr);
+    std::vector<ScannedTrackInfo> scannedTracks;
+    std::unordered_map<std::string, size_t> keyToIndex;
 
-    int diskSyncCount = 0;
+    for (const auto& entry : fs::recursive_directory_iterator(targetDir)) {
+        if (entry.is_regular_file()) {
+            std::string ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".flac" || ext == ".mp3") {
+                fs::path relTarget = fs::relative(entry.path(), targetDir);
+                std::string album = "Unknown Album";
+                std::string artist = "Unknown Artist";
 
-    struct ScanEntry { fs::path dir; std::string label; bool isToSort; };
-    std::vector<ScanEntry> scanDirs;
-    if (!flacDir.empty()) scanDirs.push_back({ fs::path(flacDir), "flac", false });
-    if (!mp3Dir.empty()) scanDirs.push_back({ fs::path(mp3Dir), "mp3", false });
-    if (!toSortDir.empty()) scanDirs.push_back({ fs::path(toSortDir), "TO SORT", true });
-    scanDirs.push_back({ fs::path(baseDir) / "review", "review", false });
-
-    for (const auto& se : scanDirs) {
-        if (!fs::exists(se.dir)) continue;
-        for (auto& entry : fs::recursive_directory_iterator(se.dir)) {
-            if (entry.is_regular_file()) {
-                std::string ext = entry.path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (ext == ".flac" || ext == ".mp3") {
-                    std::string album = entry.path().parent_path().filename().string();
-                    std::string artist = entry.path().parent_path().parent_path().filename().string();
-                    std::string filename = entry.path().stem().string();
-                    std::string trackNo = "";
-                    std::string title = filename;
-
-                    size_t dotPos = filename.find(". ");
-                    if (dotPos == std::string::npos) dotPos = filename.find("- ");
-                    if (dotPos != std::string::npos && dotPos <= 4 && !filename.empty() && std::isdigit((unsigned char)filename[0])) {
-                        trackNo = filename.substr(0, dotPos);
-                        title = filename.substr(dotPos + 2);
+                if (relTarget.has_parent_path()) {
+                    fs::path p = relTarget.parent_path();
+                    album = p.filename().string();
+                    if (p.has_parent_path() && !p.parent_path().filename().string().empty()) {
+                        artist = p.parent_path().filename().string();
                     }
+                }
 
-                    if (artist.empty() || artist == "TO SORT" || artist == "media" || artist == "music" || se.label == "TO SORT") {
-                        artist = "Unknown Artist";
+                if (artist.empty() || artist == "media" || artist == "music") artist = "Unknown Artist";
+                if (album.empty()) album = "Unknown Album";
+
+                std::string filename = entry.path().stem().string();
+                std::string trackNo = "";
+                std::string title = filename;
+
+                size_t dotPos = filename.find(". ");
+                if (dotPos == std::string::npos) dotPos = filename.find("- ");
+                if (dotPos != std::string::npos && dotPos <= 4 && !filename.empty() && std::isdigit((unsigned char)filename[0])) {
+                    trackNo = filename.substr(0, dotPos);
+                    title = filename.substr(dotPos + 2);
+                }
+                title = TrimString(title);
+                if (title.empty()) title = filename;
+
+                std::string fmt = (ext == ".flac") ? "FLAC" : "MP3";
+                int bitrate = (ext == ".flac") ? 1411 : 320;
+                std::string relP = fs::relative(entry.path(), baseDir).string();
+
+                ScannedTrackInfo info;
+                info.artist = artist;
+                info.album = album;
+                info.title = title;
+                info.trackNo = trackNo;
+                info.year = "";
+                info.durationSec = 0;
+                info.format = fmt;
+                info.bitrateKbps = bitrate;
+                info.status = 1;
+                info.relPath = relP;
+
+                std::string key = ToLowerString(artist) + "\n" + ToLowerString(album) + "\n" + ToLowerString(title);
+                auto it = keyToIndex.find(key);
+                if (it != keyToIndex.end()) {
+                    // If existing is MP3 and new is FLAC, upgrade to FLAC
+                    if (scannedTracks[it->second].format != "FLAC" && fmt == "FLAC") {
+                        scannedTracks[it->second] = info;
                     }
-                    if (album.empty() || album == "TO SORT" || se.label == "TO SORT") {
-                        album = "Unknown Album";
-                    }
-
-                    std::string fmt = (ext == ".flac") ? "FLAC" : "MP3";
-                    int bitrate = (ext == ".flac") ? 1411 : 320;
-                    std::string relP = (se.label == "review") ? fs::relative(entry.path(), baseDir).string()
-                                                              : (se.label + "/" + fs::relative(entry.path(), se.dir).string());
-
-                    sqlite3_bind_text(stmt, 1, artist.c_str(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(stmt, 2, album.c_str(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(stmt, 3, title.c_str(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(stmt, 4, trackNo.c_str(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(stmt, 5, "", -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_int(stmt, 6, 0);
-                    sqlite3_bind_text(stmt, 7, fmt.c_str(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_int(stmt, 8, bitrate);
-                    sqlite3_bind_text(stmt, 9, relP.c_str(), -1, SQLITE_TRANSIENT);
-
-                    sqlite3_step(stmt);
-                    sqlite3_reset(stmt);
-                    diskSyncCount++;
+                } else {
+                    keyToIndex[key] = scannedTracks.size();
+                    scannedTracks.push_back(info);
                 }
             }
         }
     }
 
+    sqlite3_exec((sqlite3*)m_db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
+    sqlite3_exec((sqlite3*)m_db, "DELETE FROM tracks;", nullptr, nullptr, nullptr);
+
+    const char* insertSql = 
+        "INSERT INTO tracks (artist, album, title, track_no, year, duration_sec, format, bitrate_kbps, status, rel_path) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2((sqlite3*)m_db, insertSql, -1, &stmt, nullptr);
+
+    for (const auto& tr : scannedTracks) {
+        sqlite3_bind_text(stmt, 1, tr.artist.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, tr.album.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, tr.title.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 4, tr.trackNo.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 5, tr.year.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 6, tr.durationSec);
+        sqlite3_bind_text(stmt, 7, tr.format.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 8, tr.bitrateKbps);
+        sqlite3_bind_text(stmt, 9, tr.relPath.c_str(), -1, SQLITE_TRANSIENT);
+
+        sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+    }
+
     sqlite3_finalize(stmt);
     sqlite3_exec((sqlite3*)m_db, "COMMIT;", nullptr, nullptr, nullptr);
 
-    LOG_INFO("[SQLITE DB] Synced " + std::to_string(diskSyncCount) + " audio files on disk with SQLite database.");
+    LOG_INFO("[SQLITE DB] Synced " + std::to_string(scannedTracks.size()) + " audio files on disk with SQLite database.");
 }
 
 std::vector<TrackRecord> DatabaseManager::QueryTracks(int filterStatus, int filterFormat, const std::string& searchQuery) {
