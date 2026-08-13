@@ -11,9 +11,5 @@ Desktop application for acoustic analysis, duplicate detection, and music collec
   - MediaWiki API, wikitext templates `{{同人专辑信息}}` and `{{同人曲目信息}}`, staff and original ZUN themes
 - [ ] **Genius API** (`https://genius.com/api`, `https://api.genius.com`)
   - Track lyrics, track/album artwork
-- [ ] **KHInsider** (`https://downloads.khinsider.com`)
-  - Game soundtracks tracklists and track durations
-- [ ] **VGMdb** (`https://vgmdb.net`, `https://vgmdb.info`)
-  - Japanese game/doujin catalog data
-- [ ] **Touhou Arrangement Chronicle** (`https://touhou.arrangement-chronicle.com`)
-  - Touhou vocal arrangement indexing
+- [ ] **RateYourMusic / Sonemic API** (`https://rateyourmusic.com/data-access/register-interest/`)
+  - Upcoming official Sonemic API and datasets (pending API access)
