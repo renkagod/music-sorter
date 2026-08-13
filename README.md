@@ -13,3 +13,7 @@ Desktop application for acoustic analysis, duplicate detection, and music collec
   - Track lyrics, track/album artwork
 - [ ] **RateYourMusic / Sonemic API** (`https://rateyourmusic.com/data-access/register-interest/`)
   - Upcoming official Sonemic API and datasets (pending API access)
+
+### Albums to Download
+- [ ] **Diabolic Phantasma - Daydream In the Dead of Night** (DBPS-001)
+
