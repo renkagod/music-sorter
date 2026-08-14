@@ -53,6 +53,7 @@ struct TagReviewItem {
 
     std::string localCoverPath;
     std::string onlineCoverUrl;
+    std::string onlineCoverSource;
     std::vector<unsigned char> localCoverBytes;
     std::vector<unsigned char> onlineCoverBytes;
 

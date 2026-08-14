@@ -252,6 +252,7 @@ struct AlbumMetadataCache {
     std::string releaseGroupMbId;
     std::string firstReleaseDate;
     std::vector<unsigned char> coverBytes;
+    std::string coverSource;
     std::vector<MBTrackEntry> tracks;
     bool isMatched = false;
     bool isFetched = false;
@@ -3350,6 +3351,7 @@ void AppWindow::FetchManualMusicBrainzMetadata(const std::string& inputUrl, bool
 
             if (!coverData.empty()) {
                 item.onlineCoverBytes = coverData;
+                item.onlineCoverSource = "CoverArtArchive";
                 if (item.onlineTexture) {
                     item.onlineTexture->Release();
                     item.onlineTexture = NULL;
@@ -3442,6 +3444,7 @@ void AppWindow::FetchManualDiscogsMetadata(const std::string& inputUrl, bool app
 
             if (!coverData.empty()) {
                 item.onlineCoverBytes = coverData;
+                item.onlineCoverSource = "Discogs";
                 if (item.onlineTexture) {
                     item.onlineTexture->Release();
                     item.onlineTexture = NULL;
@@ -3531,6 +3534,7 @@ void AppWindow::FetchManualTouhouDbMetadata(const std::string& inputUrl, bool ap
 
             if (!coverData.empty()) {
                 item.onlineCoverBytes = coverData;
+                item.onlineCoverSource = "TouhouDB";
                 if (item.onlineTexture) {
                     item.onlineTexture->Release();
                     item.onlineTexture = NULL;
@@ -3620,6 +3624,7 @@ void AppWindow::FetchManualVocaDbMetadata(const std::string& inputUrl, bool appl
 
             if (!coverData.empty()) {
                 item.onlineCoverBytes = coverData;
+                item.onlineCoverSource = "VocaDB";
                 if (item.onlineTexture) {
                     item.onlineTexture->Release();
                     item.onlineTexture = NULL;
@@ -4190,14 +4195,16 @@ void AppWindow::RunMessageLoop() {
                 ImGui::NextColumn();
                 ImGui::SetCursorPosY(inspectorTopY);
                 ImGui::BeginGroup();
-                ImGui::TextDisabled("CoverArtArchive:");
+                std::string coverSourceTitle = item.onlineCoverSource.empty() ? "Онлайн обложка:" : (item.onlineCoverSource + ":");
+                ImGui::TextDisabled("%s", coverSourceTitle.c_str());
                 if (item.onlineTexture) {
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
                     if (ImGui::ImageButton("##OnlineCoverBtnRightLarge", (ImTextureID)item.onlineTexture, ImVec2(225, 225))) {
                         item.selectedCoverChoice = 1;
                     }
                     ImGui::PopStyleVar();
-                    ImGui::Text(item.selectedCoverChoice == 1 ? "[X] CoverArtArchive" : "   CoverArtArchive");
+                    std::string coverChoiceLabel = (item.selectedCoverChoice == 1 ? "[X] " : "   ") + (item.onlineCoverSource.empty() ? "Онлайн" : item.onlineCoverSource);
+                    ImGui::Text("%s", coverChoiceLabel.c_str());
                     ImGui::TextDisabled("%dx%d px | %zu KB", item.onlineWidth, item.onlineHeight, item.onlineCoverBytes.size() / 1024);
                     if (item.onlineScore > item.localScore) {
                         ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "[*] ВЫСШЕЕ КАЧЕСТВО");
@@ -4859,6 +4866,7 @@ void AppWindow::StartTagScan() {
                         std::string releaseGroupMbId;
                         std::string firstReleaseDate;
                         std::vector<unsigned char> coverData;
+                        std::string coverSource;
                         bool isMatched = false;
                         MatchTier detectedTier = MatchTier::Niche_Local;
 
@@ -4867,6 +4875,7 @@ void AppWindow::StartTagScan() {
                             auto& c = albumCache[albumKey];
                             item.isMusicBrainzMatched = c.isMatched;
                             item.onlineCoverBytes = c.coverBytes;
+                            item.onlineCoverSource = c.coverSource;
                             item.matchTier = c.matchTier;
                             item.releaseGroupMbId = c.releaseGroupMbId;
                             if (!c.firstReleaseDate.empty()) {
@@ -5251,6 +5260,7 @@ void AppWindow::StartTagScan() {
                                 if (!touhouInfo.coverUrl.empty()) {
                                     coverData = HttpGetBytes(Utf8ToWide(touhouInfo.coverUrl));
                                     if (!coverData.empty()) {
+                                        coverSource = "TouhouDB";
                                         LOG_INFO("[TOUHOUDB COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from TouhouDB via " + touhouInfo.coverUrl);
                                     }
                                 }
@@ -5279,14 +5289,15 @@ void AppWindow::StartTagScan() {
                                         m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
                                         if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
                                             m_tagItems[k].onlineCoverBytes = coverData;
+                                            m_tagItems[k].onlineCoverSource = coverSource;
                                         }
                                         m_tagItems[k].isMusicBrainzMatched = isMatched;
                                     }
                                 }
 
-                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, touhouInfo.tracks, isMatched, true, detectedTier };
+                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, touhouInfo.tracks, isMatched, true, detectedTier };
                                 if (!releaseGroupMbId.empty()) {
-                                    albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, touhouInfo.tracks, isMatched, true, detectedTier };
+                                    albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, touhouInfo.tracks, isMatched, true, detectedTier };
                                 }
                             }
 
@@ -5302,6 +5313,7 @@ void AppWindow::StartTagScan() {
                                     if (!vocaInfo.coverUrl.empty()) {
                                         coverData = HttpGetBytes(Utf8ToWide(vocaInfo.coverUrl));
                                         if (!coverData.empty()) {
+                                            coverSource = "VocaDB";
                                             LOG_INFO("[VOCADB COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from VocaDB via " + vocaInfo.coverUrl);
                                         }
                                     }
@@ -5330,14 +5342,15 @@ void AppWindow::StartTagScan() {
                                             m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
                                             if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
                                                 m_tagItems[k].onlineCoverBytes = coverData;
+                                                m_tagItems[k].onlineCoverSource = coverSource;
                                             }
                                             m_tagItems[k].isMusicBrainzMatched = isMatched;
                                         }
                                     }
 
-                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, vocaInfo.tracks, isMatched, true, detectedTier };
+                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, vocaInfo.tracks, isMatched, true, detectedTier };
                                     if (!releaseGroupMbId.empty()) {
-                                        albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, vocaInfo.tracks, isMatched, true, detectedTier };
+                                        albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, vocaInfo.tracks, isMatched, true, detectedTier };
                                     }
                                 }
                             }
@@ -5366,6 +5379,7 @@ void AppWindow::StartTagScan() {
                                 if (!discInfo.coverUrl.empty()) {
                                     coverData = HttpGetBytes(Utf8ToWide(discInfo.coverUrl));
                                     if (!coverData.empty()) {
+                                        coverSource = "Discogs";
                                         LOG_INFO("[DISCOGS COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from Discogs via " + discInfo.coverUrl);
                                     }
                                 }
@@ -5394,14 +5408,15 @@ void AppWindow::StartTagScan() {
                                         m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
                                         if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
                                             m_tagItems[k].onlineCoverBytes = coverData;
+                                            m_tagItems[k].onlineCoverSource = coverSource;
                                         }
                                         m_tagItems[k].isMusicBrainzMatched = isMatched;
                                     }
                                 }
 
-                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, discInfo.tracks, isMatched, true, detectedTier };
+                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, discInfo.tracks, isMatched, true, detectedTier };
                                 if (!releaseGroupMbId.empty()) {
-                                    albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, discInfo.tracks, isMatched, true, detectedTier };
+                                    albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, discInfo.tracks, isMatched, true, detectedTier };
                                 }
                             }
                         }
@@ -5426,6 +5441,7 @@ void AppWindow::StartTagScan() {
                                 sprintf_s(urlBuf, sizeof(urlBuf), epPattern, releaseGroupMbId.c_str());
                                 coverData = HttpGetBytes(Utf8ToWide(urlBuf));
                                 if (!coverData.empty()) {
+                                    coverSource = "CoverArtArchive";
                                     LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art via " + std::string(urlBuf));
                                     break;
                                 }
@@ -5437,6 +5453,7 @@ void AppWindow::StartTagScan() {
                                 if (SearchDiscogsRelease(artistClean, albumClean, discCoverInfo) && !discCoverInfo.coverUrl.empty()) {
                                     coverData = HttpGetBytes(Utf8ToWide(discCoverInfo.coverUrl));
                                     if (!coverData.empty()) {
+                                        coverSource = "Discogs";
                                         LOG_INFO("[DISCOGS COVER FALLBACK SUCCESS] " + std::to_string(coverData.size()) + " bytes cover art downloaded from Discogs via " + discCoverInfo.coverUrl);
                                     }
                                 }
@@ -5463,19 +5480,20 @@ void AppWindow::StartTagScan() {
                                     m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
                                     if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
                                         m_tagItems[k].onlineCoverBytes = coverData;
+                                        m_tagItems[k].onlineCoverSource = coverSource;
                                     }
                                     m_tagItems[k].isMusicBrainzMatched = isMatched;
                                 }
                             }
                             
-                            albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, mbTracks, isMatched, true, detectedTier };
+                            albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, mbTracks, isMatched, true, detectedTier };
                             if (!releaseGroupMbId.empty()) {
-                                albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, mbTracks, isMatched, true, detectedTier };
+                                albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, mbTracks, isMatched, true, detectedTier };
                             }
                         } else if (releaseGroupMbId.empty()) {
                             detectedTier = MatchTier::Niche_Local;
                             LOG_INFO("[NICHE TRACK] MusicBrainz, TouhouDB, VocaDB and Discogs records not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
-                            albumCache[albumKey] = { "", "", {}, {}, false, true, MatchTier::Niche_Local };
+                            albumCache[albumKey] = { "", "", {}, "", {}, false, true, MatchTier::Niche_Local };
                         }
 
                         // 4. Fetch Synced Romanized LRC Lyrics via LrcLib REST API
@@ -5494,6 +5512,7 @@ void AppWindow::StartTagScan() {
 
                         item.isMusicBrainzMatched = isMatched;
                         item.onlineCoverBytes = coverData;
+                        item.onlineCoverSource = coverSource;
                         item.matchTier = detectedTier;
                         item.releaseGroupMbId = releaseGroupMbId;
                         item.isFetchCompleted = true;
