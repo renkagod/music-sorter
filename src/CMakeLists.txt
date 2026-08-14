@@ -10,14 +10,14 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui
 )
 
-file(GLOB_RECURSE SOURCES
+file(GLOB APP_SOURCES
     "src/*.cpp"
     "src/*.c"
     "third_party/imgui/*.cpp"
     "third_party/sqlite3.c"
 )
 
-add_executable(MusicSorterApp WIN32 ${SOURCES})
+add_executable(MusicSorterApp WIN32 ${APP_SOURCES})
 
 target_link_libraries(MusicSorterApp PRIVATE
     user32
@@ -26,6 +26,7 @@ target_link_libraries(MusicSorterApp PRIVATE
     comctl32
     ole32
     winmm
+    wininet
     d3d11
     d3dcompiler
 )
@@ -33,3 +34,25 @@ target_link_libraries(MusicSorterApp PRIVATE
 set_target_properties(MusicSorterApp PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
 )
+
+# Test Suite
+enable_testing()
+
+file(GLOB TEST_SOURCES
+    "tests/*.cpp"
+)
+
+add_executable(MusicSorterTests ${TEST_SOURCES})
+
+target_link_libraries(MusicSorterTests PRIVATE
+    user32
+    wininet
+    ole32
+    shell32
+)
+
+set_target_properties(MusicSorterTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+)
+
+add_test(NAME FetchTests COMMAND MusicSorterTests)
