@@ -500,6 +500,31 @@ static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::strin
     std::string yr = ExtractYearFromString(dateStr);
     if (!yr.empty()) AddTextFrame("TYER", yr); // Legacy year
 
+    // USLT Frame for Lyrics (ID3v2.3 Lyrics with timestamps / plain text)
+    if (!lyrics.empty()) {
+        std::vector<unsigned char> usltPayload;
+        usltPayload.push_back(0x01); // UTF-16LE encoding
+        usltPayload.push_back('e'); usltPayload.push_back('n'); usltPayload.push_back('g'); // 3-byte language code
+        // Descriptor: empty UTF-16LE with BOM and null terminator
+        usltPayload.push_back(0xFF); usltPayload.push_back(0xFE);
+        usltPayload.push_back(0x00); usltPayload.push_back(0x00);
+        
+        // Lyrics payload
+        usltPayload.push_back(0xFF); usltPayload.push_back(0xFE); // BOM
+        std::vector<unsigned char> lrcPayload = StringToUtf16LE(lyrics);
+        usltPayload.insert(usltPayload.end(), lrcPayload.begin(), lrcPayload.end());
+        usltPayload.push_back(0x00); usltPayload.push_back(0x00); // Null terminator
+
+        frames.push_back('U'); frames.push_back('S'); frames.push_back('L'); frames.push_back('T');
+        uint32_t uLen = (uint32_t)usltPayload.size();
+        frames.push_back((unsigned char)((uLen >> 24) & 0xFF));
+        frames.push_back((unsigned char)((uLen >> 16) & 0xFF));
+        frames.push_back((unsigned char)((uLen >> 8) & 0xFF));
+        frames.push_back((unsigned char)(uLen & 0xFF));
+        frames.push_back(0x00); frames.push_back(0x00);
+        frames.insert(frames.end(), usltPayload.begin(), usltPayload.end());
+    }
+
     // APIC Frame for Cover Art
     if (!coverBytes.empty()) {
         std::string mime = "image/jpeg";
