@@ -166,6 +166,22 @@ inline void LrcLibThrottle() {
     g_lastLrclibRequestTime = std::chrono::steady_clock::now();
 }
 
+inline std::mutex g_acoustIdThrottleMutex;
+inline std::chrono::steady_clock::time_point g_lastAcoustIdRequestTime;
+
+inline void AcoustIdThrottle() {
+    std::lock_guard<std::mutex> lock(g_acoustIdThrottleMutex);
+    auto now = std::chrono::steady_clock::now();
+    auto sinceLast = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastAcoustIdRequestTime).count();
+    const long long kMinGapMs = 340; // Max 3 requests/sec per official AcoustID guidelines (340ms spacing)
+    if (sinceLast < kMinGapMs) {
+        long long sleepMs = kMinGapMs - sinceLast;
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+    }
+    g_lastAcoustIdRequestTime = std::chrono::steady_clock::now();
+}
+
+
 inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const std::string& discogsToken = "", int maxRetries = 3) {
     std::vector<unsigned char> result;
     std::string narrowUrl = WideToUtf8(url);
@@ -263,6 +279,7 @@ inline std::string HttpGetString(const std::wstring& url, const std::string& dis
 }
 
 inline std::string AcoustIdHttpPost(const std::string& postData) {
+    AcoustIdThrottle();
     std::vector<unsigned char> result;
     HINTERNET hNet = InternetOpenW(L"MusicSorter/2.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hNet) return "";

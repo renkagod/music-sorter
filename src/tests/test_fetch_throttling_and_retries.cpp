@@ -52,3 +52,16 @@ TEST_CASE("Fetch Throttling", "LRCLIB Proactive Rate Limit Throttle") {
     ASSERT_GE(gap1, 240);
 }
 
+TEST_CASE("Fetch Throttling", "AcoustID Proactive Rate Limit Throttle") {
+    auto t1 = std::chrono::steady_clock::now();
+    FetchServices::AcoustIdThrottle();
+    auto t2 = std::chrono::steady_clock::now();
+    FetchServices::AcoustIdThrottle();
+    auto t3 = std::chrono::steady_clock::now();
+
+    auto gap1 = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
+    // Must be at least 300ms (340ms target with variance margin)
+    ASSERT_GE(gap1, 300);
+}
+
+
