@@ -18,7 +18,13 @@
 struct MBTrackEntry {
     int position = 0;
     std::string title;
+    std::string titleRomaji;
+    std::string titleEnglish;
+    std::string titleJapanese;
     std::string artist;
+    std::string artistRomaji;
+    std::string artistEnglish;
+    std::string artistJapanese;
     int lengthMs = 0;
 };
 
@@ -43,12 +49,51 @@ struct VdbReleaseInfo {
     int id = 0;
     std::string service; // "TouhouDB", "VocaDB", "UtaiteDB"
     std::string title;
+    std::string titleRomaji;
+    std::string titleEnglish;
+    std::string titleJapanese;
     std::string artist;
+    std::string artistRomaji;
+    std::string artistEnglish;
+    std::string artistJapanese;
     std::string catalogNumber;
     std::string releaseDate;
     std::string coverUrl;
     std::vector<MBTrackEntry> tracks;
 };
+
+inline std::string PickBestName(const std::string& romaji, const std::string& english, const std::string& japanese, const std::string& def) {
+    if (!romaji.empty()) return romaji;
+    if (!english.empty()) return english;
+    if (!japanese.empty()) return japanese;
+    return def;
+}
+
+inline bool ContainsCJK(const std::string& str) {
+    for (size_t i = 0; i < str.length(); ) {
+        unsigned char c = (unsigned char)str[i];
+        if (c < 0x80) {
+            i++;
+        } else if ((c & 0xE0) == 0xC0) {
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 < str.length()) {
+                unsigned char c2 = (unsigned char)str[i+1];
+                unsigned char c3 = (unsigned char)str[i+2];
+                uint32_t cp = ((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+                if ((cp >= 0x3040 && cp <= 0x30FF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF)) {
+                    return true;
+                }
+            }
+            i += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            i += 4;
+        } else {
+            i++;
+        }
+    }
+    return false;
+}
 
 struct AcoustIdResult {
     std::string recordingId;
@@ -328,7 +373,7 @@ inline std::vector<MBTrackEntry> ParseMusicBrainzReleaseTracksJson(const std::st
                     }
                 }
                 if (pos > 0 && !title.empty()) {
-                    out.push_back({ pos, title, artist, lengthMs });
+                    out.push_back({ pos, title, "", "", "", artist, "", "", "", lengthMs });
                 }
             }
         }
@@ -446,7 +491,7 @@ inline bool ParseDiscogsReleaseDetailsJson(const std::string& jsonStr, const std
             }
 
             if (!trkTitle.empty()) {
-                outInfo.tracks.push_back({ pos, trkTitle, trkArtist, durMs });
+                outInfo.tracks.push_back({ pos, trkTitle, "", "", "", trkArtist, "", "", "", durMs });
             }
             trackPosCounter++;
         }
@@ -616,9 +661,25 @@ inline bool ParseVdbAlbumDetailsJson(const std::string& jsonStr, const std::stri
 
     outInfo.id = albumId;
     outInfo.service = service;
-    outInfo.title = doc.get("name").strVal;
-    if (outInfo.title.empty()) outInfo.title = doc.get("defaultName").strVal;
     outInfo.catalogNumber = doc.get("catalogNumber").strVal;
+
+    // Album Names (Romaji / English / Japanese)
+    const auto& names = doc.get("names");
+    if (names.type == JsonVal::Array) {
+        for (size_t n = 0; n < names.arrVal.size(); ++n) {
+            const auto& nObj = names.get(n);
+            std::string lang = nObj.get("language").strVal;
+            std::string val = nObj.get("value").strVal;
+            if (lang == "Romaji" && outInfo.titleRomaji.empty()) outInfo.titleRomaji = val;
+            else if (lang == "English" && outInfo.titleEnglish.empty()) outInfo.titleEnglish = val;
+            else if (lang == "Japanese" && outInfo.titleJapanese.empty()) outInfo.titleJapanese = val;
+        }
+    }
+    std::string rawName = doc.get("name").strVal;
+    if (rawName.empty()) rawName = doc.get("defaultName").strVal;
+    if (outInfo.titleRomaji.empty()) outInfo.titleRomaji = rawName;
+    if (outInfo.titleJapanese.empty()) outInfo.titleJapanese = doc.get("defaultName").strVal;
+    outInfo.title = PickBestName(outInfo.titleRomaji, outInfo.titleEnglish, outInfo.titleJapanese, rawName);
 
     // Release Date
     const auto& rd = doc.get("releaseDate");
@@ -635,7 +696,7 @@ inline bool ParseVdbAlbumDetailsJson(const std::string& jsonStr, const std::stri
         }
     }
 
-    // Artist / Circle determination
+    // Artist / Circle determination & multi-language
     std::string circleName;
     std::string producerName;
     const auto& artists = doc.get("artists");
@@ -647,6 +708,18 @@ inline bool ParseVdbAlbumDetailsJson(const std::string& jsonStr, const std::stri
             std::string name = aObj.get("name").strVal;
             if (name.empty()) name = aObj.get("artist").get("name").strVal;
 
+            const auto& aNames = aObj.get("artist").get("names");
+            if (aNames.type == JsonVal::Array) {
+                for (size_t n = 0; n < aNames.arrVal.size(); ++n) {
+                    const auto& nObj = aNames.get(n);
+                    std::string lang = nObj.get("language").strVal;
+                    std::string val = nObj.get("value").strVal;
+                    if (lang == "Romaji" && outInfo.artistRomaji.empty()) outInfo.artistRomaji = val;
+                    else if (lang == "English" && outInfo.artistEnglish.empty()) outInfo.artistEnglish = val;
+                    else if (lang == "Japanese" && outInfo.artistJapanese.empty()) outInfo.artistJapanese = val;
+                }
+            }
+
             if (cat.find("Circle") != std::string::npos || roles.find("Circle") != std::string::npos || 
                 aObj.get("artist").get("artistType").strVal == "Circle") {
                 if (circleName.empty()) circleName = name;
@@ -656,18 +729,19 @@ inline bool ParseVdbAlbumDetailsJson(const std::string& jsonStr, const std::stri
         }
     }
 
-    if (!circleName.empty()) {
-        outInfo.artist = circleName;
-    } else {
-        std::string artStr = doc.get("artistString").strVal;
+    std::string artStr = doc.get("artistString").strVal;
+    std::string rawArtist = circleName;
+    if (rawArtist.empty()) {
         if (!artStr.empty() && artStr != "Various artists" && artStr != "Various Artists" && artStr != "V.A.") {
-            outInfo.artist = artStr;
+            rawArtist = artStr;
         } else if (!producerName.empty()) {
-            outInfo.artist = producerName;
+            rawArtist = producerName;
         } else if (!artStr.empty()) {
-            outInfo.artist = artStr;
+            rawArtist = artStr;
         }
     }
+    if (outInfo.artistRomaji.empty()) outInfo.artistRomaji = rawArtist;
+    outInfo.artist = PickBestName(outInfo.artistRomaji, outInfo.artistEnglish, outInfo.artistJapanese, rawArtist);
 
     // Cover Art
     const auto& mp = doc.get("mainPicture");
@@ -677,7 +751,7 @@ inline bool ParseVdbAlbumDetailsJson(const std::string& jsonStr, const std::stri
         if (outInfo.coverUrl.empty()) outInfo.coverUrl = mp.get("urlSmallThumb").strVal;
     }
 
-    // Tracklist
+    // Tracklist with multi-language
     const auto& trks = doc.get("tracks");
     if (trks.type == JsonVal::Array) {
         for (size_t t = 0; t < trks.arrVal.size(); ++t) {
@@ -691,6 +765,24 @@ inline bool ParseVdbAlbumDetailsJson(const std::string& jsonStr, const std::stri
                 tTitle = song.get("name").strVal;
             }
 
+            std::string tRomaji, tEnglish, tJapanese;
+            if (song.type == JsonVal::Object) {
+                const auto& songNames = song.get("names");
+                if (songNames.type == JsonVal::Array) {
+                    for (size_t n = 0; n < songNames.arrVal.size(); ++n) {
+                        const auto& nObj = songNames.get(n);
+                        std::string lang = nObj.get("language").strVal;
+                        std::string val = nObj.get("value").strVal;
+                        if (lang == "Romaji" && tRomaji.empty()) tRomaji = val;
+                        else if (lang == "English" && tEnglish.empty()) tEnglish = val;
+                        else if (lang == "Japanese" && tJapanese.empty()) tJapanese = val;
+                    }
+                }
+                if (tJapanese.empty()) tJapanese = song.get("defaultName").strVal;
+            }
+            if (tRomaji.empty()) tRomaji = tTitle;
+            std::string bestTrackTitle = PickBestName(tRomaji, tEnglish, tJapanese, tTitle);
+
             int durMs = 0;
             std::string tArtist = outInfo.artist;
             if (song.type == JsonVal::Object) {
@@ -700,8 +792,8 @@ inline bool ParseVdbAlbumDetailsJson(const std::string& jsonStr, const std::stri
                 if (!sArt.empty()) tArtist = sArt;
             }
 
-            if (!tTitle.empty()) {
-                outInfo.tracks.push_back({ pos, tTitle, tArtist, durMs });
+            if (!bestTrackTitle.empty()) {
+                outInfo.tracks.push_back({ pos, bestTrackTitle, tRomaji, tEnglish, tJapanese, tArtist, outInfo.artistRomaji, outInfo.artistEnglish, outInfo.artistJapanese, durMs });
             }
         }
     }
@@ -710,7 +802,7 @@ inline bool ParseVdbAlbumDetailsJson(const std::string& jsonStr, const std::stri
 }
 
 inline bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& service, int albumId, VdbReleaseInfo& outInfo) {
-    std::string endpoint = baseUrl + "/api/albums/" + std::to_string(albumId) + "?fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics";
+    std::string endpoint = baseUrl + "/api/albums/" + std::to_string(albumId) + "?lang=Romaji&fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics,Names";
     std::string jsonStr = HttpGetString(Utf8ToWide(endpoint));
     return ParseVdbAlbumDetailsJson(jsonStr, service, albumId, outInfo);
 }
@@ -720,7 +812,7 @@ inline bool SearchVdbRelease(const std::string& baseUrl, const std::string& serv
 
     auto executeQuery = [&](const std::string& q) -> std::string {
         if (q.empty()) return "";
-        std::string url = baseUrl + "/api/albums?query=" + UrlEncode(q) + "&fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics&maxResults=5";
+        std::string url = baseUrl + "/api/albums?query=" + UrlEncode(q) + "&lang=Romaji&fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics,Names&maxResults=5";
         return HttpGetString(Utf8ToWide(url));
     };
 
