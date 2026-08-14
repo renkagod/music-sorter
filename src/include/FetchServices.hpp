@@ -139,11 +139,12 @@ inline void MusicBrainzThrottle() {
 inline std::mutex g_discogsThrottleMutex;
 inline std::chrono::steady_clock::time_point g_lastDiscogsRequestTime;
 
-inline void DiscogsThrottle() {
+inline void DiscogsThrottle(bool isAuthenticated = true) {
     std::lock_guard<std::mutex> lock(g_discogsThrottleMutex);
     auto now = std::chrono::steady_clock::now();
     auto sinceLast = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastDiscogsRequestTime).count();
-    const long long kMinGapMs = 1100;
+    // 60 requests/min (1100ms) with token, 25 requests/min (2500ms) without token
+    const long long kMinGapMs = isAuthenticated ? 1100 : 2500;
     if (sinceLast < kMinGapMs) {
         long long sleepMs = kMinGapMs - sinceLast;
         std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
@@ -190,7 +191,7 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
     if (isMusicBrainz) MusicBrainzThrottle();
 
     bool isDiscogs = (narrowUrl.find("api.discogs.com") != std::string::npos);
-    if (isDiscogs) DiscogsThrottle();
+    if (isDiscogs) DiscogsThrottle(!discogsToken.empty());
 
     bool isLrcLib = (narrowUrl.find("lrclib.net") != std::string::npos);
     if (isLrcLib) LrcLibThrottle();

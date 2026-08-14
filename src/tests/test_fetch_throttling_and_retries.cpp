@@ -16,14 +16,24 @@ TEST_CASE("Fetch Throttling", "MusicBrainz Proactive Rate Limit Throttle") {
 
 TEST_CASE("Fetch Throttling", "Discogs Proactive Rate Limit Throttle") {
     auto t1 = std::chrono::steady_clock::now();
-    FetchServices::DiscogsThrottle();
+    FetchServices::DiscogsThrottle(true); // Authenticated (60/min)
     auto t2 = std::chrono::steady_clock::now();
-    FetchServices::DiscogsThrottle();
+    FetchServices::DiscogsThrottle(true);
     auto t3 = std::chrono::steady_clock::now();
 
-    auto gap1 = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
+    auto gapAuth = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
     // Must be at least 1000ms
-    ASSERT_GE(gap1, 950);
+    ASSERT_GE(gapAuth, 950);
+
+    // Unauthenticated (25/min -> 2500ms)
+    FetchServices::DiscogsThrottle(false);
+    auto t4 = std::chrono::steady_clock::now();
+    FetchServices::DiscogsThrottle(false);
+    auto t5 = std::chrono::steady_clock::now();
+
+    auto gapUnauth = std::chrono::duration_cast<std::chrono::milliseconds>(t5 - t4).count();
+    // Must be at least 2300ms
+    ASSERT_GE(gapUnauth, 2300);
 }
 
 TEST_CASE("Fetch Throttling", "Exponential Backoff Calculation Formula") {

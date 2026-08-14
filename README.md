@@ -21,7 +21,6 @@ Desktop application for acoustic analysis, duplicate detection, and music collec
 ### Rate Limits / Проверка ограничений частоты запросов
 - [ ] Проверить и протестировать соблюдение рейт-лимитов для внешних сервисов:
   - MusicBrainz: базовый лимит 1 запрос в секунду на IP
-  - Discogs: 60 запросов в минуту с персональным токеном (25 запросов в минуту без токена)
 
 ### Albums to Download
 - [ ] **Diabolic Phantasma - Daydream In the Dead of Night** (DBPS-001)
