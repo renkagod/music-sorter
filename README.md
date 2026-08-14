@@ -18,9 +18,5 @@ Desktop application for acoustic analysis, duplicate detection, and music collec
 - [ ] **RateYourMusic / Sonemic API** (`https://rateyourmusic.com/data-access/register-interest/`)
   - Upcoming official Sonemic API and datasets (pending API access)
 
-### Rate Limits / Проверка ограничений частоты запросов
-- [ ] Проверить и протестировать соблюдение рейт-лимитов для внешних сервисов:
-  - MusicBrainz: базовый лимит 1 запрос в секунду на IP
-
 ### Albums to Download
 - [ ] **Diabolic Phantasma - Daydream In the Dead of Night** (DBPS-001)
