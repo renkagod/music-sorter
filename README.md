@@ -5,7 +5,7 @@ Desktop application for acoustic analysis, duplicate detection, and music collec
 ## TODO
 
 ### Metadata & Lyrics Fetch Services
-- [ ] **TouhouDB / VocaDB API** (`https://touhoudb.com/api`, `https://vocadb.net/api`)
+- [x] **TouhouDB / VocaDB API** (`https://touhoudb.com/api`, `https://vocadb.net/api`)
   - REST API (JSON), tracks, durations in seconds, artists, original high-res covers
 - [ ] **THBWiki API** (`https://thwiki.cc/api.php`)
   - MediaWiki API, wikitext templates `{{同人专辑信息}}` and `{{同人曲目信息}}`, staff and original ZUN themes
