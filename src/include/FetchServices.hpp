@@ -103,32 +103,6 @@ inline std::string PickBestLyrics(const std::string& romaji, const std::string& 
 }
 
 
-inline bool ContainsCJK(const std::string& str) {
-    for (size_t i = 0; i < str.length(); ) {
-        unsigned char c = (unsigned char)str[i];
-        if (c < 0x80) {
-            i++;
-        } else if ((c & 0xE0) == 0xC0) {
-            i += 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            if (i + 2 < str.length()) {
-                unsigned char c2 = (unsigned char)str[i+1];
-                unsigned char c3 = (unsigned char)str[i+2];
-                uint32_t cp = ((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
-                if ((cp >= 0x3040 && cp <= 0x30FF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF)) {
-                    return true;
-                }
-            }
-            i += 3;
-        } else if ((c & 0xF8) == 0xF0) {
-            i += 4;
-        } else {
-            i++;
-        }
-    }
-    return false;
-}
-
 struct AcoustIdResult {
     std::string recordingId;
     std::string title;
@@ -154,6 +128,11 @@ using ::ExtractCatalogNumber;
 using ::ExtractArtistFromFilename;
 using ::PickBestName;
 using ::PickBestLyrics;
+using ::ContainsCJK;
+using ::Base64Decode;
+using ::UnescapeHtmlEntities;
+using ::KanaToRomaji;
+using ::RomanizeJapaneseLyrics;
 
 
 inline std::mutex g_mbThrottleMutex;
@@ -185,6 +164,21 @@ inline void DiscogsThrottle(bool isAuthenticated = true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
     }
     g_lastDiscogsRequestTime = std::chrono::steady_clock::now();
+}
+
+inline std::mutex g_qqmusicThrottleMutex;
+inline std::chrono::steady_clock::time_point g_lastQQMusicRequestTime;
+
+inline void QQMusicThrottle() {
+    std::lock_guard<std::mutex> lock(g_qqmusicThrottleMutex);
+    auto now = std::chrono::steady_clock::now();
+    auto sinceLast = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastQQMusicRequestTime).count();
+    const long long kMinGapMs = 250; // 250 ms delay between sequential QQ Music requests
+    if (sinceLast < kMinGapMs) {
+        long long sleepMs = kMinGapMs - sinceLast;
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+    }
+    g_lastQQMusicRequestTime = std::chrono::steady_clock::now();
 }
 
 inline std::mutex g_lrclibThrottleMutex;
@@ -246,6 +240,9 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
     bool isLrcLib = (narrowUrl.find("lrclib.net") != std::string::npos);
     if (isLrcLib) LrcLibThrottle();
 
+    bool isQQMusic = (narrowUrl.find("c.y.qq.com") != std::string::npos || narrowUrl.find("y.qq.com") != std::string::npos);
+    if (isQQMusic) QQMusicThrottle();
+
     bool isThwiki = (narrowUrl.find("thwiki.cc") != std::string::npos);
     if (isThwiki) ThwikiThrottle();
 
@@ -258,6 +255,8 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
                 customHeaders = L"Authorization: Discogs token=" + Utf8ToWide(discogsToken) + L"\r\nUser-Agent: MusicSorter/2.0 (https://github.com/renkagod/music-sorter)\r\n";
             } else if (isLrcLib) {
                 customHeaders = L"User-Agent: MusicSorter v2.0 (https://github.com/renkagod/music-sorter)\r\nLrclib-Client: MusicSorter v2.0 (https://github.com/renkagod/music-sorter)\r\n";
+            } else if (isQQMusic) {
+                customHeaders = L"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\nReferer: https://y.qq.com/\r\n";
             } else if (isThwiki) {
                 customHeaders = L"User-Agent: MusicSorter/2.0 (https://github.com/renkagod/music-sorter)\r\n";
             }
@@ -303,6 +302,10 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
                         std::lock_guard<std::mutex> lock(g_lrclibThrottleMutex);
                         g_lastLrclibRequestTime = std::chrono::steady_clock::now();
                     }
+                    if (isQQMusic) {
+                        std::lock_guard<std::mutex> lock(g_qqmusicThrottleMutex);
+                        g_lastQQMusicRequestTime = std::chrono::steady_clock::now();
+                    }
                     continue;
                 }
 
@@ -322,8 +325,6 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
             }
             InternetCloseHandle(hNet);
         }
-        if (!result.empty()) return result;
-        std::this_thread::sleep_for(std::chrono::milliseconds(250 * (attempt + 1)));
     }
     return result;
 }
@@ -1134,6 +1135,102 @@ inline std::string FetchLrcLibSyncedLyrics(const std::string& artist, const std:
     return ParseLrcLibLyricsJson(json);
 }
 
+inline std::string ParseQQMusicSearchJson(const std::string& resJson, const std::string& targetArtist = "", const std::string& targetTitle = "") {
+    if (resJson.empty()) return "";
+    size_t p = 0;
+    JsonVal doc = ParseJsonSimple(resJson, p);
+    
+    const auto& data = doc.get("data");
+    const auto& song = data.get("song");
+    const auto& list = song.get("list");
+    if (list.type != JsonVal::Array || list.arrVal.empty()) {
+        return "";
+    }
+
+    std::string normTargetArtist = NormalizeKey(targetArtist);
+    std::string normTargetTitle = NormalizeKey(targetTitle);
+
+    std::string fallbackMid;
+    int bestScore = -1;
+
+    for (size_t i = 0; i < list.arrVal.size(); ++i) {
+        const auto& item = list.get(i);
+        std::string songmid = item.get("songmid").strVal;
+        if (songmid.empty()) continue;
+
+        if (fallbackMid.empty()) fallbackMid = songmid;
+
+        std::string songname = item.get("songname").strVal;
+        std::string singerStr;
+        const auto& singerArr = item.get("singer");
+        if (singerArr.type == JsonVal::Array) {
+            for (size_t s = 0; s < singerArr.arrVal.size(); ++s) {
+                if (!singerStr.empty()) singerStr += " ";
+                singerStr += singerArr.get(s).get("name").strVal;
+            }
+        }
+
+        std::string normSongName = NormalizeKey(songname);
+        std::string normSinger = NormalizeKey(singerStr);
+
+        int score = 0;
+        if (!normTargetTitle.empty() && normSongName.find(normTargetTitle) != std::string::npos) score += 50;
+        if (!normTargetArtist.empty() && normSinger.find(normTargetArtist) != std::string::npos) score += 50;
+
+        if (score > bestScore) {
+            bestScore = score;
+            fallbackMid = songmid;
+        }
+    }
+
+    return fallbackMid;
+}
+
+inline std::string ParseQQMusicLyricJson(const std::string& resJson) {
+    if (resJson.empty()) return "";
+    size_t p = 0;
+    JsonVal doc = ParseJsonSimple(resJson, p);
+    
+    std::string lyricB64 = doc.get("lyric").strVal;
+    if (lyricB64.empty()) return "";
+
+    std::string decoded = Base64Decode(lyricB64);
+    if (decoded.empty()) return "";
+
+    return UnescapeHtmlEntities(decoded);
+}
+
+inline std::string FetchQQMusicLyrics(const std::string& artist, const std::string& title, const std::string& album = "") {
+    if (artist.empty() && title.empty()) return "";
+    
+    std::string query = artist.empty() ? title : (artist + " " + title);
+    std::string searchUrl = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?p=1&n=5&w=" + UrlEncode(query) + "&format=json";
+    
+    std::string searchJson = HttpGetString(Utf8ToWide(searchUrl));
+    std::string songmid = ParseQQMusicSearchJson(searchJson, artist, title);
+    if (songmid.empty()) return "";
+
+    std::string lyricUrl = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=" + songmid + "&format=json&nobase64=0";
+    std::string lyricJson = HttpGetString(Utf8ToWide(lyricUrl));
+    
+    return ParseQQMusicLyricJson(lyricJson);
+}
+
+inline std::string FetchSyncedLyricsWithFallback(const std::string& artist, const std::string& title, const std::string& album = "") {
+    std::string lyrics = FetchLrcLibSyncedLyrics(artist, title, album);
+    if (!lyrics.empty()) {
+        return lyrics;
+    }
+
+    lyrics = FetchQQMusicLyrics(artist, title, album);
+    if (!lyrics.empty()) {
+        LOG_INFO("[QQ MUSIC MATCHED] Found lyrics for: " + artist + " - " + title);
+        return lyrics;
+    }
+
+    return "";
+}
+
 struct LyricsQuery {
     std::string artist;
     std::string title;
@@ -1142,7 +1239,7 @@ struct LyricsQuery {
 
 inline std::future<std::string> FetchLrcLibSyncedLyricsAsync(const std::string& artist, const std::string& title, const std::string& album) {
     return std::async(std::launch::async, [artist, title, album]() {
-        return FetchLrcLibSyncedLyrics(artist, title, album);
+        return FetchSyncedLyricsWithFallback(artist, title, album);
     });
 }
 
@@ -1161,7 +1258,7 @@ inline std::vector<std::string> BatchFetchLrcLibLyrics(const std::vector<LyricsQ
             while (true) {
                 size_t idx = nextIdx.fetch_add(1);
                 if (idx >= queries.size()) break;
-                results[idx] = FetchLrcLibSyncedLyrics(queries[idx].artist, queries[idx].title, queries[idx].album);
+                results[idx] = FetchSyncedLyricsWithFallback(queries[idx].artist, queries[idx].title, queries[idx].album);
             }
         });
     }

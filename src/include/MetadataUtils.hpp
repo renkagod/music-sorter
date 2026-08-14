@@ -165,6 +165,310 @@ inline std::string ExtractArtistFromFilename(const std::string& fn) {
     return "";
 }
 
+inline bool ContainsCJK(const std::string& str) {
+    for (size_t i = 0; i < str.length(); ) {
+        unsigned char c = (unsigned char)str[i];
+        if (c < 0x80) {
+            i++;
+        } else if ((c & 0xE0) == 0xC0) {
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 < str.length()) {
+                unsigned char c2 = (unsigned char)str[i+1];
+                unsigned char c3 = (unsigned char)str[i+2];
+                uint32_t cp = ((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+                if ((cp >= 0x3040 && cp <= 0x30FF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF)) {
+                    return true;
+                }
+            }
+            i += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            i += 4;
+        } else {
+            i++;
+        }
+    }
+    return false;
+}
+
+inline std::string Base64Decode(const std::string& in) {
+    std::string out;
+    std::vector<int> T(256, -1);
+    for (int i = 0; i < 64; i++) {
+        T["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[i]] = i;
+    }
+    int val = 0, valb = -8;
+    for (unsigned char c : in) {
+        if (T[c] == -1) continue;
+        val = (val << 6) + T[c];
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(char((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+
+inline std::string UnescapeHtmlEntities(const std::string& str) {
+    std::string res;
+    res.reserve(str.size());
+    for (size_t i = 0; i < str.size(); ) {
+        if (str[i] == '&') {
+            size_t semi = str.find(';', i);
+            if (semi != std::string::npos && semi - i <= 10) {
+                std::string entity = str.substr(i, semi - i + 1);
+                if (entity == "&amp;") { res += '&'; i = semi + 1; continue; }
+                if (entity == "&lt;") { res += '<'; i = semi + 1; continue; }
+                if (entity == "&gt;") { res += '>'; i = semi + 1; continue; }
+                if (entity == "&quot;") { res += '"'; i = semi + 1; continue; }
+                if (entity == "&apos;") { res += '\''; i = semi + 1; continue; }
+                if (entity == "&#58;") { res += ':'; i = semi + 1; continue; }
+                if (entity == "&#40;") { res += '('; i = semi + 1; continue; }
+                if (entity == "&#41;") { res += ')'; i = semi + 1; continue; }
+                if (entity == "&#10;") { res += '\n'; i = semi + 1; continue; }
+                if (entity == "&#13;") { res += '\r'; i = semi + 1; continue; }
+                if (entity == "&#32;") { res += ' '; i = semi + 1; continue; }
+                if (entity.size() > 3 && entity[1] == '#') {
+                    try {
+                        int code = 0;
+                        if (entity[2] == 'x' || entity[2] == 'X') {
+                            code = std::stoi(entity.substr(3, entity.size() - 4), nullptr, 16);
+                        } else {
+                            code = std::stoi(entity.substr(2, entity.size() - 3));
+                        }
+                        if (code > 0 && code < 128) {
+                            res += (char)code;
+                            i = semi + 1;
+                            continue;
+                        }
+                    } catch (...) {}
+                }
+            }
+        }
+        res += str[i];
+        i++;
+    }
+    return res;
+}
+
+inline std::string KanaToRomaji(const std::string& input) {
+    if (input.empty()) return "";
+
+    static const std::pair<const char*, const char*> digraphs[] = {
+        {"きゃ", "kya"}, {"きゅ", "kyu"}, {"きょ", "kyo"},
+        {"しゃ", "sha"}, {"しゅ", "shu"}, {"しょ", "sho"},
+        {"ちゃ", "cha"}, {"ちゅ", "chu"}, {"ちょ", "cho"},
+        {"にゃ", "nya"}, {"にゅ", "nyu"}, {"にょ", "nyo"},
+        {"ひゃ", "hya"}, {"ひゅ", "hyu"}, {"ひょ", "hyo"},
+        {"みゃ", "mya"}, {"みゅ", "myu"}, {"みょ", "myo"},
+        {"りゃ", "rya"}, {"りゅ", "ryu"}, {"りょ", "ryo"},
+        {"ぎゃ", "gya"}, {"ぎゅ", "gyu"}, {"ぎょ", "gyo"},
+        {"じゃ", "ja"}, {"じゅ", "ju"}, {"じょ", "jo"},
+        {"ぢゃ", "ja"}, {"ぢゅ", "ju"}, {"ぢょ", "jo"},
+        {"びゃ", "bya"}, {"びゅ", "byu"}, {"びょ", "byo"},
+        {"ぴゃ", "pya"}, {"ぴゅ", "pyu"}, {"ぴょ", "pyo"},
+        {"ふぁ", "fa"}, {"ふぃ", "fi"}, {"ふぇ", "fe"}, {"ふぉ", "fo"},
+        {"てぃ", "ti"}, {"でぃ", "di"}, {"どぅ", "du"},
+        {"うぃ", "wi"}, {"うぇ", "we"}, {"うぉ", "wo"},
+        {"ゔぁ", "va"}, {"ゔぃ", "vi"}, {"ゔ", "vu"}, {"ゔぇ", "ve"}, {"ゔぉ", "vo"},
+        {"じぇ", "je"}, {"ちぇ", "che"}, {"しぇ", "she"},
+        {"キャ", "kya"}, {"キュ", "kyu"}, {"キョ", "kyo"},
+        {"シャ", "sha"}, {"シュ", "shu"}, {"ショ", "sho"},
+        {"チャ", "cha"}, {"チュ", "chu"}, {"チョ", "cho"},
+        {"ニャ", "nya"}, {"ニュ", "nyu"}, {"ニョ", "nyo"},
+        {"ヒャ", "hya"}, {"ヒュ", "hyu"}, {"ヒョ", "hyo"},
+        {"ミャ", "mya"}, {"ミュ", "myu"}, {"ミョ", "myo"},
+        {"リャ", "rya"}, {"リュ", "ryu"}, {"リョ", "ryo"},
+        {"ギャ", "gya"}, {"ギュ", "gyu"}, {"ギョ", "gyo"},
+        {"ジャ", "ja"}, {"ジュ", "ju"}, {"ジョ", "jo"},
+        {"ヂャ", "ja"}, {"ヂュ", "ju"}, {"ヂョ", "jo"},
+        {"ビャ", "bya"}, {"ビュ", "byu"}, {"ビョ", "byo"},
+        {"ピャ", "pya"}, {"ピュ", "pyu"}, {"ピョ", "pyo"},
+        {"ファ", "fa"}, {"フィ", "fi"}, {"フェ", "fe"}, {"フォ", "fo"},
+        {"ティ", "ti"}, {"ディ", "di"}, {"ドゥ", "du"},
+        {"ウィ", "wi"}, {"ウェ", "we"}, {"ウォ", "wo"},
+        {"ヴァ", "va"}, {"ヴィ", "vi"}, {"ヴ", "vu"}, {"ヴェ", "ve"}, {"ヴォ", "vo"},
+        {"ジェ", "je"}, {"チェ", "che"}, {"シェ", "she"}
+    };
+
+    static const std::pair<const char*, const char*> monographs[] = {
+        {"あ", "a"}, {"い", "i"}, {"う", "u"}, {"え", "e"}, {"お", "o"},
+        {"か", "ka"}, {"き", "ki"}, {"く", "ku"}, {"け", "ke"}, {"こ", "ko"},
+        {"さ", "sa"}, {"し", "shi"}, {"す", "su"}, {"せ", "se"}, {"そ", "so"},
+        {"た", "ta"}, {"ち", "chi"}, {"つ", "tsu"}, {"て", "te"}, {"と", "to"},
+        {"な", "na"}, {"に", "ni"}, {"ぬ", "nu"}, {"ね", "ne"}, {"の", "no"},
+        {"は", "ha"}, {"ひ", "hi"}, {"ふ", "fu"}, {"へ", "he"}, {"ほ", "ho"},
+        {"ま", "ma"}, {"み", "mi"}, {"む", "mu"}, {"め", "me"}, {"も", "mo"},
+        {"や", "ya"}, {"ゆ", "yu"}, {"よ", "yo"},
+        {"ら", "ra"}, {"り", "ri"}, {"る", "ru"}, {"れ", "re"}, {"ろ", "ro"},
+        {"わ", "wa"}, {"ゐ", "wi"}, {"ゑ", "we"}, {"を", "wo"},
+        {"ん", "n"},
+        {"が", "ga"}, {"ぎ", "gi"}, {"ぐ", "gu"}, {"げ", "ge"}, {"ご", "go"},
+        {"ざ", "za"}, {"じ", "ji"}, {"ず", "zu"}, {"ぜ", "ze"}, {"ぞ", "zo"},
+        {"だ", "da"}, {"ぢ", "ji"}, {"づ", "zu"}, {"で", "de"}, {"ど", "do"},
+        {"ば", "ba"}, {"び", "bi"}, {"ぶ", "bu"}, {"べ", "be"}, {"ぼ", "bo"},
+        {"ぱ", "pa"}, {"ぴ", "pi"}, {"ぷ", "pu"}, {"ぺ", "pe"}, {"ぽ", "po"},
+        {"ぁ", "a"}, {"ぃ", "i"}, {"ぅ", "u"}, {"ぇ", "e"}, {"ぉ", "o"},
+        {"ゎ", "wa"},
+        {"ア", "a"}, {"イ", "i"}, {"ウ", "u"}, {"エ", "e"}, {"オ", "o"},
+        {"カ", "ka"}, {"キ", "ki"}, {"ク", "ku"}, {"ケ", "ke"}, {"コ", "ko"},
+        {"サ", "sa"}, {"シ", "shi"}, {"ス", "su"}, {"セ", "se"}, {"ソ", "so"},
+        {"タ", "ta"}, {"チ", "chi"}, {"ツ", "tsu"}, {"テ", "te"}, {"ト", "to"},
+        {"ナ", "na"}, {"ニ", "ni"}, {"ヌ", "nu"}, {"ネ", "ne"}, {"ノ", "no"},
+        {"ハ", "ha"}, {"ヒ", "hi"}, {"フ", "fu"}, {"ヘ", "he"}, {"ホ", "ho"},
+        {"マ", "ma"}, {"ミ", "mi"}, {"ム", "mu"}, {"メ", "me"}, {"モ", "mo"},
+        {"ヤ", "ya"}, {"ユ", "yu"}, {"ヨ", "yo"},
+        {"ラ", "ra"}, {"リ", "ri"}, {"ル", "ru"}, {"レ", "re"}, {"ロ", "ro"},
+        {"ワ", "wa"}, {"ヰ", "wi"}, {"ヱ", "we"}, {"ヲ", "wo"},
+        {"ン", "n"},
+        {"ガ", "ga"}, {"ギ", "gi"}, {"グ", "gu"}, {"ゲ", "ge"}, {"ゴ", "go"},
+        {"ザ", "za"}, {"ジ", "ji"}, {"ズ", "zu"}, {"ゼ", "ze"}, {"ゾ", "zo"},
+        {"ダ", "da"}, {"ヂ", "ji"}, {"ヅ", "zu"}, {"デ", "de"}, {"ド", "do"},
+        {"バ", "ba"}, {"ビ", "bi"}, {"ブ", "bu"}, {"ベ", "be"}, {"ボ", "bo"},
+        {"パ", "pa"}, {"ピ", "pi"}, {"プ", "pu"}, {"ペ", "pe"}, {"ポ", "po"},
+        {"ァ", "a"}, {"ィ", "i"}, {"ゥ", "u"}, {"ェ", "e"}, {"ォ", "o"},
+        {"ヮ", "wa"}, {"ー", "-"}
+    };
+
+    std::string result;
+    size_t i = 0;
+    while (i < input.size()) {
+        if ((i + 3 <= input.size() && input.compare(i, 3, "っ") == 0) ||
+            (i + 3 <= input.size() && input.compare(i, 3, "ッ") == 0)) {
+            i += 3;
+            bool nextMatched = false;
+            for (const auto& kv : digraphs) {
+                size_t klen = strlen(kv.first);
+                if (i + klen <= input.size() && input.compare(i, klen, kv.first) == 0) {
+                    char cons = kv.second[0];
+                    if (cons != 'a' && cons != 'i' && cons != 'u' && cons != 'e' && cons != 'o') {
+                        result += (cons == 'c' ? 't' : cons);
+                    }
+                    result += kv.second;
+                    i += klen;
+                    nextMatched = true;
+                    break;
+                }
+            }
+            if (!nextMatched) {
+                for (const auto& kv : monographs) {
+                    size_t klen = strlen(kv.first);
+                    if (i + klen <= input.size() && input.compare(i, klen, kv.first) == 0) {
+                        char cons = kv.second[0];
+                        if (cons != 'a' && cons != 'i' && cons != 'u' && cons != 'e' && cons != 'o') {
+                            result += (cons == 'c' ? 't' : cons);
+                        }
+                        result += kv.second;
+                        i += klen;
+                        nextMatched = true;
+                        break;
+                    }
+                }
+            }
+            if (!nextMatched) {
+                result += "tsu";
+            }
+            continue;
+        }
+
+        bool matched = false;
+        for (const auto& kv : digraphs) {
+            size_t klen = strlen(kv.first);
+            if (i + klen <= input.size() && input.compare(i, klen, kv.first) == 0) {
+                result += kv.second;
+                i += klen;
+                matched = true;
+                break;
+            }
+        }
+        if (matched) continue;
+
+        for (const auto& kv : monographs) {
+            size_t klen = strlen(kv.first);
+            if (i + klen <= input.size() && input.compare(i, klen, kv.first) == 0) {
+                result += kv.second;
+                i += klen;
+                matched = true;
+                break;
+            }
+        }
+        if (matched) continue;
+
+        result += input[i];
+        i++;
+    }
+
+    return result;
+}
+
+inline std::string RomanizeJapaneseLyrics(const std::string& text) {
+    if (text.empty()) return "";
+
+    std::istringstream stream(text);
+    std::string line;
+    std::string result;
+
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+
+        std::string tagPrefix;
+        std::string lineContent = line;
+        if (!line.empty() && line.front() == '[') {
+            size_t closeB = line.find(']');
+            if (closeB != std::string::npos && closeB < 15) {
+                tagPrefix = line.substr(0, closeB + 1);
+                lineContent = line.substr(closeB + 1);
+            }
+        }
+
+        // Replace furigana in parentheses with the reading inside parentheses
+        std::string processedLine;
+        size_t p = 0;
+        while (p < lineContent.size()) {
+            size_t openP = lineContent.find("(", p);
+            size_t openFullP = lineContent.find("（", p);
+            size_t nextOpen = (std::min)(openP, openFullP);
+
+            if (nextOpen == std::string::npos) {
+                processedLine += lineContent.substr(p);
+                break;
+            }
+
+            size_t openLen = (nextOpen == openFullP) ? 3 : 1;
+            size_t closeP = lineContent.find(openLen == 3 ? "）" : ")", nextOpen + openLen);
+            if (closeP != std::string::npos && closeP > nextOpen + openLen) {
+                std::string inside = lineContent.substr(nextOpen + openLen, closeP - (nextOpen + openLen));
+                if (ContainsCJK(inside)) {
+                    size_t kStart = nextOpen;
+                    while (kStart > p) {
+                        unsigned char c = (unsigned char)lineContent[kStart - 1];
+                        if (c < 0x80) break;
+                        if (kStart >= 3) {
+                            kStart -= 3;
+                        } else {
+                            break;
+                        }
+                    }
+                    processedLine += lineContent.substr(p, kStart - p);
+                    processedLine += inside;
+                    p = closeP + (openLen == 3 ? 3 : 1);
+                    continue;
+                }
+            }
+
+            processedLine += lineContent.substr(p, nextOpen + openLen - p);
+            p = nextOpen + openLen;
+        }
+
+        std::string romLine = KanaToRomaji(processedLine);
+        if (!result.empty()) result += "\n";
+        result += tagPrefix + romLine;
+    }
+
+    return result;
+}
+
 inline std::string RomajiToKatakana(const std::string& input) {
     if (input.empty()) return "";
     std::string lower = input;

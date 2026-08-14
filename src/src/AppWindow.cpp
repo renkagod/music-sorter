@@ -3206,20 +3206,18 @@ void AppWindow::RunMessageLoop() {
                                 if (!t.empty()) strncpy_s(itm.titleBuf, t.c_str(), sizeof(itm.titleBuf) - 1);
                             }
 
-                            // Switch unsynced lyrics variant if track is using unsynced fallback lyrics
-                            if (!itm.hasSyncedLyrics) {
-                                std::string ly;
-                                if (langCode == "RO") {
-                                    ly = itm.lyricsRomaji.empty() ? (itm.lyricsEnglish.empty() ? itm.lyricsOriginal : itm.lyricsEnglish) : itm.lyricsRomaji;
-                                } else if (langCode == "EN") {
-                                    ly = itm.lyricsEnglish.empty() ? (itm.lyricsRomaji.empty() ? itm.lyricsOriginal : itm.lyricsRomaji) : itm.lyricsEnglish;
-                                } else if (langCode == "JP") {
-                                    ly = itm.lyricsOriginal.empty() ? (itm.lyricsRomaji.empty() ? itm.lyricsEnglish : itm.lyricsRomaji) : itm.lyricsOriginal;
-                                }
-                                if (!ly.empty()) {
-                                    strncpy_s(itm.lyricsBuf, ly.c_str(), sizeof(itm.lyricsBuf) - 1);
-                                    itm.hasLyrics = true;
-                                }
+                            // Switch lyrics variant if available
+                            std::string ly;
+                            if (langCode == "RO") {
+                                ly = itm.lyricsRomaji.empty() ? (itm.lyricsEnglish.empty() ? itm.lyricsOriginal : itm.lyricsEnglish) : itm.lyricsRomaji;
+                            } else if (langCode == "EN") {
+                                ly = itm.lyricsEnglish.empty() ? (itm.lyricsRomaji.empty() ? itm.lyricsOriginal : itm.lyricsRomaji) : itm.lyricsEnglish;
+                            } else if (langCode == "JP") {
+                                ly = itm.lyricsOriginal.empty() ? (itm.lyricsRomaji.empty() ? itm.lyricsEnglish : itm.lyricsRomaji) : itm.lyricsOriginal;
+                            }
+                            if (!ly.empty()) {
+                                strncpy_s(itm.lyricsBuf, ly.c_str(), sizeof(itm.lyricsBuf) - 1);
+                                itm.hasLyrics = true;
                             }
                         }
                     }
@@ -4406,12 +4404,16 @@ void AppWindow::StartTagScan() {
                                 lrcLyrics = FetchThwikiLrc(item.lyricsOriginal);
                             }
                             if (lrcLyrics.empty()) {
-                                lrcLyrics = FetchLrcLibSyncedLyrics(trackArtist, trackTitle, trackAlbum);
+                                lrcLyrics = FetchSyncedLyricsWithFallback(trackArtist, trackTitle, trackAlbum);
                             }
                             if (!lrcLyrics.empty()) {
                                 item.hasLyrics = true;
-                                item.hasSyncedLyrics = true;
+                                item.hasSyncedLyrics = (lrcLyrics.find("[0") != std::string::npos || lrcLyrics.find("[1") != std::string::npos);
                                 strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+                                if (item.lyricsOriginal.empty() && ContainsCJK(lrcLyrics)) {
+                                    item.lyricsOriginal = lrcLyrics;
+                                    item.lyricsRomaji = RomanizeJapaneseLyrics(lrcLyrics);
+                                }
                             } else if (item.lyricsBuf[0] == '\0') {
                                 std::string bestFallback = PickBestLyrics(item.lyricsRomaji, item.lyricsEnglish, item.lyricsOriginal);
                                 if (!bestFallback.empty()) {
