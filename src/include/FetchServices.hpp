@@ -5,6 +5,8 @@
 #include <mutex>
 #include <chrono>
 #include <thread>
+#include <future>
+#include <atomic>
 #include <regex>
 #include <filesystem>
 #include <windows.h>
@@ -911,6 +913,45 @@ inline std::string FetchLrcLibSyncedLyrics(const std::string& artist, const std:
 
     std::string json = HttpGetString(Utf8ToWide(url));
     return ParseLrcLibLyricsJson(json);
+}
+
+struct LyricsQuery {
+    std::string artist;
+    std::string title;
+    std::string album;
+};
+
+inline std::future<std::string> FetchLrcLibSyncedLyricsAsync(const std::string& artist, const std::string& title, const std::string& album) {
+    return std::async(std::launch::async, [artist, title, album]() {
+        return FetchLrcLibSyncedLyrics(artist, title, album);
+    });
+}
+
+inline std::vector<std::string> BatchFetchLrcLibLyrics(const std::vector<LyricsQuery>& queries, unsigned int maxConcurrency = 6) {
+    std::vector<std::string> results(queries.size());
+    if (queries.empty()) return results;
+
+    unsigned int numWorkers = (std::min)((unsigned int)queries.size(), maxConcurrency);
+    if (numWorkers == 0) numWorkers = 1;
+
+    std::atomic<size_t> nextIdx{ 0 };
+    std::vector<std::thread> workers;
+
+    for (unsigned int w = 0; w < numWorkers; ++w) {
+        workers.emplace_back([&]() {
+            while (true) {
+                size_t idx = nextIdx.fetch_add(1);
+                if (idx >= queries.size()) break;
+                results[idx] = FetchLrcLibSyncedLyrics(queries[idx].artist, queries[idx].title, queries[idx].album);
+            }
+        });
+    }
+
+    for (auto& worker : workers) {
+        if (worker.joinable()) worker.join();
+    }
+
+    return results;
 }
 
 inline std::string ExtractMusicBrainzUuid(const std::string& inputUrl) {

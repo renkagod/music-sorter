@@ -5,6 +5,7 @@
 #include "../include/AudioEngine.hpp"
 #include "../include/DatabaseManager.hpp"
 #include "../include/Logger.hpp"
+#include "../include/FetchServices.hpp"
 
 #include "../third_party/imgui/imgui.h"
 #include "../third_party/imgui/imgui_internal.h"
@@ -42,15 +43,6 @@ extern std::string g_AcoustIdKey;
 extern std::string g_DiscogsToken;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-
-static std::string WideToUtf8Str(const wchar_t* wstr) {
-    if (!wstr) return "";
-    int len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
-    if (len <= 0) return "";
-    std::string result(len - 1, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wstr, -1, result.data(), len, NULL, NULL);
-    return result;
-}
 
 static std::string BrowseFolderDialog(HWND owner, const std::string& title) {
     HRESULT hrCo = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
@@ -241,19 +233,6 @@ static void LoadFolderSettings() {
     }
 }
 
-struct MBTrackEntry {
-    int position = 0;
-    std::string title;
-    std::string titleRomaji;
-    std::string titleEnglish;
-    std::string titleJapanese;
-    std::string artist;
-    std::string artistRomaji;
-    std::string artistEnglish;
-    std::string artistJapanese;
-    int lengthMs = 0;
-};
-
 struct AlbumMetadataCache {
     std::string releaseGroupMbId;
     std::string firstReleaseDate;
@@ -270,40 +249,6 @@ struct AlbumMetadataCache {
     bool isFetched = false;
     MatchTier matchTier = MatchTier::Niche_Local;
 };
-
-static std::string PickBestName(const std::string& romaji, const std::string& english, const std::string& japanese, const std::string& def) {
-    if (!romaji.empty()) return romaji;
-    if (!english.empty()) return english;
-    if (!japanese.empty()) return japanese;
-    return def;
-}
-
-static bool ContainsCJK(const std::string& str) {
-    for (size_t i = 0; i < str.length(); ) {
-        unsigned char c = (unsigned char)str[i];
-        if (c < 0x80) {
-            i++;
-        } else if ((c & 0xE0) == 0xC0) {
-            i += 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            if (i + 2 < str.length()) {
-                unsigned char c2 = (unsigned char)str[i+1];
-                unsigned char c3 = (unsigned char)str[i+2];
-                uint32_t cp = ((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
-                // Hiragana: 0x3040-0x309F, Katakana: 0x30A0-0x30FF, CJK: 0x4E00-0x9FFF, CJK Ext A: 0x3400-0x4DBF
-                if ((cp >= 0x3040 && cp <= 0x30FF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF)) {
-                    return true;
-                }
-            }
-            i += 3;
-        } else if ((c & 0xF8) == 0xF0) {
-            i += 4;
-        } else {
-            i++;
-        }
-    }
-    return false;
-}
 
 static const char* GetTierName(MatchTier tier) {
     switch (tier) {
@@ -369,327 +314,6 @@ static void CopyToClipboardWin32(const std::string& text) {
     } else {
         GlobalFree(hMem);
     }
-}
-
-static std::string CleanMetadataString(const std::string& str) {
-    if (str.empty()) return "";
-    std::string res;
-    res.reserve(str.size());
-    int bLevel = 0;
-    for (size_t i = 0; i < str.size(); ++i) {
-        char c = str[i];
-        if (c == '[' || c == '(' || c == '{') { bLevel++; continue; }
-        if (c == ']' || c == ')' || c == '}') { if (bLevel > 0) bLevel--; continue; }
-        if (bLevel == 0) res.push_back(c);
-    }
-
-    size_t first = res.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) return "";
-    size_t last = res.find_last_not_of(" \t\r\n");
-    return res.substr(first, (last - first + 1));
-}
-
-static std::string SanitizeForFilename(const std::string& str) {
-    std::string res;
-    res.reserve(str.size());
-    for (char c : str) {
-        if (c == '<' || c == '>' || c == ':' || c == '"' || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
-            res.push_back('_');
-        } else if (c == '\t' || c == '\r' || c == '\n') {
-            res.push_back(' ');
-        } else {
-            res.push_back(c);
-        }
-    }
-    size_t first = res.find_first_not_of(" ");
-    if (first == std::string::npos) return "_";
-    size_t last = res.find_last_not_of(" .");
-    return res.substr(first, (last - first + 1));
-}
-
-static std::string EscapeLuceneQuery(const std::string& str) {
-    std::string res;
-    res.reserve(str.size() * 2);
-    for (char c : str) {
-        if (c == ';' || c == '+' || c == '-' || c == '&' || c == '|' || c == '!' || 
-            c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']' || 
-            c == '^' || c == '"' || c == '~' || c == '*' || c == '?' || c == ':' || 
-            c == '\\' || c == '/') {
-            res.push_back(' ');
-        } else {
-            res.push_back(c);
-        }
-    }
-    size_t first = res.find_first_not_of(" \t");
-    if (first == std::string::npos) return "";
-    size_t last = res.find_last_not_of(" \t");
-    return res.substr(first, (last - first + 1));
-}
-
-static std::string ExtractYearFromString(const std::string& str) {
-    if (str.size() < 4) return "";
-    for (size_t i = 0; i <= str.size() - 4; ++i) {
-        if (std::isdigit((unsigned char)str[i]) &&
-            std::isdigit((unsigned char)str[i + 1]) &&
-            std::isdigit((unsigned char)str[i + 2]) &&
-            std::isdigit((unsigned char)str[i + 3])) {
-            int y = std::stoi(str.substr(i, 4));
-            if (y >= 1900 && y <= 2099) {
-                return str.substr(i, 4);
-            }
-        }
-    }
-    return "";
-}
-
-static std::string ExtractCatalogNumber(const std::string& str) {
-    if (str.empty()) return "";
-    std::regex catRegex(R"([\[\(]([A-Za-z0-9]{2,12}[-_][A-Za-z0-9~_\-\.]{1,16})[\]\)])");
-    std::smatch match;
-    if (std::regex_search(str, match, catRegex)) {
-        return match.str(1);
-    }
-    return "";
-}
-
-static std::string CleanAlbumTitle(const std::string& str) {
-    if (str.empty()) return "";
-    std::string res = CleanMetadataString(str);
-    std::regex datePrefixRegex(R"(^\s*(\d{4}[.-]\d{2}[.-]\d{2}|\d{4}[.-]\d{2}|\d{4})\s*)");
-    res = std::regex_replace(res, datePrefixRegex, "");
-    size_t first = res.find_first_not_of(" \t\r\n.-_");
-    if (first == std::string::npos) return "";
-    size_t last = res.find_last_not_of(" \t\r\n.-_");
-    return res.substr(first, (last - first + 1));
-}
-
-static std::string ExtractArtistFromFilename(const std::string& fn) {
-    if (fn.empty()) return "";
-    std::regex artBracketRegex(R"(\[[^\]]+\])");
-    auto words_begin = std::sregex_iterator(fn.begin(), fn.end(), artBracketRegex);
-    auto words_end = std::sregex_iterator();
-    for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
-        std::smatch m = *i;
-        std::string val = m.str();
-        if (val.size() > 2) {
-            val = val.substr(1, val.size() - 2);
-            if (val.find('-') != std::string::npos && val.size() <= 10 && std::isdigit((unsigned char)val.back())) {
-                continue;
-            }
-            std::string valLower = val;
-            std::transform(valLower.begin(), valLower.end(), valLower.begin(), ::tolower);
-            if (valLower.find("reitaisai") != std::string::npos || valLower.find("comic market") != std::string::npos || 
-                valLower.find("m3") != std::string::npos || valLower.find("c7") == 0 || valLower.find("c8") == 0 || valLower.find("c9") == 0 || valLower.find("c10") == 0) {
-                continue;
-            }
-            return val;
-        }
-    }
-    return "";
-}
-
-static std::string RomajiToKatakana(const std::string& input) {
-    if (input.empty()) return "";
-    std::string lower = input;
-    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-
-    static const std::pair<const char*, const char*> table[] = {
-        {"tsu", "ツ"}, {"chi", "チ"}, {"shi", "シ"},
-        {"kya", "キャ"}, {"kyu", "キュ"}, {"kyo", "キョ"},
-        {"sha", "シャ"}, {"shu", "シュ"}, {"sho", "ショ"},
-        {"cha", "チャ"}, {"chu", "チュ"}, {"cho", "チョ"},
-        {"nya", "ニャ"}, {"nyu", "ニュ"}, {"nyo", "ニョ"},
-        {"hya", "ヒャ"}, {"hyu", "ヒュ"}, {"hyo", "ヒョ"},
-        {"mya", "ミャ"}, {"myu", "ミュ"}, {"myo", "ミョ"},
-        {"rya", "リャ"}, {"ryu", "リュ"}, {"ryo", "リョ"},
-        {"gya", "ギャ"}, {"gyu", "ギュ"}, {"gyo", "ギョ"},
-        {"ja", "ジャ"}, {"ju", "ジュ"}, {"jo", "ジョ"},
-        {"bya", "ビャ"}, {"byu", "ビュ"}, {"byo", "ビョ"},
-        {"pya", "ピャ"}, {"pyu", "ピュ"}, {"pyo", "ピョ"},
-        {"ka", "カ"}, {"ki", "キ"}, {"ku", "ク"}, {"ke", "ケ"}, {"ko", "コ"},
-        {"sa", "サ"}, {"si", "シ"}, {"su", "ス"}, {"se", "セ"}, {"so", "ソ"},
-        {"ta", "タ"}, {"ti", "チ"}, {"tu", "ツ"}, {"te", "テ"}, {"to", "ト"},
-        {"na", "ナ"}, {"ni", "ニ"}, {"nu", "ヌ"}, {"ne", "ネ"}, {"no", "ノ"},
-        {"ha", "ハ"}, {"hi", "ヒ"}, {"fu", "フ"}, {"hu", "フ"}, {"he", "ヘ"}, {"ho", "ホ"},
-        {"ma", "マ"}, {"mi", "ミ"}, {"mu", "ム"}, {"me", "メ"}, {"mo", "モ"},
-        {"ya", "ヤ"}, {"yu", "ユ"}, {"yo", "ヨ"},
-        {"ra", "ラ"}, {"ri", "リ"}, {"ru", "ル"}, {"re", "レ"}, {"ro", "ロ"},
-        {"wa", "ワ"}, {"wo", "ヲ"},
-        {"ga", "ガ"}, {"gi", "ギ"}, {"gu", "グ"}, {"ge", "ゲ"}, {"go", "ゴ"},
-        {"za", "ザ"}, {"zi", "ジ"}, {"zu", "ズ"}, {"ze", "ゼ"}, {"zo", "ゾ"},
-        {"da", "ダ"}, {"di", "ヂ"}, {"du", "ヅ"}, {"de", "デ"}, {"do", "ド"},
-        {"ba", "バ"}, {"bi", "ビ"}, {"bu", "ブ"}, {"be", "ベ"}, {"bo", "ボ"},
-        {"pa", "パ"}, {"pi", "ピ"}, {"pu", "プ"}, {"pe", "ペ"}, {"po", "ポ"},
-        {"a", "ア"}, {"i", "イ"}, {"u", "ウ"}, {"e", "エ"}, {"o", "オ"},
-        {"n", "ン"}
-    };
-
-    std::string result;
-    size_t i = 0;
-    while (i < lower.size()) {
-        bool matched = false;
-        for (const auto& kv : table) {
-            size_t len = strlen(kv.first);
-            if (i + len <= lower.size() && lower.compare(i, len, kv.first) == 0) {
-                result += kv.second;
-                i += len;
-                matched = true;
-                break;
-            }
-        }
-        if (!matched) {
-            result += input[i];
-            i++;
-        }
-}
-    return result;
-}
-
-static std::string NormalizeKey(const std::string& text) {
-    if (text.empty()) return "";
-    std::string result;
-    result.reserve(text.size());
-
-    int bLevel = 0;
-    for (size_t i = 0; i < text.size(); ++i) {
-        unsigned char c = (unsigned char)text[i];
-        if (c == '[' || c == '(' || c == '{') { bLevel++; continue; }
-        if (c == ']' || c == ')' || c == '}') { if (bLevel > 0) bLevel--; continue; }
-        if (bLevel > 0) continue;
-
-        if (c <= 32 || c == '-' || c == '_' || c == '/' || c == '\\' || c == ',' || c == '.' || c == '~') continue;
-
-        if (c == 0xEF && i + 2 < text.size() && (unsigned char)text[i + 1] == 0xBD && (unsigned char)text[i + 2] == 0x9E) {
-            i += 2;
-            continue;
-        }
-
-        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
-        result.push_back((char)c);
-    }
-    return result;
-}
-
-static std::wstring Utf8ToWide(const std::string& str) {
-    if (str.empty()) return L"";
-    int len = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), NULL, 0);
-    std::wstring wstr(len, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), &wstr[0], len);
-    return wstr;
-}
-
-static std::string WideToUtf8(const std::wstring& wstr) {
-    if (wstr.empty()) return "";
-    int len = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.length(), NULL, 0, NULL, NULL);
-    std::string str(len, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.length(), &str[0], len, NULL, NULL);
-    return str;
-}
-
-static std::string UrlEncode(const std::string& str) {
-    std::ostringstream escaped;
-    escaped.fill('0');
-    escaped << std::hex;
-    for (char c : str) {
-        if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~') {
-            escaped << c;
-        } else {
-            escaped << '%' << std::setw(2) << std::uppercase << (int)(unsigned char)c;
-        }
-    }
-    return escaped.str();
-}
-
-// Mathematical Laplacian High-Frequency Sharpness Analysis
-static double CalculatePerceptualSharpness(const unsigned char* data, size_t size) {
-    if (!data || size == 0) return 0.0;
-    int width = 0, height = 0, channels = 0;
-    unsigned char* gray = stbi_load_from_memory(data, (int)size, &width, &height, &channels, 1);
-    if (!gray || width < 4 || height < 4) return 0.0;
-
-    double sum = 0.0;
-    double sumSq = 0.0;
-    size_t count = 0;
-
-    for (int y = 1; y < height - 1; y += 2) {
-        for (int x = 1; x < width - 1; x += 2) {
-            int center = gray[y * width + x];
-            int top    = gray[(y - 1) * width + x];
-            int bottom = gray[(y + 1) * width + x];
-            int left   = gray[y * width + (x - 1)];
-            int right  = gray[y * width + (x + 1)];
-
-            double lap = (double)(top + bottom + left + right - 4 * center);
-            sum += lap;
-            sumSq += lap * lap;
-            count++;
-        }
-    }
-
-    stbi_image_free(gray);
-
-    if (count == 0) return 0.0;
-    double mean = sum / count;
-    double variance = (sumSq / count) - (mean * mean);
-    return variance;
-}
-
-// Multi-Factor Image Quality Score: Sharpness * Resolution * sqrt(FileSizeKB) / (1 + 3 * JpegBlockiness8x8)
-static long long CalculateImageQualityScore(const unsigned char* data, size_t size, int width, int height) {
-    if (!data || size == 0 || width <= 0 || height <= 0) return 0;
-
-    double sharpness = CalculatePerceptualSharpness(data, size);
-
-    // Compute 8x8 JPEG Grid Discontinuity Penalty (Blockiness)
-    int w = 0, h = 0, c = 0;
-    unsigned char* gray = stbi_load_from_memory(data, (int)size, &w, &h, &c, 1);
-    double blockiness = 0.0;
-    if (gray && w >= 16 && h >= 16) {
-        double gridDiff = 0.0, nonGridDiff = 0.0;
-        size_t gridCount = 0, nonGridCount = 0;
-        for (int y = 1; y < h - 1; y += 2) {
-            bool isRowGrid = (y % 8 == 0);
-            for (int x = 1; x < w - 1; x += 2) {
-                bool isColGrid = (x % 8 == 0);
-                int diffH = std::abs((int)gray[y * w + x] - (int)gray[y * w + (x + 1)]);
-                int diffV = std::abs((int)gray[y * w + x] - (int)gray[(y + 1) * w + x]);
-                if (isColGrid) { gridDiff += diffH; gridCount++; }
-                else { nonGridDiff += diffH; nonGridCount++; }
-                if (isRowGrid) { gridDiff += diffV; gridCount++; }
-                else { nonGridDiff += diffV; nonGridCount++; }
-            }
-        }
-        stbi_image_free(gray);
-
-        if (gridCount > 0 && nonGridCount > 0 && nonGridDiff > 0.0) {
-            double ratio = (gridDiff / gridCount) / ((nonGridDiff / nonGridCount) + 0.001);
-            if (ratio > 1.0) blockiness = (ratio - 1.0);
-        }
-    } else if (gray) {
-        stbi_image_free(gray);
-    }
-
-    double sizeKB = (double)size / 1024.0;
-    double sizeFactor = std::sqrt(sizeKB + 1.0);
-    double penalty = 1.0 + 3.0 * blockiness;
-
-    double finalScore = (sharpness * (double)width * (double)height * sizeFactor) / penalty;
-    return (long long)finalScore;
-}
-
-// Helper: Endian Conversions & Vector Writing
-static void WriteUint32LE(std::vector<unsigned char>& buf, uint32_t val) {
-    buf.push_back((unsigned char)(val & 0xFF));
-    buf.push_back((unsigned char)((val >> 8) & 0xFF));
-    buf.push_back((unsigned char)((val >> 16) & 0xFF));
-    buf.push_back((unsigned char)((val >> 24) & 0xFF));
-}
-
-static void WriteUint32BE(std::vector<unsigned char>& buf, uint32_t val) {
-    buf.push_back((unsigned char)((val >> 24) & 0xFF));
-    buf.push_back((unsigned char)((val >> 16) & 0xFF));
-    buf.push_back((unsigned char)((val >> 8) & 0xFF));
-    buf.push_back((unsigned char)(val & 0xFF));
 }
 
 // Native FLAC Vorbis Comment & Picture Block Metadata Inserter
@@ -825,20 +449,6 @@ static bool WriteFlacTagsAndPicture(const std::string& filePath, const std::stri
     return true;
 }
 
-// Helper: Convert UTF-8 std::string to UTF-16LE byte payload with BOM (0xFF 0xFE) for ID3v2.3
-static std::vector<unsigned char> StringToUtf16LE(const std::string& utf8Str) {
-    std::wstring wstr = Utf8ToWide(utf8Str);
-    std::vector<unsigned char> res;
-    res.push_back(0xFF); // BOM
-    res.push_back(0xFE);
-    for (wchar_t wc : wstr) {
-        uint16_t val = (uint16_t)wc;
-        res.push_back((unsigned char)(val & 0xFF));
-        res.push_back((unsigned char)((val >> 8) & 0xFF));
-    }
-    return res;
-}
-
 // Native MP3 ID3v2.3 Tag & Picture Inserter (Strict Windows Media Player & Windows Explorer Compatible!)
 static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::string& artist, const std::string& album, const std::string& title, const std::string& trackNo, const std::string& dateStr, const std::string& lyrics, const std::vector<unsigned char>& coverBytes) {
     std::ifstream fIn(filePath, std::ios::binary | std::ios::ate);
@@ -940,6 +550,7 @@ static bool WriteMp3TagsAndPicture(const std::string& filePath, const std::strin
 }
 
 static bool ConvertFlacToMp3(const std::string& inputFlac, const std::string& outputMp3) {
+    using namespace FetchServices;
     std::string cmd = "ffmpeg -v quiet -y -i \"" + inputFlac + "\" -ab 320k -c:v mjpeg -id3v2_version 3 \"" + outputMp3 + "\"";
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -958,385 +569,7 @@ static bool ConvertFlacToMp3(const std::string& inputFlac, const std::string& ou
     return false;
 }
 
-// Robust HTTP POST for AcoustID Fingerprint Lookup (Fixes HTTP 414 Request-URI Too Long!)
-static std::string AcoustIdHttpPost(const std::string& postData) {
-    std::vector<unsigned char> result;
-    HINTERNET hNet = InternetOpenW(L"MusicSorterApp/1.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-    if (!hNet) return "";
-
-    HINTERNET hConnect = InternetConnectW(hNet, L"api.acoustid.org", INTERNET_DEFAULT_HTTPS_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
-    if (hConnect) {
-        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
-        HINTERNET hRequest = HttpOpenRequestW(hConnect, L"POST", L"/v2/lookup", NULL, NULL, NULL, flags, 0);
-        if (hRequest) {
-            std::wstring headers = L"Content-Type: application/x-www-form-urlencoded\r\n";
-            BOOL sent = HttpSendRequestW(hRequest, headers.c_str(), (DWORD)headers.length(), (LPVOID)postData.c_str(), (DWORD)postData.length());
-            if (sent) {
-                unsigned char buffer[16384];
-                DWORD bytesRead = 0;
-                while (InternetReadFile(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-                    result.insert(result.end(), buffer, buffer + bytesRead);
-                }
-            } else {
-                LOG_INFO("[ACOUSTID POST ERROR] HttpSendRequest failed with error: " + std::to_string(GetLastError()));
-            }
-            InternetCloseHandle(hRequest);
-        }
-        InternetCloseHandle(hConnect);
-    }
-    InternetCloseHandle(hNet);
-    return std::string((char*)result.data(), result.size());
-}
-
-// MusicBrainz API rate limit is 1 request/sec per IP. Enforce this proactively
-// by sleeping before each MB request so we don't trip 503 throttling.
-// https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting
-static std::mutex g_mbThrottleMutex;
-static std::chrono::steady_clock::time_point g_lastMbRequestTime;
-static void MusicBrainzThrottle() {
-    std::lock_guard<std::mutex> lock(g_mbThrottleMutex);
-    auto now = std::chrono::steady_clock::now();
-    auto sinceLast = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastMbRequestTime).count();
-    const long long kMinGapMs = 1100;
-    if (sinceLast < kMinGapMs) {
-        long long sleepMs = kMinGapMs - sinceLast;
-        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
-    }
-    g_lastMbRequestTime = std::chrono::steady_clock::now();
-}
-
-// Discogs API rate limit is 60 requests/min (1 req/sec) with auth or 25 requests/min without auth.
-static std::mutex g_discogsThrottleMutex;
-static std::chrono::steady_clock::time_point g_lastDiscogsRequestTime;
-static void DiscogsThrottle() {
-    std::lock_guard<std::mutex> lock(g_discogsThrottleMutex);
-    auto now = std::chrono::steady_clock::now();
-    auto sinceLast = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastDiscogsRequestTime).count();
-    const long long kMinGapMs = 1100;
-    if (sinceLast < kMinGapMs) {
-        long long sleepMs = kMinGapMs - sinceLast;
-        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
-    }
-    g_lastDiscogsRequestTime = std::chrono::steady_clock::now();
-}
-
-// Robust HTTP GET with Ultra-Detailed Step-by-Step Logging & Rate Limit Backoff
-std::vector<unsigned char> HttpGetBytes(const std::wstring& url, int maxRetries = 3) {
-    std::vector<unsigned char> result;
-    std::string narrowUrl = WideToUtf8(url);
-
-    bool isMusicBrainz = (narrowUrl.find("musicbrainz.org") != std::string::npos);
-    if (isMusicBrainz) MusicBrainzThrottle();
-
-    bool isDiscogs = (narrowUrl.find("api.discogs.com") != std::string::npos);
-    if (isDiscogs) DiscogsThrottle();
-
-    for (int attempt = 0; attempt < maxRetries; ++attempt) {
-        HINTERNET hNet = InternetOpenW(L"MusicSorterApp/1.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-        if (hNet) {
-            DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
-            std::wstring customHeaders;
-            if (isDiscogs && !g_DiscogsToken.empty()) {
-                customHeaders = L"Authorization: Discogs token=" + Utf8ToWide(g_DiscogsToken) + L"\r\nUser-Agent: MusicSorterApp/1.0 (https://github.com/renkagod/music-sorter)\r\n";
-            }
-            HINTERNET hFile = InternetOpenUrlW(hNet, url.c_str(), customHeaders.empty() ? NULL : customHeaders.c_str(), (DWORD)customHeaders.length(), flags, 0);
-            if (!hFile) {
-                flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
-                hFile = InternetOpenUrlW(hNet, url.c_str(), customHeaders.empty() ? NULL : customHeaders.c_str(), (DWORD)customHeaders.length(), flags, 0);
-            }
-            if (hFile) {
-                DWORD statusCode = 0;
-                DWORD statusSize = sizeof(statusCode);
-                HttpQueryInfoW(hFile, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, NULL);
-
-                if (statusCode == 429 || statusCode == 503) {
-                    long long backoffMs = (isMusicBrainz || isDiscogs) ? (1500 * (attempt + 1)) : (400 * (attempt + 1));
-                    LOG_INFO("[HTTP " + std::to_string(statusCode) + " RATE LIMIT] Backing off " + std::to_string(backoffMs) + "ms for URL: " + narrowUrl);
-                    InternetCloseHandle(hFile);
-                    InternetCloseHandle(hNet);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
-                    if (isMusicBrainz) {
-                        std::lock_guard<std::mutex> lock(g_mbThrottleMutex);
-                        g_lastMbRequestTime = std::chrono::steady_clock::now();
-                    }
-                    if (isDiscogs) {
-                        std::lock_guard<std::mutex> lock(g_discogsThrottleMutex);
-                        g_lastDiscogsRequestTime = std::chrono::steady_clock::now();
-                    }
-                    continue;
-                }
-
-                unsigned char buffer[16384];
-                DWORD bytesRead = 0;
-                while (InternetReadFile(hFile, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-                    result.insert(result.end(), buffer, buffer + bytesRead);
-                }
-                InternetCloseHandle(hFile);
-                
-                if (statusCode != 200 && statusCode != 0) {
-                    LOG_INFO("[HTTP RESP " + std::to_string(statusCode) + "] Received " + std::to_string(result.size()) + " bytes from " + narrowUrl);
-                }
-            } else {
-                DWORD err = GetLastError();
-                LOG_INFO("[HTTP ERROR " + std::to_string(err) + "] Failed to open URL (Attempt " + std::to_string(attempt + 1) + "/" + std::to_string(maxRetries) + "): " + narrowUrl);
-            }
-            InternetCloseHandle(hNet);
-        }
-        if (!result.empty()) return result;
-        std::this_thread::sleep_for(std::chrono::milliseconds(250 * (attempt + 1)));
-    }
-    return result;
-}
-
-std::string HttpGetString(const std::wstring& url) {
-    auto bytes = HttpGetBytes(url);
-    if (bytes.empty()) return "";
-    return std::string((char*)bytes.data(), bytes.size());
-}
-
-struct JsonVal {
-    enum Type { Null, Bool, Number, String, Array, Object } type = Null;
-    std::string strVal;
-    double numVal = 0;
-    bool boolVal = false;
-    std::vector<JsonVal> arrVal;
-    std::unordered_map<std::string, JsonVal> objVal;
-
-    const JsonVal& get(const std::string& key) const {
-        static JsonVal nullVal;
-        if (type == Object) {
-            auto it = objVal.find(key);
-            if (it != objVal.end()) return it->second;
-        }
-        return nullVal;
-    }
-
-    const JsonVal& get(size_t idx) const {
-        static JsonVal nullVal;
-        if (type == Array && idx < arrVal.size()) return arrVal[idx];
-        return nullVal;
-    }
-};
-
-static JsonVal ParseJsonSimple(const std::string& str, size_t& pos) {
-    auto skipWs = [&]() {
-        while (pos < str.size() && (unsigned char)str[pos] <= 32) pos++;
-    };
-    skipWs();
-    if (pos >= str.size()) return {};
-
-    char c = str[pos];
-    if (c == '"') {
-        pos++;
-        std::string s;
-        while (pos < str.size()) {
-            char ch = str[pos++];
-            if (ch == '"') break;
-            if (ch == '\\' && pos < str.size()) {
-                char esc = str[pos++];
-                if (esc == '"' || esc == '\\' || esc == '/') s += esc;
-                else if (esc == 'b') s += '\b';
-                else if (esc == 'f') s += '\f';
-                else if (esc == 'n') s += '\n';
-                else if (esc == 'r') s += '\r';
-                else if (esc == 't') s += '\t';
-                else if (esc == 'u' && pos + 4 <= str.size()) {
-                    std::string hexStr = str.substr(pos, 4);
-                    pos += 4;
-                    try {
-                        unsigned int code = std::stoul(hexStr, nullptr, 16);
-                        if (code < 0x80) s += (char)code;
-                        else if (code < 0x800) { s += (char)(0xC0 | (code >> 6)); s += (char)(0x80 | (code & 0x3F)); }
-                        else { s += (char)(0xE0 | (code >> 12)); s += (char)(0x80 | ((code >> 6) & 0x3F)); s += (char)(0x80 | (code & 0x3F)); }
-                    } catch (...) {}
-                }
-            } else {
-                s += ch;
-            }
-        }
-        JsonVal v; v.type = JsonVal::String; v.strVal = s; return v;
-    }
-    if (c == '{') {
-        pos++;
-        JsonVal v; v.type = JsonVal::Object;
-        while (pos < str.size()) {
-            skipWs();
-            if (pos < str.size() && str[pos] == '}') { pos++; break; }
-            JsonVal k = ParseJsonSimple(str, pos);
-            if (k.type != JsonVal::String) break;
-            skipWs();
-            if (pos < str.size() && str[pos] == ':') pos++;
-            JsonVal val = ParseJsonSimple(str, pos);
-            v.objVal[k.strVal] = val;
-            skipWs();
-            if (pos < str.size() && str[pos] == ',') pos++;
-            else if (pos < str.size() && str[pos] == '}') { pos++; break; }
-        }
-        return v;
-    }
-    if (c == '[') {
-        pos++;
-        JsonVal v; v.type = JsonVal::Array;
-        while (pos < str.size()) {
-            skipWs();
-            if (pos < str.size() && str[pos] == ']') { pos++; break; }
-            JsonVal val = ParseJsonSimple(str, pos);
-            v.arrVal.push_back(val);
-            skipWs();
-            if (pos < str.size() && str[pos] == ',') pos++;
-            else if (pos < str.size() && str[pos] == ']') { pos++; break; }
-        }
-        return v;
-    }
-    if (c == 't' || c == 'f') {
-        JsonVal v; v.type = JsonVal::Bool;
-        if (str.compare(pos, 4, "true") == 0) { v.boolVal = true; pos += 4; }
-        else if (str.compare(pos, 5, "false") == 0) { v.boolVal = false; pos += 5; }
-        return v;
-    }
-    if (c == 'n') {
-        if (str.compare(pos, 4, "null") == 0) pos += 4;
-        return {};
-    }
-    if ((c >= '0' && c <= '9') || c == '-') {
-        size_t start = pos;
-        if (c == '-') pos++;
-        while (pos < str.size() && (std::isdigit((unsigned char)str[pos]) || str[pos] == '.' || str[pos] == 'e' || str[pos] == 'E' || str[pos] == '+' || str[pos] == '-')) pos++;
-        JsonVal v; v.type = JsonVal::Number;
-        try { v.numVal = std::stod(str.substr(start, pos - start)); } catch (...) {}
-        return v;
-    }
-    pos++;
-    return {};
-}
-
-struct MBReleaseGroupCandidate {
-    std::string id;
-    std::string title;
-    std::string firstReleaseDate;
-    std::string artistCredit;
-    int score = 0;
-};
-
-static std::vector<MBReleaseGroupCandidate> ParseMusicBrainzReleaseGroups(const std::string& resJson) {
-    std::vector<MBReleaseGroupCandidate> candidates;
-    if (resJson.empty()) return candidates;
-    size_t p = 0;
-    JsonVal doc = ParseJsonSimple(resJson, p);
-    const auto& rgs = doc.get("release-groups");
-    if (rgs.type != JsonVal::Array) return candidates;
-
-    for (size_t i = 0; i < rgs.arrVal.size(); ++i) {
-        const auto& rg = rgs.get(i);
-        std::string id = rg.get("id").strVal;
-        if (id.length() != 36) continue;
-
-        std::string title = rg.get("title").strVal;
-        std::string date = rg.get("first-release-date").strVal;
-        int score = (int)rg.get("score").numVal;
-        std::string artistCredit;
-
-        const auto& ac = rg.get("artist-credit");
-        if (ac.type == JsonVal::Array) {
-            for (size_t a = 0; a < ac.arrVal.size(); ++a) {
-                std::string aName = ac.get(a).get("name").strVal;
-                if (!aName.empty()) {
-                    if (!artistCredit.empty()) artistCredit += ", ";
-                    artistCredit += aName;
-                }
-            }
-        }
-
-        candidates.push_back({ id, title, date, artistCredit, score });
-    }
-    return candidates;
-}
-
-static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string& releaseGroupMbId, std::string* outReleaseDate = nullptr) {
-    std::vector<MBTrackEntry> tracks;
-    if (releaseGroupMbId.empty()) return tracks;
-
-    std::string url = "https://musicbrainz.org/ws/2/release?release-group=" + releaseGroupMbId + "&inc=recordings+artist-credits&fmt=json";
-    std::string resJson = HttpGetString(Utf8ToWide(url));
-    if (resJson.empty()) return tracks;
-
-    size_t p = 0;
-    JsonVal doc = ParseJsonSimple(resJson, p);
-
-    const auto& rels = doc.get("releases");
-    if (rels.type != JsonVal::Array || rels.arrVal.empty()) return tracks;
-
-    if (outReleaseDate && outReleaseDate->empty()) {
-        for (size_t ri = 0; ri < rels.arrVal.size(); ++ri) {
-            std::string d = rels.get(ri).get("date").strVal;
-            if (!d.empty()) {
-                if (outReleaseDate->empty() || d < *outReleaseDate) {
-                    *outReleaseDate = d;
-                }
-            }
-        }
-        if (!outReleaseDate->empty()) {
-            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + *outReleaseDate);
-        }
-    }
-
-    auto extractTracks = [](const JsonVal& mediaVal, std::vector<MBTrackEntry>& out) {
-        if (mediaVal.type != JsonVal::Array || mediaVal.arrVal.empty()) return;
-        for (size_t m = 0; m < mediaVal.arrVal.size(); ++m) {
-            const auto& trs = mediaVal.get(m).get("tracks");
-            if (trs.type != JsonVal::Array) continue;
-            for (size_t i = 0; i < trs.arrVal.size(); ++i) {
-                const auto& tObj = trs.get(i);
-                int pos = (int)tObj.get("position").numVal;
-                std::string title = tObj.get("title").strVal;
-                if (title.empty()) title = tObj.get("recording").get("title").strVal;
-                int lengthMs = (int)tObj.get("length").numVal;
-                if (lengthMs == 0) lengthMs = (int)tObj.get("recording").get("length").numVal;
-                std::string artist;
-                const auto& ac = tObj.get("artist-credit");
-                if (ac.type == JsonVal::Array && !ac.arrVal.empty()) {
-                    artist = ac.get(0).get("name").strVal;
-                } else {
-                    const auto& recAc = tObj.get("recording").get("artist-credit");
-                    if (recAc.type == JsonVal::Array && !recAc.arrVal.empty()) {
-                        artist = recAc.get(0).get("name").strVal;
-                    }
-                }
-                if (pos > 0 && !title.empty()) {
-                    out.push_back({ pos, title, "", "", "", artist, "", "", "", lengthMs });
-                }
-            }
-        }
-    };
-
-    // 1. Prefer Pseudo-Release (romanized titles)
-    for (const auto& rel : rels.arrVal) {
-        std::string status = rel.get("status").strVal;
-        if (status == "Pseudo-Release") {
-            extractTracks(rel.get("media"), tracks);
-            if (!tracks.empty()) {
-                LOG_INFO("[MUSICBRAINZ] Selected Pseudo-Release for romanized track titles");
-                return tracks;
-            }
-        }
-    }
-
-    // 2. Fallback to first Official release
-    for (const auto& rel : rels.arrVal) {
-        std::string status = rel.get("status").strVal;
-        if (status == "Official") {
-            extractTracks(rel.get("media"), tracks);
-            if (!tracks.empty()) {
-                LOG_INFO("[MUSICBRAINZ] No Pseudo-Release found, using Official release titles");
-                return tracks;
-            }
-        }
-    }
-
-    // 3. Last resort: whatever is available
-    extractTracks(rels.get(0).get("media"), tracks);
-    return tracks;
-}
+using namespace FetchServices;
 
 static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEntry>& mbTracks) {
     if (mbTracks.empty()) return;
@@ -1460,528 +693,6 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
     }
 }
 
-struct DiscogsReleaseInfo {
-    std::string id;
-    std::string title;
-    std::string artist;
-    std::string year;
-    std::string coverUrl;
-    std::vector<MBTrackEntry> tracks;
-};
-
-static int ParseDurationMs(const std::string& durStr) {
-    if (durStr.empty()) return 0;
-    int totalSec = 0;
-    std::stringstream ss(durStr);
-    std::string part;
-    std::vector<int> parts;
-    while (std::getline(ss, part, ':')) {
-        try { parts.push_back(std::stoi(part)); } catch (...) {}
-    }
-    if (parts.size() == 2) {
-        totalSec = parts[0] * 60 + parts[1];
-    } else if (parts.size() == 3) {
-        totalSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
-    } else if (parts.size() == 1) {
-        totalSec = parts[0];
-    }
-    return totalSec * 1000;
-}
-
-static int ParseDiscogsPosition(const std::string& posStr, int defaultPos) {
-    if (posStr.empty()) return defaultPos;
-    int num = 0;
-    for (char c : posStr) {
-        if (c >= '0' && c <= '9') {
-            num = num * 10 + (c - '0');
-        }
-    }
-    return (num > 0) ? num : defaultPos;
-}
-
-static bool FetchDiscogsReleaseDetails(const std::string& releaseId, bool isMaster, DiscogsReleaseInfo& outInfo) {
-    std::string endpoint = isMaster ? 
-        ("https://api.discogs.com/masters/" + releaseId) : 
-        ("https://api.discogs.com/releases/" + releaseId);
-    if (!g_DiscogsToken.empty()) {
-        endpoint += "?token=" + g_DiscogsToken;
-    }
-    std::string jsonStr = HttpGetString(Utf8ToWide(endpoint));
-    if (jsonStr.empty()) return false;
-
-    size_t p = 0;
-    JsonVal doc = ParseJsonSimple(jsonStr, p);
-    outInfo.id = releaseId;
-    outInfo.title = doc.get("title").strVal;
-    
-    // Year / Released date (prefer ISO full date YYYY-MM-DD from "released", or "released_formatted", or "year")
-    if (doc.get("released").type == JsonVal::String && !doc.get("released").strVal.empty()) {
-        outInfo.year = doc.get("released").strVal;
-    } else if (doc.get("released_formatted").type == JsonVal::String && !doc.get("released_formatted").strVal.empty()) {
-        outInfo.year = doc.get("released_formatted").strVal;
-    } else if (doc.get("year").type == JsonVal::Number && doc.get("year").numVal > 0) {
-        outInfo.year = std::to_string((int)doc.get("year").numVal);
-    } else if (doc.get("year").type == JsonVal::String) {
-        outInfo.year = doc.get("year").strVal;
-    }
-
-    // Master fallback if date still empty
-    if (outInfo.year.empty() || outInfo.year == "0") {
-        std::string masterId;
-        if (doc.get("master_id").type == JsonVal::Number && doc.get("master_id").numVal > 0) {
-            masterId = std::to_string((int)doc.get("master_id").numVal);
-        }
-        if (!masterId.empty()) {
-            std::string masterUrl = "https://api.discogs.com/masters/" + masterId;
-            if (!g_DiscogsToken.empty()) masterUrl += "?token=" + g_DiscogsToken;
-            std::string masterJson = HttpGetString(Utf8ToWide(masterUrl));
-            if (!masterJson.empty()) {
-                size_t mp = 0;
-                JsonVal mDoc = ParseJsonSimple(masterJson, mp);
-                if (mDoc.get("year").type == JsonVal::Number && mDoc.get("year").numVal > 0) {
-                    outInfo.year = std::to_string((int)mDoc.get("year").numVal);
-                }
-            }
-        }
-    }
-
-    // Artist
-    const auto& artists = doc.get("artists");
-    if (artists.type == JsonVal::Array && !artists.arrVal.empty()) {
-        std::string artName;
-        for (size_t a = 0; a < artists.arrVal.size(); ++a) {
-            std::string name = artists.get(a).get("name").strVal;
-            size_t paren = name.rfind(" (");
-            if (paren != std::string::npos && paren + 3 < name.size() && name.back() == ')') {
-                bool isNum = true;
-                for (size_t k = paren + 2; k < name.size() - 1; ++k) {
-                    if (!std::isdigit((unsigned char)name[k])) { isNum = false; break; }
-                }
-                if (isNum) name = name.substr(0, paren);
-            }
-            if (!artName.empty()) artName += ", ";
-            artName += name;
-        }
-        outInfo.artist = artName;
-    }
-
-    // Images
-    const auto& images = doc.get("images");
-    if (images.type == JsonVal::Array && !images.arrVal.empty()) {
-        for (size_t imgIdx = 0; imgIdx < images.arrVal.size(); ++imgIdx) {
-            const auto& img = images.get(imgIdx);
-            std::string imgType = img.get("type").strVal;
-            std::string uri = img.get("uri").strVal;
-            if (uri.empty()) uri = img.get("resource_url").strVal;
-            if (!uri.empty()) {
-                if (imgType == "primary" || outInfo.coverUrl.empty()) {
-                    outInfo.coverUrl = uri;
-                    if (imgType == "primary") break;
-                }
-            }
-        }
-    }
-
-    // Tracklist
-    const auto& trkList = doc.get("tracklist");
-    if (trkList.type == JsonVal::Array) {
-        int trackPosCounter = 1;
-        for (size_t t = 0; t < trkList.arrVal.size(); ++t) {
-            const auto& trk = trkList.get(t);
-            std::string trkType = trk.get("type_").strVal;
-            if (!trkType.empty() && trkType != "track") continue;
-
-            std::string posStr = trk.get("position").strVal;
-            std::string trkTitle = trk.get("title").strVal;
-            std::string durStr = trk.get("duration").strVal;
-            int durMs = ParseDurationMs(durStr);
-            int pos = ParseDiscogsPosition(posStr, trackPosCounter);
-
-            std::string trkArtist = outInfo.artist;
-            const auto& trkArtists = trk.get("artists");
-            if (trkArtists.type == JsonVal::Array && !trkArtists.arrVal.empty()) {
-                std::string tArt = trkArtists.get(0).get("name").strVal;
-                size_t paren = tArt.rfind(" (");
-                if (paren != std::string::npos && paren + 3 < tArt.size() && tArt.back() == ')') {
-                    tArt = tArt.substr(0, paren);
-                }
-                if (!tArt.empty()) trkArtist = tArt;
-            }
-
-            if (!trkTitle.empty()) {
-                outInfo.tracks.push_back({ pos, trkTitle, "", "", "", trkArtist, "", "", "", durMs });
-            }
-            trackPosCounter++;
-        }
-    }
-
-    return !outInfo.title.empty() || !outInfo.tracks.empty();
-}
-
-static bool SearchDiscogsRelease(const std::string& artist, const std::string& album, DiscogsReleaseInfo& outInfo) {
-    if (album.empty()) return false;
-
-    bool isArtistUnknown = (artist.empty() || artist == "Unknown Artist" || artist == "Various Artists" || artist == "V.A." || artist == "VA");
-
-    std::string queryUrl = "https://api.discogs.com/database/search?release_title=" + UrlEncode(album);
-    if (!isArtistUnknown) {
-        queryUrl += "&artist=" + UrlEncode(artist);
-    }
-    queryUrl += "&type=release";
-    if (!g_DiscogsToken.empty()) {
-        queryUrl += "&token=" + g_DiscogsToken;
-    }
-
-    LOG_INFO("[DISCOGS SEARCH] Querying: " + queryUrl);
-    std::string resJson = HttpGetString(Utf8ToWide(queryUrl));
-    if (resJson.empty() || resJson.find("\"results\":[]") != std::string::npos) {
-        std::string broadQuery = isArtistUnknown ? album : (artist + " " + album);
-        std::string broadUrl = "https://api.discogs.com/database/search?q=" + UrlEncode(broadQuery) + "&type=release";
-        if (!g_DiscogsToken.empty()) broadUrl += "&token=" + g_DiscogsToken;
-        LOG_INFO("[DISCOGS SEARCH FALLBACK] Querying: " + broadUrl);
-        resJson = HttpGetString(Utf8ToWide(broadUrl));
-    }
-
-    if (resJson.empty()) return false;
-
-    size_t p = 0;
-    JsonVal doc = ParseJsonSimple(resJson, p);
-    const auto& results = doc.get("results");
-    if (results.type != JsonVal::Array || results.arrVal.empty()) {
-        LOG_INFO("[DISCOGS SEARCH] No results found for: " + artist + " - " + album);
-        return false;
-    }
-
-    int bestScore = -10000;
-    std::string pickedId;
-    std::string pickedCover;
-    std::string pickedYear;
-    std::string pickedTitle;
-    bool isMasterPicked = false;
-
-    std::string albNorm = NormalizeKey(album);
-
-    for (size_t i = 0; i < results.arrVal.size(); ++i) {
-        const auto& r = results.get(i);
-        std::string rId;
-        if (r.get("id").type == JsonVal::Number) rId = std::to_string((int)r.get("id").numVal);
-        else rId = r.get("id").strVal;
-        if (rId.empty()) continue;
-
-        std::string rTitle = r.get("title").strVal;
-        std::string rYear;
-        if (r.get("year").type == JsonVal::Number) rYear = std::to_string((int)r.get("year").numVal);
-        else rYear = r.get("year").strVal;
-        std::string rCover = r.get("cover_image").strVal;
-        bool isMaster = (r.get("type").strVal == "master");
-
-        std::string rTitleNorm = NormalizeKey(rTitle);
-        bool titleMatch = (!albNorm.empty() && (rTitleNorm.find(albNorm) != std::string::npos || albNorm.find(rTitleNorm) != std::string::npos));
-
-        int score = 0;
-        if (titleMatch) score += 100;
-        if (!rYear.empty() && rYear != "0") score += 30;
-        if (!rCover.empty()) score += 20;
-
-        // Check format descriptions to prioritize official standard Album over test pressings/promos
-        const auto& fmtArr = r.get("formats");
-        if (fmtArr.type == JsonVal::Array) {
-            for (size_t f = 0; f < fmtArr.arrVal.size(); ++f) {
-                const auto& fObj = fmtArr.get(f);
-                const auto& descArr = fObj.get("descriptions");
-                if (descArr.type == JsonVal::Array) {
-                    for (size_t d = 0; d < descArr.arrVal.size(); ++d) {
-                        std::string dLower = descArr.get(d).strVal;
-                        std::transform(dLower.begin(), dLower.end(), dLower.begin(), ::tolower);
-                        if (dLower == "album") score += 15;
-                        if (dLower.find("test") != std::string::npos) score -= 50;
-                        if (dLower.find("promo") != std::string::npos) score -= 30;
-                        if (dLower.find("unofficial") != std::string::npos) score -= 60;
-                    }
-                }
-            }
-        }
-
-        // Community popularity score
-        double haveCount = r.get("community").get("have").numVal;
-        double wantCount = r.get("community").get("want").numVal;
-        score += (int)((haveCount + wantCount) / 2.0);
-
-        if (score > bestScore) {
-            bestScore = score;
-            pickedId = rId;
-            pickedCover = rCover;
-            pickedYear = rYear;
-            pickedTitle = rTitle;
-            isMasterPicked = isMaster;
-        }
-    }
-
-    if (pickedId.empty()) return false;
-
-    LOG_INFO("[DISCOGS MATCHED] Selected release ID: " + pickedId + " (" + pickedTitle + ", Score: " + std::to_string(bestScore) + "). Fetching details...");
-    bool ok = FetchDiscogsReleaseDetails(pickedId, isMasterPicked, outInfo);
-    if (!ok && !pickedTitle.empty()) {
-        outInfo.id = pickedId;
-        outInfo.title = pickedTitle;
-        outInfo.year = pickedYear;
-        outInfo.coverUrl = pickedCover;
-        return true;
-    }
-    if (outInfo.coverUrl.empty() && !pickedCover.empty()) {
-        outInfo.coverUrl = pickedCover;
-    }
-    return ok;
-}
-
-struct VdbReleaseInfo {
-    int id = 0;
-    std::string service; // "TouhouDB", "VocaDB", or "UtaiteDB"
-    std::string title;
-    std::string titleRomaji;
-    std::string titleEnglish;
-    std::string titleJapanese;
-    std::string artist;
-    std::string artistRomaji;
-    std::string artistEnglish;
-    std::string artistJapanese;
-    std::string catalogNumber;
-    std::string releaseDate;
-    std::string coverUrl;
-    std::vector<MBTrackEntry> tracks;
-};
-
-static bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& service, int albumId, VdbReleaseInfo& outInfo) {
-    std::string endpoint = baseUrl + "/api/albums/" + std::to_string(albumId) + "?lang=Romaji&fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics,Names";
-    std::string jsonStr = HttpGetString(Utf8ToWide(endpoint));
-    if (jsonStr.empty()) return false;
-
-    size_t p = 0;
-    JsonVal doc = ParseJsonSimple(jsonStr, p);
-    if (doc.type != JsonVal::Object) return false;
-
-    outInfo.id = albumId;
-    outInfo.service = service;
-    outInfo.catalogNumber = doc.get("catalogNumber").strVal;
-
-    // Album Names (Romaji / English / Japanese)
-    const auto& names = doc.get("names");
-    if (names.type == JsonVal::Array) {
-        for (size_t n = 0; n < names.arrVal.size(); ++n) {
-            const auto& nObj = names.get(n);
-            std::string lang = nObj.get("language").strVal;
-            std::string val = nObj.get("value").strVal;
-            if (lang == "Romaji" && outInfo.titleRomaji.empty()) outInfo.titleRomaji = val;
-            else if (lang == "English" && outInfo.titleEnglish.empty()) outInfo.titleEnglish = val;
-            else if (lang == "Japanese" && outInfo.titleJapanese.empty()) outInfo.titleJapanese = val;
-        }
-    }
-    std::string rawName = doc.get("name").strVal;
-    if (rawName.empty()) rawName = doc.get("defaultName").strVal;
-    if (outInfo.titleRomaji.empty()) outInfo.titleRomaji = rawName;
-    if (outInfo.titleJapanese.empty()) outInfo.titleJapanese = doc.get("defaultName").strVal;
-    outInfo.title = PickBestName(outInfo.titleRomaji, outInfo.titleEnglish, outInfo.titleJapanese, rawName);
-
-    // Release Date
-    const auto& rd = doc.get("releaseDate");
-    if (rd.type == JsonVal::Object && !rd.get("isEmpty").boolVal) {
-        int y = (int)rd.get("year").numVal;
-        int m = (int)rd.get("month").numVal;
-        int d = (int)rd.get("day").numVal;
-        if (y > 0 && m > 0 && d > 0) {
-            char dateBuf[32];
-            sprintf_s(dateBuf, sizeof(dateBuf), "%04d.%02d.%02d", y, m, d);
-            outInfo.releaseDate = dateBuf;
-        } else if (y > 0) {
-            outInfo.releaseDate = std::to_string(y);
-        }
-    }
-
-    // Artist / Circle determination & multi-language
-    std::string circleName;
-    std::string producerName;
-    const auto& artists = doc.get("artists");
-    if (artists.type == JsonVal::Array) {
-        for (size_t a = 0; a < artists.arrVal.size(); ++a) {
-            const auto& aObj = artists.get(a);
-            std::string cat = aObj.get("categories").strVal;
-            std::string roles = aObj.get("roles").strVal;
-            std::string name = aObj.get("name").strVal;
-            if (name.empty()) name = aObj.get("artist").get("name").strVal;
-
-            const auto& aNames = aObj.get("artist").get("names");
-            if (aNames.type == JsonVal::Array) {
-                for (size_t n = 0; n < aNames.arrVal.size(); ++n) {
-                    const auto& nObj = aNames.get(n);
-                    std::string lang = nObj.get("language").strVal;
-                    std::string val = nObj.get("value").strVal;
-                    if (lang == "Romaji" && outInfo.artistRomaji.empty()) outInfo.artistRomaji = val;
-                    else if (lang == "English" && outInfo.artistEnglish.empty()) outInfo.artistEnglish = val;
-                    else if (lang == "Japanese" && outInfo.artistJapanese.empty()) outInfo.artistJapanese = val;
-                }
-            }
-
-            if (cat.find("Circle") != std::string::npos || roles.find("Circle") != std::string::npos || 
-                aObj.get("artist").get("artistType").strVal == "Circle") {
-                if (circleName.empty()) circleName = name;
-            } else if (cat.find("Producer") != std::string::npos || aObj.get("artist").get("artistType").strVal == "Producer") {
-                if (producerName.empty()) producerName = name;
-            }
-        }
-    }
-
-    std::string artStr = doc.get("artistString").strVal;
-    std::string rawArtist = circleName;
-    if (rawArtist.empty()) {
-        if (!artStr.empty() && artStr != "Various artists" && artStr != "Various Artists" && artStr != "V.A.") {
-            rawArtist = artStr;
-        } else if (!producerName.empty()) {
-            rawArtist = producerName;
-        } else if (!artStr.empty()) {
-            rawArtist = artStr;
-        }
-    }
-    if (outInfo.artistRomaji.empty()) outInfo.artistRomaji = rawArtist;
-    outInfo.artist = PickBestName(outInfo.artistRomaji, outInfo.artistEnglish, outInfo.artistJapanese, rawArtist);
-
-    // Cover Art
-    const auto& mp = doc.get("mainPicture");
-    if (mp.type == JsonVal::Object) {
-        outInfo.coverUrl = mp.get("urlOriginal").strVal;
-        if (outInfo.coverUrl.empty()) outInfo.coverUrl = mp.get("urlThumb").strVal;
-        if (outInfo.coverUrl.empty()) outInfo.coverUrl = mp.get("urlSmallThumb").strVal;
-    }
-
-    // Tracklist with multi-language
-    const auto& trks = doc.get("tracks");
-    if (trks.type == JsonVal::Array) {
-        for (size_t t = 0; t < trks.arrVal.size(); ++t) {
-            const auto& trk = trks.get(t);
-            int pos = (int)trk.get("trackNumber").numVal;
-            if (pos <= 0) pos = (int)(t + 1);
-
-            std::string tTitle = trk.get("name").strVal;
-            const auto& song = trk.get("song");
-            if (tTitle.empty() && song.type == JsonVal::Object) {
-                tTitle = song.get("name").strVal;
-            }
-
-            std::string tRomaji, tEnglish, tJapanese;
-            if (song.type == JsonVal::Object) {
-                const auto& songNames = song.get("names");
-                if (songNames.type == JsonVal::Array) {
-                    for (size_t n = 0; n < songNames.arrVal.size(); ++n) {
-                        const auto& nObj = songNames.get(n);
-                        std::string lang = nObj.get("language").strVal;
-                        std::string val = nObj.get("value").strVal;
-                        if (lang == "Romaji" && tRomaji.empty()) tRomaji = val;
-                        else if (lang == "English" && tEnglish.empty()) tEnglish = val;
-                        else if (lang == "Japanese" && tJapanese.empty()) tJapanese = val;
-                    }
-                }
-                if (tJapanese.empty()) tJapanese = song.get("defaultName").strVal;
-            }
-            if (tRomaji.empty()) tRomaji = tTitle;
-            std::string bestTrackTitle = PickBestName(tRomaji, tEnglish, tJapanese, tTitle);
-
-            int durMs = 0;
-            std::string tArtist = outInfo.artist;
-            if (song.type == JsonVal::Object) {
-                int lenSec = (int)song.get("lengthSeconds").numVal;
-                durMs = lenSec * 1000;
-                std::string sArt = song.get("artistString").strVal;
-                if (!sArt.empty()) tArtist = sArt;
-            }
-
-            if (!bestTrackTitle.empty()) {
-                outInfo.tracks.push_back({ pos, bestTrackTitle, tRomaji, tEnglish, tJapanese, tArtist, outInfo.artistRomaji, outInfo.artistEnglish, outInfo.artistJapanese, durMs });
-            }
-        }
-    }
-
-    return !outInfo.title.empty() || !outInfo.tracks.empty();
-}
-
-static bool SearchVdbRelease(const std::string& baseUrl, const std::string& service, const std::string& artist, const std::string& album, const std::string& catalogNo, VdbReleaseInfo& outInfo) {
-    if (album.empty() && catalogNo.empty()) return false;
-
-    auto executeQuery = [&](const std::string& q) -> std::string {
-        if (q.empty()) return "";
-        std::string url = baseUrl + "/api/albums?query=" + UrlEncode(q) + "&lang=Romaji&fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics,Names&maxResults=5";
-        return HttpGetString(Utf8ToWide(url));
-    };
-
-    std::string resJson;
-    // 1. Search by catalog number first (e.g. DBPS-002)
-    if (!catalogNo.empty()) {
-        LOG_INFO("[" + service + " SEARCH] Querying catalog number: " + catalogNo);
-        resJson = executeQuery(catalogNo);
-    }
-
-    // 2. Search by album clean title
-    if ((resJson.empty() || resJson.find("\"items\":[]") != std::string::npos) && !album.empty()) {
-        LOG_INFO("[" + service + " SEARCH] Querying album: " + album);
-        resJson = executeQuery(album);
-    }
-
-    // 3. Search by artist + album
-    if ((resJson.empty() || resJson.find("\"items\":[]") != std::string::npos) && !artist.empty() && artist != "Unknown Artist" && !album.empty()) {
-        LOG_INFO("[" + service + " SEARCH] Querying artist + album: " + artist + " " + album);
-        resJson = executeQuery(artist + " " + album);
-    }
-
-    if (resJson.empty()) return false;
-
-    size_t p = 0;
-    JsonVal doc = ParseJsonSimple(resJson, p);
-    const auto& items = doc.get("items");
-    if (items.type != JsonVal::Array || items.arrVal.empty()) return false;
-
-    int bestScore = -100;
-    int pickedId = 0;
-    std::string albNorm = NormalizeKey(album);
-    std::string catNorm = NormalizeKey(catalogNo);
-
-    for (size_t i = 0; i < items.arrVal.size(); ++i) {
-        const auto& it = items.get(i);
-        int id = (int)it.get("id").numVal;
-        if (id <= 0) continue;
-
-        std::string candName = it.get("name").strVal;
-        std::string candCat = it.get("catalogNumber").strVal;
-        std::string candArt = it.get("artistString").strVal;
-
-        int score = 0;
-        if (!catNorm.empty() && !candCat.empty() && NormalizeKey(candCat) == catNorm) {
-            score += 150;
-        }
-
-        std::string candNorm = NormalizeKey(candName);
-        if (!albNorm.empty() && !candNorm.empty()) {
-            if (albNorm == candNorm) score += 100;
-            else if (candNorm.find(albNorm) != std::string::npos || albNorm.find(candNorm) != std::string::npos) score += 70;
-        }
-
-        if (!artist.empty() && artist != "Unknown Artist" && !candArt.empty()) {
-            std::string aNorm = NormalizeKey(artist);
-            std::string caNorm = NormalizeKey(candArt);
-            if (caNorm.find(aNorm) != std::string::npos || aNorm.find(caNorm) != std::string::npos) score += 40;
-        }
-
-        if (score > bestScore) {
-            bestScore = score;
-            pickedId = id;
-        }
-    }
-
-    if (pickedId > 0 && bestScore >= 40) {
-        LOG_INFO("[" + service + " MATCHED] Found album ID " + std::to_string(pickedId) + " (Score: " + std::to_string(bestScore) + "). Fetching full details...");
-        return FetchVdbAlbumDetails(baseUrl, service, pickedId, outInfo);
-    }
-
-    return false;
-}
-
 ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const unsigned char* data, size_t size, int* outWidth, int* outHeight) {
     if (!data || size == 0) return NULL;
     int width = 0, height = 0, channels = 0;
@@ -2027,42 +738,6 @@ ID3D11ShaderResourceView* CreateTextureFromMemory(ID3D11Device* device, const un
 }
 
 // Fetch Synced & Romanized LRC Lyrics via LrcLib REST API
-static std::string FetchLrcLibSyncedLyrics(const std::string& artist, const std::string& title, const std::string& album) {
-    if (artist.empty() || title.empty()) return "";
-    std::string url = "https://lrclib.net/api/get?artist_name=" + UrlEncode(artist) + "&track_name=" + UrlEncode(title);
-    if (!album.empty()) url += "&album_name=" + UrlEncode(album);
-
-    std::string json = HttpGetString(Utf8ToWide(url));
-    if (json.empty()) return "";
-
-    size_t sPos = json.find("\"syncedLyrics\":\"");
-    if (sPos != std::string::npos) {
-        sPos += 16;
-        size_t endPos = json.find("\"", sPos);
-        if (endPos != std::string::npos) {
-            std::string lyrics = json.substr(sPos, endPos - sPos);
-            lyrics = std::regex_replace(lyrics, std::regex(R"(\\n)"), "\n");
-            lyrics = std::regex_replace(lyrics, std::regex(R"(\\r)"), "");
-            return lyrics;
-        }
-    }
-
-    size_t pPos = json.find("\"plainLyrics\":\"");
-    if (pPos != std::string::npos) {
-        pPos += 15;
-        size_t endPos = json.find("\"", pPos);
-        if (endPos != std::string::npos) {
-            std::string lyrics = json.substr(pPos, endPos - pPos);
-            lyrics = std::regex_replace(lyrics, std::regex(R"(\\n)"), "\n");
-            lyrics = std::regex_replace(lyrics, std::regex(R"(\\r)"), "");
-            return lyrics;
-        }
-    }
-
-    return "";
-}
-
-// Stage 3: Pure Native C++20 FLAC / MP3 Mirroring
 static void NativeMirrorCollections() {
     LOG_INFO("Step 3: Running native C++20 collection mirroring...");
     fs::path flacRoot = fs::path(g_FlacDir);
@@ -5015,7 +3690,7 @@ void AppWindow::RenderTagScanProgressBar(bool compact) {
 void AppWindow::StartTagScan() {
     if (m_isTagScanning) return;
     m_isTagScanning = true;
-    LOG_INFO("Step 2: Instant local scan + UI-sequential priority MusicBrainz lookup...");
+    LOG_INFO("Step 2: High-speed parallel fingerprinting & async metadata resolution...");
     m_tagItems.clear();
     m_currentTagIndex = 0;
     m_fetchedCount = 0;
@@ -5024,128 +3699,211 @@ void AppWindow::StartTagScan() {
     m_tagScanEndTime = {};
 
     std::thread([this]() {
-                    std::vector<std::string> files;
-                    if (fs::exists(g_ToSortDir)) {
-                        for (auto& p : fs::recursive_directory_iterator(g_ToSortDir)) {
-                            if (p.is_regular_file()) {
-                                std::string ext = p.path().extension().string();
-                                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                                if (ext == ".flac" || ext == ".mp3") {
-                                    files.push_back(p.path().string());
-                                }
-                            }
+        std::vector<std::string> files;
+        if (fs::exists(g_ToSortDir)) {
+            for (auto& p : fs::recursive_directory_iterator(g_ToSortDir)) {
+                if (p.is_regular_file()) {
+                    std::string ext = p.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if (ext == ".flac" || ext == ".mp3") {
+                        files.push_back(p.path().string());
+                    }
+                }
+            }
+        }
+
+        m_tagScanTotal = files.size();
+        LOG_INFO("[LOCAL INITIALIZATION] Scanned " + std::to_string(files.size()) + " audio files in TO SORT/");
+
+        if (files.empty()) {
+            CleanupOrphanToSortFolders(fs::path(g_ToSortDir));
+            m_tagScanEndTime = std::chrono::steady_clock::now();
+            m_isTagScanning = false;
+            PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
+            return;
+        }
+
+        // FAST LOCAL INITIALIZATION (0.005s)
+        m_tagItems.resize(files.size());
+        for (size_t i = 0; i < files.size(); ++i) {
+            auto& item = m_tagItems[i];
+            item.filePath = files[i];
+            item.relPath = fs::relative(files[i], g_BaseDir).string();
+            item.originalFilename = fs::path(files[i]).filename().string();
+            memset(item.lyricsBuf, 0, sizeof(item.lyricsBuf));
+
+            std::string fn = fs::path(files[i]).stem().string();
+            std::string trackNo = "01";
+            std::string title = fn;
+            std::string artistRaw = fs::path(files[i]).parent_path().parent_path().filename().string();
+            std::string albumRaw = fs::path(files[i]).parent_path().filename().string();
+            std::string yearStr = ExtractYearFromString(files[i]);
+
+            size_t dotPos = fn.find(". ");
+            if (dotPos == std::string::npos) dotPos = fn.find("- ");
+            if (dotPos == std::string::npos) dotPos = fn.find("_");
+            if (dotPos != std::string::npos && dotPos <= 4 && std::isdigit((unsigned char)fn[0])) {
+                trackNo = fn.substr(0, dotPos);
+                while (!trackNo.empty() && !std::isdigit((unsigned char)trackNo.back())) trackNo.pop_back();
+                if (trackNo.length() == 1) trackNo = "0" + trackNo;
+                title = fn.substr(dotPos + 1);
+                size_t first = title.find_first_not_of(" \t.-_");
+                if (first != std::string::npos) title = title.substr(first);
+            }
+
+            std::string artistClean = CleanMetadataString(artistRaw);
+            if (artistClean.empty() || artistClean == "TO SORT" || artistClean == "media" || artistClean == "music") {
+                artistClean = ExtractArtistFromFilename(item.originalFilename);
+                if (artistClean.empty()) artistClean = "Unknown Artist";
+            }
+            std::string albumClean = CleanAlbumTitle(albumRaw);
+            if (albumClean.empty()) albumClean = CleanMetadataString(albumRaw);
+
+            item.embeddedArtist = artistClean;
+            item.embeddedAlbum = albumClean;
+            item.embeddedTitle = title;
+            item.embeddedTrackNo = trackNo;
+            item.embeddedYear = yearStr;
+
+            strncpy_s(item.artistBuf, artistClean.c_str(), sizeof(item.artistBuf) - 1);
+            strncpy_s(item.albumBuf, albumClean.c_str(), sizeof(item.albumBuf) - 1);
+            strncpy_s(item.titleBuf, title.c_str(), sizeof(item.titleBuf) - 1);
+            strncpy_s(item.trackNoBuf, trackNo.c_str(), sizeof(item.trackNoBuf) - 1);
+            strncpy_s(item.yearBuf, yearStr.c_str(), sizeof(item.yearBuf) - 1);
+
+            // Look for local cover image
+            fs::path folderPath = fs::path(files[i]).parent_path();
+            for (auto& cfile : fs::directory_iterator(folderPath)) {
+                if (cfile.is_regular_file()) {
+                    std::string cext = cfile.path().extension().string();
+                    std::transform(cext.begin(), cext.end(), cext.begin(), ::tolower);
+                    if (cext == ".jpg" || cext == ".jpeg" || cext == ".png" || cext == ".bmp") {
+                        std::ifstream fIn(cfile.path(), std::ios::binary);
+                        if (fIn.is_open()) {
+                            item.localCoverBytes = std::vector<unsigned char>((std::istreambuf_iterator<char>(fIn)), std::istreambuf_iterator<char>());
+                            item.localCoverPath = cfile.path().string();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Post immediate notification to show local UI instantly
+        PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
+
+        // =========================================================================
+        // PHASE 1: Fast Parallel Audio Fingerprinting (Multi-threaded fpcalc)
+        // =========================================================================
+        std::vector<AudioFingerprint> fpResults(files.size());
+        unsigned int numFpThreads = (std::min)(std::thread::hardware_concurrency(), 8u);
+        if (numFpThreads == 0) numFpThreads = 4;
+        LOG_INFO("[PARALLEL FINGERPRINTING] Computing AcoustID fingerprints across " + std::to_string(numFpThreads) + " worker threads for " + std::to_string(files.size()) + " files...");
+
+        std::atomic<size_t> fpTaskIdx{ 0 };
+        std::vector<std::thread> fpWorkers;
+        for (unsigned int t = 0; t < numFpThreads; ++t) {
+            fpWorkers.emplace_back([&]() {
+                while (true) {
+                    size_t idx = fpTaskIdx.fetch_add(1);
+                    if (idx >= files.size()) break;
+                    fpResults[idx] = AcousticAnalyzer::Instance().ExtractFingerprint(files[idx]);
+                    m_tagItems[idx].duration = fpResults[idx].duration;
+                }
+            });
+        }
+        for (auto& w : fpWorkers) {
+            if (w.joinable()) w.join();
+        }
+        LOG_INFO("[PARALLEL FINGERPRINTING] Completed fingerprint extraction for " + std::to_string(files.size()) + " files.");
+
+        // =========================================================================
+        // PHASE 2: Grouping Tracks into Album Clusters (UI-Order Priority)
+        // =========================================================================
+        struct AlbumCluster {
+            std::string albumKey;
+            std::string sampleFile;
+            std::vector<size_t> indices;
+        };
+
+        std::vector<AlbumCluster> clusters;
+        std::unordered_map<std::string, size_t> keyToClusterIdx;
+
+        for (size_t i = 0; i < files.size(); ++i) {
+            std::string albumClean(m_tagItems[i].albumBuf);
+            std::string albumKey = NormalizeKey(albumClean);
+            if (albumKey.empty() || albumKey == "unknown" || albumKey == "tosort" || albumKey == "music" || albumKey == "media") {
+                albumKey = NormalizeKey(fs::path(files[i]).parent_path().string());
+            }
+
+            auto it = keyToClusterIdx.find(albumKey);
+            if (it == keyToClusterIdx.end()) {
+                size_t newIdx = clusters.size();
+                keyToClusterIdx[albumKey] = newIdx;
+                clusters.push_back({ albumKey, files[i], { i } });
+            } else {
+                clusters[it->second].indices.push_back(i);
+            }
+        }
+
+        LOG_INFO("[ALBUM CLUSTERING] Grouped " + std::to_string(files.size()) + " tracks into " + std::to_string(clusters.size()) + " album clusters.");
+
+        // =========================================================================
+        // PHASE 3: Concurrent Multi-Threaded Album Resolution & Lyrics Fetching
+        // =========================================================================
+        std::mutex albumCacheMutex;
+        std::unordered_map<std::string, AlbumMetadataCache> albumCache;
+
+        std::atomic<size_t> nextClusterIdx{ 0 };
+        unsigned int numAlbumWorkers = (std::min)((unsigned int)clusters.size(), 4u);
+        if (numAlbumWorkers == 0) numAlbumWorkers = 1;
+
+        std::vector<std::thread> albumWorkers;
+        for (unsigned int w = 0; w < numAlbumWorkers; ++w) {
+            albumWorkers.emplace_back([&, w]() {
+                while (true) {
+                    size_t cIdx = nextClusterIdx.fetch_add(1);
+                    if (cIdx >= clusters.size()) break;
+
+                    const auto& cluster = clusters[cIdx];
+                    const std::string& albumKey = cluster.albumKey;
+                    const auto& indices = cluster.indices;
+                    if (indices.empty()) continue;
+
+                    size_t leadIdx = indices[0];
+                    auto& leadItem = m_tagItems[leadIdx];
+
+                    std::string rawAlbum = fs::path(cluster.sampleFile).parent_path().filename().string();
+                    std::string catalogNo = ExtractCatalogNumber(rawAlbum);
+                    if (catalogNo.empty()) {
+                        catalogNo = ExtractCatalogNumber(leadItem.originalFilename);
+                    }
+
+                    std::string artistClean(leadItem.artistBuf);
+                    if (artistClean.empty() || artistClean == "Unknown Artist") {
+                        std::string fnArt = ExtractArtistFromFilename(leadItem.originalFilename);
+                        if (!fnArt.empty()) {
+                            artistClean = fnArt;
+                            strncpy_s(leadItem.artistBuf, artistClean.c_str(), sizeof(leadItem.artistBuf) - 1);
+                        }
+                    }
+                    std::string albumClean(leadItem.albumBuf);
+                    std::string titleClean(leadItem.titleBuf);
+
+                    AlbumMetadataCache cacheResult;
+                    bool foundInCache = false;
+
+                    {
+                        std::lock_guard<std::mutex> lock(albumCacheMutex);
+                        auto cIt = albumCache.find(albumKey);
+                        if (cIt != albumCache.end() && cIt->second.isFetched) {
+                            cacheResult = cIt->second;
+                            foundInCache = true;
                         }
                     }
 
-                    m_tagScanTotal = files.size();
-                    LOG_INFO("[LOCAL INITIALIZATION] Scanned " + std::to_string(files.size()) + " audio files in TO SORT/");
-
-                    if (files.empty()) {
-                        CleanupOrphanToSortFolders(fs::path(g_ToSortDir));
-                        m_tagScanEndTime = std::chrono::steady_clock::now();
-                        m_isTagScanning = false;
-                        PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
-                        return;
-                    }
-
-                    // FAST LOCAL INITIALIZATION (0.01 seconds!)
-                    m_tagItems.resize(files.size());
-                    for (size_t i = 0; i < files.size(); ++i) {
-                        auto& item = m_tagItems[i];
-                        item.filePath = files[i];
-                        item.relPath = fs::relative(files[i], g_BaseDir).string();
-                        item.originalFilename = fs::path(files[i]).filename().string();
-                        memset(item.lyricsBuf, 0, sizeof(item.lyricsBuf)); // Zero-terminate lyrics buffer
-
-                        std::string fn = fs::path(files[i]).stem().string();
-                        std::string trackNo = "01";
-                        std::string title = fn;
-                        std::string artistRaw = fs::path(files[i]).parent_path().parent_path().filename().string();
-                        std::string albumRaw = fs::path(files[i]).parent_path().filename().string();
-                        std::string yearStr = ExtractYearFromString(files[i]);
-
-                        size_t dotPos = fn.find(". ");
-                        if (dotPos == std::string::npos) dotPos = fn.find("- ");
-                        if (dotPos == std::string::npos) dotPos = fn.find("_");
-                        if (dotPos != std::string::npos && dotPos <= 4 && std::isdigit((unsigned char)fn[0])) {
-                            trackNo = fn.substr(0, dotPos);
-                            while (!trackNo.empty() && !std::isdigit((unsigned char)trackNo.back())) trackNo.pop_back();
-                            if (trackNo.length() == 1) trackNo = "0" + trackNo;
-                            title = fn.substr(dotPos + 1);
-                            size_t first = title.find_first_not_of(" \t.-_");
-                            if (first != std::string::npos) title = title.substr(first);
-                        }
-
-                        std::string artistClean = CleanMetadataString(artistRaw);
-                        if (artistClean.empty() || artistClean == "TO SORT" || artistClean == "media" || artistClean == "music") {
-                            artistClean = ExtractArtistFromFilename(item.originalFilename);
-                            if (artistClean.empty()) artistClean = "Unknown Artist";
-                        }
-                        std::string albumClean = CleanAlbumTitle(albumRaw);
-                        if (albumClean.empty()) albumClean = CleanMetadataString(albumRaw);
-
-                        item.embeddedArtist = artistClean;
-                        item.embeddedAlbum = albumClean;
-                        item.embeddedTitle = title;
-                        item.embeddedTrackNo = trackNo;
-                        item.embeddedYear = yearStr;
-
-                        strncpy_s(item.artistBuf, artistClean.c_str(), sizeof(item.artistBuf) - 1);
-                        strncpy_s(item.albumBuf, albumClean.c_str(), sizeof(item.albumBuf) - 1);
-                        strncpy_s(item.titleBuf, title.c_str(), sizeof(item.titleBuf) - 1);
-                        strncpy_s(item.trackNoBuf, trackNo.c_str(), sizeof(item.trackNoBuf) - 1);
-                        strncpy_s(item.yearBuf, yearStr.c_str(), sizeof(item.yearBuf) - 1);
-
-                        // Look for local cover image
-                        fs::path folderPath = fs::path(files[i]).parent_path();
-                        for (auto& cfile : fs::directory_iterator(folderPath)) {
-                            if (cfile.is_regular_file()) {
-                                std::string cext = cfile.path().extension().string();
-                                std::transform(cext.begin(), cext.end(), cext.begin(), ::tolower);
-                                if (cext == ".jpg" || cext == ".jpeg" || cext == ".png" || cext == ".bmp") {
-                                    std::ifstream fIn(cfile.path(), std::ios::binary);
-                                    if (fIn.is_open()) {
-                                        item.localCoverBytes = std::vector<unsigned char>((std::istreambuf_iterator<char>(fIn)), std::istreambuf_iterator<char>());
-                                        item.localCoverPath = cfile.path().string();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Post immediate notification to show local UI instantly!
-                    PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
-
-                    // ULTRA-DETAILED STEP-BY-STEP MUSICBRAINZ RESOLVER
-                    std::unordered_map<std::string, AlbumMetadataCache> albumCache;
-
-                    for (size_t i = 0; i < files.size(); ++i) {
-                        auto& item = m_tagItems[i];
-                        if (item.isProcessed) {
-                            m_fetchedCount++;
-                            continue;
-                        }
-                        std::string rawAlbum = fs::path(files[i]).parent_path().filename().string();
-                        std::string catalogNo = ExtractCatalogNumber(rawAlbum);
-                        if (catalogNo.empty()) {
-                            catalogNo = ExtractCatalogNumber(item.originalFilename);
-                        }
-
-                        std::string artistClean(item.artistBuf);
-                        if (artistClean.empty() || artistClean == "Unknown Artist") {
-                            std::string fnArt = ExtractArtistFromFilename(item.originalFilename);
-                            if (!fnArt.empty()) {
-                                artistClean = fnArt;
-                                strncpy_s(item.artistBuf, artistClean.c_str(), sizeof(item.artistBuf) - 1);
-                            }
-                        }
-                        std::string albumClean(item.albumBuf);
-                        std::string titleClean(item.titleBuf);
-                        std::string albumKey = NormalizeKey(albumClean);
-                        if (albumKey.empty() || albumKey == "unknown" || albumKey == "tosort" || albumKey == "music" || albumKey == "media") {
-                            albumKey = NormalizeKey(fs::path(files[i]).parent_path().string());
-                        }
+                    if (!foundInCache) {
+                        LOG_INFO("[ONLINE RESOLVE START] Cluster #" + std::to_string(cIdx + 1) + "/" + std::to_string(clusters.size()) + ": " + artistClean + " - " + albumClean + " (" + std::to_string(indices.size()) + " tracks)");
 
                         std::string releaseGroupMbId;
                         std::string firstReleaseDate;
@@ -5153,649 +3911,198 @@ void AppWindow::StartTagScan() {
                         std::string coverSource;
                         bool isMatched = false;
                         MatchTier detectedTier = MatchTier::Niche_Local;
-
-                        // Check Album Cache first (Instantly resolves tracks 2-30 of the same album!)
-                        if (albumCache.find(albumKey) != albumCache.end() && albumCache[albumKey].isFetched) {
-                            auto& c = albumCache[albumKey];
-                            item.isMusicBrainzMatched = c.isMatched;
-                            item.onlineCoverBytes = c.coverBytes;
-                            item.onlineCoverSource = c.coverSource;
-                            item.matchTier = c.matchTier;
-                            item.releaseGroupMbId = c.releaseGroupMbId;
-                            item.albumRomaji = c.albumRomaji;
-                            item.albumEnglish = c.albumEnglish;
-                            item.albumJapanese = c.albumJapanese;
-                            item.artistRomaji = c.artistRomaji;
-                            item.artistEnglish = c.artistEnglish;
-                            item.artistJapanese = c.artistJapanese;
-
-                            std::string bestAlb = PickBestName(c.albumRomaji, c.albumEnglish, c.albumJapanese, "");
-                            if (!bestAlb.empty()) strncpy_s(item.albumBuf, bestAlb.c_str(), sizeof(item.albumBuf) - 1);
-                            std::string bestArt = PickBestName(c.artistRomaji, c.artistEnglish, c.artistJapanese, "");
-                            if (!bestArt.empty()) strncpy_s(item.artistBuf, bestArt.c_str(), sizeof(item.artistBuf) - 1);
-
-                            if (!c.firstReleaseDate.empty()) {
-                                strncpy_s(item.yearBuf, c.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
-                            }
-                            ApplyTrackMatch(item, c.tracks);
-                            item.isFetchCompleted = true;
-                            m_fetchedCount++;
-                            LOG_INFO("[ALBUM CACHE HIT] Track #" + std::to_string(i + 1) + " resolved instantly via album cache: " + albumClean);
-                            continue;
-                        }
-
-                        size_t currentNum = i + 1;
-                        LOG_INFO("[MUSICBRAINZ FETCH " + std::to_string(currentNum) + "/" + std::to_string(files.size()) + "] [UI ORDER PRIORITY #" + std::to_string(i + 1) + "] Querying: " + artistClean + " - " + albumClean + " (File: " + item.originalFilename + ")");
-
-                        // 1. AcoustID Fingerprint Lookup via HTTP POST (Fixes HTTP 414 Request-URI Too Long!)
-                        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                        auto fpInfo = AcousticAnalyzer::Instance().ExtractFingerprint(files[i]);
-                        item.duration = fpInfo.duration;
+                        std::vector<MBTrackEntry> resolvedTracks;
+                        std::string albRomaji, albEnglish, albJapanese;
+                        std::string artRomaji, artEnglish, artJapanese;
 
                         std::string acoustRecMbId;
                         std::string acoustRecTitle;
                         std::string acoustRecArtist;
 
+                        // 1. AcoustID Fingerprint Lookup
+                        const auto& fpInfo = fpResults[leadIdx];
                         if (!fpInfo.fpBase64.empty()) {
-                            LOG_INFO("[ACOUSTID FINGERPRINT] Extracted " + std::to_string(fpInfo.fpData.size()) + " frames, duration " + std::to_string(fpInfo.duration) + "s for " + item.originalFilename);
-                            
                             std::ostringstream postStream;
                             postStream << "client=" << g_AcoustIdKey << "&meta=recordings+releasegroups+compress&duration=" << (int)fpInfo.duration << "&fingerprint=" << fpInfo.fpBase64;
                             std::string acoustRes = AcoustIdHttpPost(postStream.str());
 
-                            if (acoustRes.empty()) {
-                                LOG_WARN("[ACOUSTID] Empty response from API (rate limit or network issue)");
-                            } else if (acoustRes.find("\"error\"") != std::string::npos || acoustRes.find("\"status\":\"error\"") != std::string::npos) {
-                                LOG_WARN("[ACOUSTID API ERROR] " + acoustRes.substr(0, (std::min)((size_t)300, acoustRes.size())));
-                            } else if (acoustRes.find("\"recordings\"") == std::string::npos) {
-                                LOG_WARN("[ACOUSTID] Response has no recordings array (size=" + std::to_string(acoustRes.size()) + ")");
-                            }
-
-                            size_t jsonPos = 0;
-                            JsonVal acoustDoc = ParseJsonSimple(acoustRes, jsonPos);
-                            const auto& acoustResults = acoustDoc.get("results");
-
-                            if (acoustResults.type == JsonVal::Array) {
-                                std::string bestRgId;
-                                int bestScore = -1;
-
-                                for (size_t ri = 0; ri < acoustResults.arrVal.size(); ++ri) {
-                                    const auto& recs = acoustResults.get(ri).get("recordings");
-                                    if (recs.type != JsonVal::Array) continue;
-
-                                    for (size_t ci = 0; ci < recs.arrVal.size(); ++ci) {
-                                        const auto& rec = recs.get(ci);
-                                        std::string recTitle = rec.get("title").strVal;
-                                        std::string recId = rec.get("id").strVal;
-
-                                        std::string recArtist;
-                                        const auto& recArtists = rec.get("artists");
-                                        if (recArtists.type == JsonVal::Array && !recArtists.arrVal.empty()) {
-                                            recArtist = recArtists.get(0).get("name").strVal;
+                            auto acoustResults = ParseAcoustIdResponse(acoustRes);
+                            if (!acoustResults.empty()) {
+                                double bestScore = -1.0;
+                                for (const auto& ar : acoustResults) {
+                                    if (ar.score > bestScore) {
+                                        bestScore = ar.score;
+                                        if (!ar.releaseGroupIds.empty()) {
+                                            releaseGroupMbId = ar.releaseGroupIds[0];
+                                            isMatched = true;
+                                            detectedTier = MatchTier::AcoustId;
                                         }
-
-                                        const auto& rgs = rec.get("releasegroups");
-                                        std::string rgId;
-                                        std::string rgTitle;
-                                        if (rgs.type == JsonVal::Array && !rgs.arrVal.empty()) {
-                                            rgId = rgs.get(0).get("id").strVal;
-                                            rgTitle = rgs.get(0).get("title").strVal;
-                                        }
-
-                                        int score = 0;
-
-                                        if (!titleClean.empty()) {
-                                            std::string recTitleNorm = NormalizeKey(recTitle);
-                                            std::string fileTitleNorm = NormalizeKey(titleClean);
-                                            if (!recTitleNorm.empty() && recTitleNorm == fileTitleNorm) {
-                                                score += 100;
-                                            } else if (!recTitleNorm.empty() && (recTitleNorm.find(fileTitleNorm) != std::string::npos || fileTitleNorm.find(recTitleNorm) != std::string::npos)) {
-                                                score += 60;
-                                            }
-                                        }
-
-                                        if (!artistClean.empty() && artistClean != "Unknown Artist" && !recArtist.empty()) {
-                                            std::string recArtistLower = recArtist;
-                                            std::transform(recArtistLower.begin(), recArtistLower.end(), recArtistLower.begin(), ::tolower);
-                                            std::string fileArtistLower = artistClean;
-                                            std::transform(fileArtistLower.begin(), fileArtistLower.end(), fileArtistLower.begin(), ::tolower);
-                                            if (recArtistLower.find(fileArtistLower) != std::string::npos || fileArtistLower.find(recArtistLower) != std::string::npos) {
-                                                score += 50;
-                                            }
-                                        }
-
-                                        if (!albumClean.empty() && !rgTitle.empty()) {
-                                            std::string rgTitleLower = rgTitle;
-                                            std::transform(rgTitleLower.begin(), rgTitleLower.end(), rgTitleLower.begin(), ::tolower);
-                                            std::string albumLower = albumClean;
-                                            std::transform(albumLower.begin(), albumLower.end(), albumLower.begin(), ::tolower);
-                                            if (rgTitleLower.find(albumLower) != std::string::npos || albumLower.find(rgTitleLower) != std::string::npos) {
-                                                score += 40;
-                                            }
-                                        }
-
-                                        if (score > bestScore) {
-                                            bestScore = score;
-                                            bestRgId = rgId;
-                                            if (!recId.empty()) acoustRecMbId = recId;
-                                            if (!recTitle.empty()) acoustRecTitle = recTitle;
-                                            if (!recArtist.empty()) acoustRecArtist = recArtist;
-                                        }
-                                    }
-                                }
-
-                                if (!bestRgId.empty() && bestRgId.length() == 36) {
-                                    releaseGroupMbId = bestRgId;
-                                    isMatched = true;
-                                    detectedTier = MatchTier::AcoustId;
-                                    LOG_INFO("[ACOUSTID MATCHED] ReleaseGroup MBID: " + releaseGroupMbId + " (score: " + std::to_string(bestScore) + ")");
-                                } else if (!acoustRecMbId.empty()) {
-                                    LOG_INFO("[ACOUSTID MATCHED] Recording MBID: " + acoustRecMbId + " (no releasegroup in AcoustID, fetching from MusicBrainz)");
-                                    std::string recLookupUrl = "https://musicbrainz.org/ws/2/recording/" + acoustRecMbId + "?inc=release-groups&fmt=json";
-                                    std::string recLookupRes = HttpGetString(Utf8ToWide(recLookupUrl));
-                                    size_t lp = 0;
-                                    JsonVal recDoc = ParseJsonSimple(recLookupRes, lp);
-                                    const auto& recRgs = recDoc.get("release-groups");
-                                    if (recRgs.type == JsonVal::Array && !recRgs.arrVal.empty()) {
-                                        for (size_t gi = 0; gi < recRgs.arrVal.size(); ++gi) {
-                                            std::string rgId = recRgs.get(gi).get("id").strVal;
-                                            std::string rgTitle = recRgs.get(gi).get("title").strVal;
-                                            if (rgId.length() == 36) {
-                                                if (!albumClean.empty()) {
-                                                    std::string rgLower = rgTitle;
-                                                    std::transform(rgLower.begin(), rgLower.end(), rgLower.begin(), ::tolower);
-                                                    std::string albLower = albumClean;
-                                                    std::transform(albLower.begin(), albLower.end(), albLower.begin(), ::tolower);
-                                                    if (rgLower.find(albLower) != std::string::npos || albLower.find(rgLower) != std::string::npos) {
-                                                        releaseGroupMbId = rgId;
-                                                        isMatched = true;
-                                                        detectedTier = MatchTier::AcoustId;
-                                                        LOG_INFO("[ACOUSTID->MB RECORDING LOOKUP] Found matching releasegroup: " + rgTitle + " (MBID: " + rgId + ")");
-                                                        break;
-                                                    }
-                                                }
-                                                if (releaseGroupMbId.empty()) {
-                                                    releaseGroupMbId = rgId;
-                                                    isMatched = true;
-                                                    detectedTier = MatchTier::AcoustId;
-                                                    LOG_INFO("[ACOUSTID->MB RECORDING LOOKUP] First releasegroup: " + rgTitle + " (MBID: " + rgId + ")");
-                                                }
-                                            }
-                                        }
+                                        if (!ar.recordingId.empty()) acoustRecMbId = ar.recordingId;
+                                        if (!ar.title.empty()) acoustRecTitle = ar.title;
+                                        if (!ar.artists.empty()) acoustRecArtist = ar.artists[0];
                                     }
                                 }
                             }
                         }
 
-                        // 2. Multi-Tier MusicBrainz Search Strategy (Tier A, Tier B Verified/Katakana, Tier C Loose)
+                        // AcoustID -> MusicBrainz Recording Lookup if releasegroup was not directly present
+                        if (releaseGroupMbId.empty() && !acoustRecMbId.empty()) {
+                            std::string recLookupUrl = "https://musicbrainz.org/ws/2/recording/" + acoustRecMbId + "?inc=release-groups&fmt=json";
+                            std::string recLookupRes = HttpGetString(Utf8ToWide(recLookupUrl));
+                            size_t lp = 0;
+                            JsonVal recDoc = ParseJsonSimple(recLookupRes, lp);
+                            const auto& recRgs = recDoc.get("release-groups");
+                            if (recRgs.type == JsonVal::Array && !recRgs.arrVal.empty()) {
+                                for (size_t gi = 0; gi < recRgs.arrVal.size(); ++gi) {
+                                    std::string rgId = recRgs.get(gi).get("id").strVal;
+                                    std::string rgTitle = recRgs.get(gi).get("title").strVal;
+                                    if (rgId.length() == 36) {
+                                        releaseGroupMbId = rgId;
+                                        isMatched = true;
+                                        detectedTier = MatchTier::AcoustId;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 2. MusicBrainz Multi-Tier Search (Tier A, Tier B, Tier C)
                         if (releaseGroupMbId.empty() && !albumClean.empty()) {
-                            std::string searchArtist = artistClean;
-                            std::string searchTitle = titleClean;
-                            if (!acoustRecArtist.empty()) {
-                                searchArtist = acoustRecArtist;
-                            }
-                            if (!acoustRecTitle.empty()) {
-                                searchTitle = acoustRecTitle;
-                            }
+                            std::string searchArtist = !acoustRecArtist.empty() ? acoustRecArtist : artistClean;
+                            std::string searchTitle = !acoustRecTitle.empty() ? acoustRecTitle : titleClean;
 
-                            std::vector<MBReleaseGroupCandidate> tierBCandidates;
-
-                            // Tier A: Strict Release Group Search
+                            // Tier A: Strict
                             if (!searchArtist.empty() && searchArtist != "Unknown Artist") {
                                 std::string artistLucene = EscapeLuceneQuery(searchArtist);
                                 std::string albumLucene = EscapeLuceneQuery(albumClean);
                                 std::string mbQuery = "artist:\"" + artistLucene + "\" AND release:\"" + albumLucene + "\"";
                                 std::string mbUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json";
-                                LOG_INFO("[MUSICBRAINZ TIER A] Querying: " + mbQuery);
                                 std::string mbRes = HttpGetString(Utf8ToWide(mbUrl));
-
                                 auto candidates = ParseMusicBrainzReleaseGroups(mbRes);
                                 if (!candidates.empty()) {
                                     releaseGroupMbId = candidates[0].id;
-                                    if (!candidates[0].firstReleaseDate.empty()) {
-                                        firstReleaseDate = candidates[0].firstReleaseDate;
-                                        LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + firstReleaseDate);
-                                    }
+                                    firstReleaseDate = candidates[0].firstReleaseDate;
                                     isMatched = true;
                                     detectedTier = MatchTier::TierA;
-                                    LOG_INFO("[MUSICBRAINZ TIER A SUCCESS] MBID: " + releaseGroupMbId + " (" + candidates[0].title + " by " + candidates[0].artistCredit + ")");
                                 }
                             }
 
-                            // Tier B: Album Title Alone Search & Katakana Transliteration Fallback
+                            // Tier B: Release Title alone & Katakana
                             if (releaseGroupMbId.empty()) {
                                 std::string mbAlbumUrl = "https://musicbrainz.org/ws/2/release-group?query=release:\"" + UrlEncode(albumClean) + "\"&fmt=json";
-                                LOG_INFO("[MUSICBRAINZ TIER B FALLBACK] Querying release:\"" + albumClean + "\"");
                                 std::string mbAlbumRes = HttpGetString(Utf8ToWide(mbAlbumUrl));
-                                tierBCandidates = ParseMusicBrainzReleaseGroups(mbAlbumRes);
-                                LOG_INFO("[MUSICBRAINZ TIER B] Found " + std::to_string(tierBCandidates.size()) + " candidate release-groups");
+                                auto tierBCandidates = ParseMusicBrainzReleaseGroups(mbAlbumRes);
 
-                                auto artistKnown = [&]() { return !searchArtist.empty() && searchArtist != "Unknown Artist"; };
-
-                                if (!tierBCandidates.empty()) {
-                                    std::string candMbIdPicked;
-                                    std::string candTitlePicked;
-                                    std::string candDatePicked;
-                                    MatchTier tierBPicked = MatchTier::TierB_Fallback;
-
-                                    if (artistKnown()) {
-                                        std::string baseArtist = searchArtist;
-                                        size_t semiPos = baseArtist.find(';');
-                                        if (semiPos != std::string::npos) baseArtist = baseArtist.substr(0, semiPos);
-                                        while (!baseArtist.empty() && (baseArtist.back() == ' ' || baseArtist.back() == '\t')) baseArtist.pop_back();
-
-                                        std::string baseLower = baseArtist;
-                                        std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), ::tolower);
-
-                                        for (const auto& c : tierBCandidates) {
-                                            std::string acLower = c.artistCredit;
-                                            std::transform(acLower.begin(), acLower.end(), acLower.begin(), ::tolower);
-
-                                            bool isVA = (acLower.find("various artists") != std::string::npos || acLower.find("v.a.") != std::string::npos);
-                                            if (!baseLower.empty() && (acLower.find(baseLower) != std::string::npos || isVA)) {
-                                                candMbIdPicked = c.id;
-                                                candTitlePicked = c.title;
-                                                candDatePicked = c.firstReleaseDate;
-                                                tierBPicked = MatchTier::TierB_Verified;
-                                                LOG_INFO("[MUSICBRAINZ TIER B ARTIST MATCH] MBID: " + c.id + " (artist: " + c.artistCredit + ", album: " + c.title + ")");
-                                                break;
-                                            }
-                                        }
-                                    }
-
-                                    if (candMbIdPicked.empty() && !titleClean.empty()) {
-                                        LOG_INFO("[MUSICBRAINZ TIER B TRACK VERIFY] Verifying candidates by track title match for: " + titleClean);
-                                        int bestScore = -1;
-                                        size_t maxVerifications = (std::min)((size_t)10, tierBCandidates.size());
-                                        for (size_t ci = 0; ci < maxVerifications; ++ci) {
-                                            const auto& c = tierBCandidates[ci];
-                                            auto tracks = FetchMusicBrainzReleaseTracks(c.id);
-                                            int score = -1;
-                                            std::string foundTrackTitle;
-                                            for (const auto& t : tracks) {
-                                                std::string tNorm = NormalizeKey(t.title);
-                                                std::string fNorm = NormalizeKey(titleClean);
-                                                int s = -1;
-                                                if (!tNorm.empty() && tNorm == fNorm) s = 100;
-                                                else if (!tNorm.empty() && (tNorm.find(fNorm) != std::string::npos || fNorm.find(tNorm) != std::string::npos)) s = 70;
-                                                else if (t.lengthMs > 0 && std::abs(((double)t.lengthMs / 1000.0) - item.duration) <= 3.0) s = 50;
-                                                if (s > score) { score = s; foundTrackTitle = t.title; }
-                                            }
-                                            LOG_INFO("[MUSICBRAINZ TIER B TRACK VERIFY] " + c.title + " (MBID: " + c.id + ") score: " + std::to_string(score) + (score > 0 ? " via " + foundTrackTitle : ""));
-                                            if (score > bestScore && score >= 50) {
-                                                bestScore = score;
-                                                candMbIdPicked = c.id;
-                                                candTitlePicked = c.title;
-                                                candDatePicked = c.firstReleaseDate;
-                                                tierBPicked = MatchTier::TierB_Verified;
-                                            }
-                                            if (bestScore == 100) {
-                                                break; // Exact track match found, stop checking remaining candidates
-                                            }
-                                        }
-                                    }
-
-                                    if (!candMbIdPicked.empty()) {
-                                        releaseGroupMbId = candMbIdPicked;
-                                        if (!candDatePicked.empty()) {
-                                            firstReleaseDate = candDatePicked;
-                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + firstReleaseDate);
-                                        }
+                                for (const auto& c : tierBCandidates) {
+                                    std::string acLower = c.artistCredit;
+                                    std::transform(acLower.begin(), acLower.end(), acLower.begin(), ::tolower);
+                                    std::string sLower = searchArtist;
+                                    std::transform(sLower.begin(), sLower.end(), sLower.begin(), ::tolower);
+                                    if (!sLower.empty() && sLower != "unknown artist" && (acLower.find(sLower) != std::string::npos || acLower.find("various") != std::string::npos)) {
+                                        releaseGroupMbId = c.id;
+                                        firstReleaseDate = c.firstReleaseDate;
                                         isMatched = true;
-                                        detectedTier = tierBPicked;
-                                        LOG_INFO("[MUSICBRAINZ TIER B VERIFIED SUCCESS] MBID: " + releaseGroupMbId + " (" + candTitlePicked + ")");
+                                        detectedTier = MatchTier::TierB_Verified;
+                                        break;
                                     }
                                 }
 
-                                // If Romaji album title didn't match, try Japanese Katakana transliteration (e.g. Iranai -> イラナイ)
+                                if (releaseGroupMbId.empty() && !tierBCandidates.empty() && !titleClean.empty()) {
+                                    for (size_t ci = 0; ci < (std::min)((size_t)5, tierBCandidates.size()); ++ci) {
+                                        auto tracks = FetchMusicBrainzReleaseTracks(tierBCandidates[ci].id);
+                                        for (const auto& t : tracks) {
+                                            if (NormalizeKey(t.title) == NormalizeKey(titleClean)) {
+                                                releaseGroupMbId = tierBCandidates[ci].id;
+                                                firstReleaseDate = tierBCandidates[ci].firstReleaseDate;
+                                                isMatched = true;
+                                                detectedTier = MatchTier::TierB_Verified;
+                                                break;
+                                            }
+                                        }
+                                        if (!releaseGroupMbId.empty()) break;
+                                    }
+                                }
+
                                 if (releaseGroupMbId.empty()) {
                                     std::string albumKatakana = RomajiToKatakana(albumClean);
                                     if (!albumKatakana.empty() && albumKatakana != albumClean) {
                                         std::string mbKataUrl = "https://musicbrainz.org/ws/2/release-group?query=release:\"" + UrlEncode(albumKatakana) + "\"&fmt=json";
-                                        LOG_INFO("[MUSICBRAINZ TIER B KATAKANA] Querying release:\"" + albumKatakana + "\" (Converted from " + albumClean + ")");
                                         std::string mbKataRes = HttpGetString(Utf8ToWide(mbKataUrl));
                                         auto kataCandidates = ParseMusicBrainzReleaseGroups(mbKataRes);
                                         if (!kataCandidates.empty()) {
                                             releaseGroupMbId = kataCandidates[0].id;
-                                            if (!kataCandidates[0].firstReleaseDate.empty()) {
-                                                firstReleaseDate = kataCandidates[0].firstReleaseDate;
-                                                LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + firstReleaseDate);
-                                            }
+                                            firstReleaseDate = kataCandidates[0].firstReleaseDate;
                                             isMatched = true;
                                             detectedTier = MatchTier::TierB_Katakana;
-                                            LOG_INFO("[MUSICBRAINZ TIER B KATAKANA SUCCESS] MBID: " + releaseGroupMbId + " for Katakana title: " + albumKatakana);
                                         }
                                     }
                                 }
-                            }
-
-                            // Tier C: Loose Text Search (ONLY when Artist is known to avoid random keyword matches)
-                            if (releaseGroupMbId.empty() && !searchArtist.empty() && searchArtist != "Unknown Artist") {
-                                std::string mbLooseQuery = EscapeLuceneQuery(searchArtist) + " " + EscapeLuceneQuery(albumClean);
-                                std::string mbLooseUrl = "https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbLooseQuery) + "&fmt=json";
-                                LOG_INFO("[MUSICBRAINZ TIER C LOOSE] Querying: " + mbLooseQuery);
-                                std::string mbLooseRes = HttpGetString(Utf8ToWide(mbLooseUrl));
-                                auto looseCandidates = ParseMusicBrainzReleaseGroups(mbLooseRes);
-                                for (const auto& c : looseCandidates) {
-                                    bool artistMatched = true;
-                                    std::string baseArtist = searchArtist;
-                                    size_t semiPos = baseArtist.find(';');
-                                    if (semiPos != std::string::npos) baseArtist = baseArtist.substr(0, semiPos);
-                                    while (!baseArtist.empty() && (baseArtist.back() == ' ' || baseArtist.back() == '\t')) baseArtist.pop_back();
-
-                                    std::string acLower = c.artistCredit;
-                                    std::transform(acLower.begin(), acLower.end(), acLower.begin(), ::tolower);
-                                    std::string baseLower = baseArtist;
-                                    std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), ::tolower);
-                                    bool isVA = (acLower.find("various artists") != std::string::npos || acLower.find("v.a.") != std::string::npos);
-                                    if (!baseLower.empty() && acLower.find(baseLower) == std::string::npos && !isVA) {
-                                        artistMatched = false;
-                                        LOG_INFO("[MUSICBRAINZ TIER C REJECTED] Mismatched artist credit: " + c.artistCredit + " (Expected: " + baseArtist + ")");
-                                    }
-
-                                    bool titleMatched = false;
-                                    if (!albumClean.empty()) {
-                                        std::string candTitleNorm = NormalizeKey(c.title);
-                                        std::string albumCleanNorm = NormalizeKey(albumClean);
-                                        if (candTitleNorm == albumCleanNorm) {
-                                            titleMatched = true;
-                                        } else if (candTitleNorm.length() >= 4 && albumCleanNorm.length() >= 4 &&
-                                                   (candTitleNorm.find(albumCleanNorm) != std::string::npos || albumCleanNorm.find(candTitleNorm) != std::string::npos)) {
-                                            double lenRatio = (double)(std::min)(candTitleNorm.length(), albumCleanNorm.length()) / 
-                                                              (double)(std::max)(candTitleNorm.length(), albumCleanNorm.length());
-                                            if (lenRatio >= 0.75) {
-                                                titleMatched = true;
-                                            }
-                                        }
-                                        if (!titleMatched) {
-                                            LOG_INFO("[MUSICBRAINZ TIER C REJECTED] Mismatched album title: " + c.title + " (Expected: " + albumClean + ")");
-                                        }
-                                    }
-
-                                    if (artistMatched && titleMatched) {
-                                        releaseGroupMbId = c.id;
-                                        if (!c.firstReleaseDate.empty()) {
-                                            firstReleaseDate = c.firstReleaseDate;
-                                            LOG_INFO("[MUSICBRAINZ RELEASE DATE] Found full date: " + firstReleaseDate);
-                                        }
-                                        isMatched = true;
-                                        detectedTier = MatchTier::TierC_Loose;
-                                        LOG_INFO("[MUSICBRAINZ TIER C SUCCESS] MBID: " + releaseGroupMbId + " (" + c.title + " by " + c.artistCredit + ")");
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // Tier B Unverified Fallback: Last Resort if artist was known
-                            if (releaseGroupMbId.empty() && !tierBCandidates.empty() && !searchArtist.empty() && searchArtist != "Unknown Artist") {
-                                releaseGroupMbId = tierBCandidates[0].id;
-                                if (!tierBCandidates[0].firstReleaseDate.empty()) {
-                                    firstReleaseDate = tierBCandidates[0].firstReleaseDate;
-                                }
-                                isMatched = true;
-                                detectedTier = MatchTier::TierB_Fallback;
-                                LOG_INFO("[MUSICBRAINZ TIER B FALLBACK FIRST] MBID: " + releaseGroupMbId + " (" + tierBCandidates[0].title + ")");
                             }
                         }
 
-                        // 3. TouhouDB & VocaDB Database Search (for Doujin & Vocaloid music)
+                        // 3. TouhouDB, VocaDB, UtaiteDB Search
                         if (releaseGroupMbId.empty() && (!albumClean.empty() || !catalogNo.empty())) {
-                            std::string searchArtist = artistClean;
-                            if (!acoustRecArtist.empty()) {
-                                searchArtist = acoustRecArtist;
-                            }
+                            std::string searchArtist = !acoustRecArtist.empty() ? acoustRecArtist : artistClean;
+                            VdbReleaseInfo vdbInfo;
 
-                            // TouhouDB Search
-                            VdbReleaseInfo touhouInfo;
-                            if (SearchVdbRelease("https://touhoudb.com", "TouhouDB", searchArtist, albumClean, catalogNo, touhouInfo)) {
-                                LOG_INFO("[TOUHOUDB METADATA FOUND] Matched release: " + touhouInfo.artist + " - " + touhouInfo.title + " (Cat: " + touhouInfo.catalogNumber + ", Date: " + touhouInfo.releaseDate + ", Tracks: " + std::to_string(touhouInfo.tracks.size()) + ")");
-                                releaseGroupMbId = "touhoudb_" + std::to_string(touhouInfo.id);
-                                if (!touhouInfo.releaseDate.empty()) {
-                                    firstReleaseDate = touhouInfo.releaseDate;
+                            if (SearchVdbRelease("https://touhoudb.com", "TouhouDB", searchArtist, albumClean, catalogNo, vdbInfo)) {
+                                releaseGroupMbId = "touhoudb_" + std::to_string(vdbInfo.id);
+                                firstReleaseDate = vdbInfo.releaseDate;
+                                if (!vdbInfo.coverUrl.empty()) {
+                                    coverData = HttpGetBytes(Utf8ToWide(vdbInfo.coverUrl));
+                                    if (!coverData.empty()) coverSource = "TouhouDB";
                                 }
-                                if (!touhouInfo.coverUrl.empty()) {
-                                    coverData = HttpGetBytes(Utf8ToWide(touhouInfo.coverUrl));
-                                    if (!coverData.empty()) {
-                                        coverSource = "TouhouDB";
-                                        LOG_INFO("[TOUHOUDB COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from TouhouDB via " + touhouInfo.coverUrl);
-                                    }
-                                }
+                                resolvedTracks = vdbInfo.tracks;
+                                albRomaji = vdbInfo.titleRomaji; albEnglish = vdbInfo.titleEnglish; albJapanese = vdbInfo.titleJapanese;
+                                artRomaji = vdbInfo.artistRomaji; artEnglish = vdbInfo.artistEnglish; artJapanese = vdbInfo.artistJapanese;
                                 isMatched = true;
                                 detectedTier = MatchTier::TouhouDB;
-
-                                for (size_t k = 0; k < files.size(); ++k) {
-                                    std::string aKey = NormalizeKey(m_tagItems[k].albumBuf);
-                                    if (aKey.empty() || aKey == "unknown" || aKey == "tosort" || aKey == "music" || aKey == "media") {
-                                        aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
-                                    }
-                                    if (aKey == albumKey) {
-                                        m_tagItems[k].albumRomaji = touhouInfo.titleRomaji;
-                                        m_tagItems[k].albumEnglish = touhouInfo.titleEnglish;
-                                        m_tagItems[k].albumJapanese = touhouInfo.titleJapanese;
-                                        m_tagItems[k].artistRomaji = touhouInfo.artistRomaji;
-                                        m_tagItems[k].artistEnglish = touhouInfo.artistEnglish;
-                                        m_tagItems[k].artistJapanese = touhouInfo.artistJapanese;
-
-                                        if (!touhouInfo.artist.empty()) {
-                                            strncpy_s(m_tagItems[k].artistBuf, touhouInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
-                                        }
-                                        if (!touhouInfo.title.empty()) {
-                                            strncpy_s(m_tagItems[k].albumBuf, touhouInfo.title.c_str(), sizeof(m_tagItems[k].albumBuf) - 1);
-                                        }
-                                        if (!touhouInfo.releaseDate.empty()) {
-                                            strncpy_s(m_tagItems[k].yearBuf, touhouInfo.releaseDate.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
-                                        }
-                                        if (!touhouInfo.tracks.empty()) {
-                                            ApplyTrackMatch(m_tagItems[k], touhouInfo.tracks);
-                                        }
-                                        m_tagItems[k].matchTier = detectedTier;
-                                        m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
-                                        if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
-                                            m_tagItems[k].onlineCoverBytes = coverData;
-                                            m_tagItems[k].onlineCoverSource = coverSource;
-                                        }
-                                        m_tagItems[k].isMusicBrainzMatched = isMatched;
-                                    }
+                            } else if (SearchVdbRelease("https://vocadb.net", "VocaDB", searchArtist, albumClean, catalogNo, vdbInfo)) {
+                                releaseGroupMbId = "vocadb_" + std::to_string(vdbInfo.id);
+                                firstReleaseDate = vdbInfo.releaseDate;
+                                if (!vdbInfo.coverUrl.empty()) {
+                                    coverData = HttpGetBytes(Utf8ToWide(vdbInfo.coverUrl));
+                                    if (!coverData.empty()) coverSource = "VocaDB";
                                 }
-
-                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, touhouInfo.tracks, touhouInfo.titleRomaji, touhouInfo.titleEnglish, touhouInfo.titleJapanese, touhouInfo.artistRomaji, touhouInfo.artistEnglish, touhouInfo.artistJapanese, isMatched, true, detectedTier };
-                                if (!releaseGroupMbId.empty()) {
-                                    albumCache[releaseGroupMbId] = albumCache[albumKey];
+                                resolvedTracks = vdbInfo.tracks;
+                                albRomaji = vdbInfo.titleRomaji; albEnglish = vdbInfo.titleEnglish; albJapanese = vdbInfo.titleJapanese;
+                                artRomaji = vdbInfo.artistRomaji; artEnglish = vdbInfo.artistEnglish; artJapanese = vdbInfo.artistJapanese;
+                                isMatched = true;
+                                detectedTier = MatchTier::VocaDB;
+                            } else if (SearchVdbRelease("https://utaitedb.net", "UtaiteDB", searchArtist, albumClean, catalogNo, vdbInfo)) {
+                                releaseGroupMbId = "utaitedb_" + std::to_string(vdbInfo.id);
+                                firstReleaseDate = vdbInfo.releaseDate;
+                                if (!vdbInfo.coverUrl.empty()) {
+                                    coverData = HttpGetBytes(Utf8ToWide(vdbInfo.coverUrl));
+                                    if (!coverData.empty()) coverSource = "UtaiteDB";
                                 }
-                            }
-
-                            // VocaDB Search (if TouhouDB didn't match)
-                            if (releaseGroupMbId.empty()) {
-                                VdbReleaseInfo vocaInfo;
-                                if (SearchVdbRelease("https://vocadb.net", "VocaDB", searchArtist, albumClean, catalogNo, vocaInfo)) {
-                                    LOG_INFO("[VOCADB METADATA FOUND] Matched release: " + vocaInfo.artist + " - " + vocaInfo.title + " (Cat: " + vocaInfo.catalogNumber + ", Date: " + vocaInfo.releaseDate + ", Tracks: " + std::to_string(vocaInfo.tracks.size()) + ")");
-                                    releaseGroupMbId = "vocadb_" + std::to_string(vocaInfo.id);
-                                    if (!vocaInfo.releaseDate.empty()) {
-                                        firstReleaseDate = vocaInfo.releaseDate;
-                                    }
-                                    if (!vocaInfo.coverUrl.empty()) {
-                                        coverData = HttpGetBytes(Utf8ToWide(vocaInfo.coverUrl));
-                                        if (!coverData.empty()) {
-                                            coverSource = "VocaDB";
-                                            LOG_INFO("[VOCADB COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from VocaDB via " + vocaInfo.coverUrl);
-                                        }
-                                    }
-                                    isMatched = true;
-                                    detectedTier = MatchTier::VocaDB;
-
-                                    for (size_t k = 0; k < files.size(); ++k) {
-                                        std::string aKey = NormalizeKey(m_tagItems[k].albumBuf);
-                                        if (aKey.empty() || aKey == "unknown" || aKey == "tosort" || aKey == "music" || aKey == "media") {
-                                            aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
-                                        }
-                                        if (aKey == albumKey) {
-                                            m_tagItems[k].albumRomaji = vocaInfo.titleRomaji;
-                                            m_tagItems[k].albumEnglish = vocaInfo.titleEnglish;
-                                            m_tagItems[k].albumJapanese = vocaInfo.titleJapanese;
-                                            m_tagItems[k].artistRomaji = vocaInfo.artistRomaji;
-                                            m_tagItems[k].artistEnglish = vocaInfo.artistEnglish;
-                                            m_tagItems[k].artistJapanese = vocaInfo.artistJapanese;
-
-                                            if (!vocaInfo.artist.empty()) {
-                                                strncpy_s(m_tagItems[k].artistBuf, vocaInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
-                                            }
-                                            if (!vocaInfo.title.empty()) {
-                                                strncpy_s(m_tagItems[k].albumBuf, vocaInfo.title.c_str(), sizeof(m_tagItems[k].albumBuf) - 1);
-                                            }
-                                            if (!vocaInfo.releaseDate.empty()) {
-                                                strncpy_s(m_tagItems[k].yearBuf, vocaInfo.releaseDate.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
-                                            }
-                                            if (!vocaInfo.tracks.empty()) {
-                                                ApplyTrackMatch(m_tagItems[k], vocaInfo.tracks);
-                                            }
-                                            m_tagItems[k].matchTier = detectedTier;
-                                            m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
-                                            if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
-                                                m_tagItems[k].onlineCoverBytes = coverData;
-                                                m_tagItems[k].onlineCoverSource = coverSource;
-                                            }
-                                            m_tagItems[k].isMusicBrainzMatched = isMatched;
-                                        }
-                                    }
-
-                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, vocaInfo.tracks, vocaInfo.titleRomaji, vocaInfo.titleEnglish, vocaInfo.titleJapanese, vocaInfo.artistRomaji, vocaInfo.artistEnglish, vocaInfo.artistJapanese, isMatched, true, detectedTier };
-                                    if (!releaseGroupMbId.empty()) {
-                                        albumCache[releaseGroupMbId] = albumCache[albumKey];
-                                    }
-                                }
-                            }
-
-                            // UtaiteDB Search (if TouhouDB and VocaDB didn't match)
-                            if (releaseGroupMbId.empty()) {
-                                VdbReleaseInfo utaiteInfo;
-                                if (SearchVdbRelease("https://utaitedb.net", "UtaiteDB", searchArtist, albumClean, catalogNo, utaiteInfo)) {
-                                    LOG_INFO("[UTAITEDB METADATA FOUND] Matched release: " + utaiteInfo.artist + " - " + utaiteInfo.title + " (Cat: " + utaiteInfo.catalogNumber + ", Date: " + utaiteInfo.releaseDate + ", Tracks: " + std::to_string(utaiteInfo.tracks.size()) + ")");
-                                    releaseGroupMbId = "utaitedb_" + std::to_string(utaiteInfo.id);
-                                    if (!utaiteInfo.releaseDate.empty()) {
-                                        firstReleaseDate = utaiteInfo.releaseDate;
-                                    }
-                                    if (!utaiteInfo.coverUrl.empty()) {
-                                        coverData = HttpGetBytes(Utf8ToWide(utaiteInfo.coverUrl));
-                                        if (!coverData.empty()) {
-                                            coverSource = "UtaiteDB";
-                                            LOG_INFO("[UTAITEDB COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from UtaiteDB via " + utaiteInfo.coverUrl);
-                                        }
-                                    }
-                                    isMatched = true;
-                                    detectedTier = MatchTier::UtaiteDB;
-
-                                    for (size_t k = 0; k < files.size(); ++k) {
-                                        std::string aKey = NormalizeKey(m_tagItems[k].albumBuf);
-                                        if (aKey.empty() || aKey == "unknown" || aKey == "tosort" || aKey == "music" || aKey == "media") {
-                                            aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
-                                        }
-                                        if (aKey == albumKey) {
-                                            m_tagItems[k].albumRomaji = utaiteInfo.titleRomaji;
-                                            m_tagItems[k].albumEnglish = utaiteInfo.titleEnglish;
-                                            m_tagItems[k].albumJapanese = utaiteInfo.titleJapanese;
-                                            m_tagItems[k].artistRomaji = utaiteInfo.artistRomaji;
-                                            m_tagItems[k].artistEnglish = utaiteInfo.artistEnglish;
-                                            m_tagItems[k].artistJapanese = utaiteInfo.artistJapanese;
-
-                                            if (!utaiteInfo.artist.empty()) {
-                                                strncpy_s(m_tagItems[k].artistBuf, utaiteInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
-                                            }
-                                            if (!utaiteInfo.title.empty()) {
-                                                strncpy_s(m_tagItems[k].albumBuf, utaiteInfo.title.c_str(), sizeof(m_tagItems[k].albumBuf) - 1);
-                                            }
-                                            if (!utaiteInfo.releaseDate.empty()) {
-                                                strncpy_s(m_tagItems[k].yearBuf, utaiteInfo.releaseDate.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
-                                            }
-                                            if (!utaiteInfo.tracks.empty()) {
-                                                ApplyTrackMatch(m_tagItems[k], utaiteInfo.tracks);
-                                            }
-                                            m_tagItems[k].matchTier = detectedTier;
-                                            m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
-                                            if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
-                                                m_tagItems[k].onlineCoverBytes = coverData;
-                                                m_tagItems[k].onlineCoverSource = coverSource;
-                                            }
-                                            m_tagItems[k].isMusicBrainzMatched = isMatched;
-                                        }
-                                    }
-
-                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, utaiteInfo.tracks, utaiteInfo.titleRomaji, utaiteInfo.titleEnglish, utaiteInfo.titleJapanese, utaiteInfo.artistRomaji, utaiteInfo.artistEnglish, utaiteInfo.artistJapanese, isMatched, true, detectedTier };
-                                    if (!releaseGroupMbId.empty()) {
-                                        albumCache[releaseGroupMbId] = albumCache[albumKey];
-                                    }
-                                }
+                                resolvedTracks = vdbInfo.tracks;
+                                albRomaji = vdbInfo.titleRomaji; albEnglish = vdbInfo.titleEnglish; albJapanese = vdbInfo.titleJapanese;
+                                artRomaji = vdbInfo.artistRomaji; artEnglish = vdbInfo.artistEnglish; artJapanese = vdbInfo.artistJapanese;
+                                isMatched = true;
+                                detectedTier = MatchTier::UtaiteDB;
                             }
                         }
 
-                        // 4. Fallback: Discogs Database Search (if MusicBrainz, TouhouDB, VocaDB, UtaiteDB & AcoustID did not match)
+                        // 4. Discogs Search Fallback
                         if (releaseGroupMbId.empty() && !albumClean.empty()) {
-                            std::string searchArtist = artistClean;
-                            std::string searchTitle = titleClean;
-                            if (!acoustRecArtist.empty()) {
-                                searchArtist = acoustRecArtist;
-                                LOG_INFO("[ACOUSTID OVERRIDE] Using AcoustID artist '" + acoustRecArtist + "' instead of folder '" + artistClean + "'");
-                            }
-                            if (!acoustRecTitle.empty()) {
-                                searchTitle = acoustRecTitle;
-                            }
-
-                            LOG_INFO("[DISCOGS FALLBACK] Searching Discogs Database for: " + searchArtist + " - " + albumClean);
+                            std::string searchArtist = !acoustRecArtist.empty() ? acoustRecArtist : artistClean;
                             DiscogsReleaseInfo discInfo;
-                            if (SearchDiscogsRelease(searchArtist, albumClean, discInfo)) {
-                                LOG_INFO("[DISCOGS METADATA FOUND] Matched release: " + discInfo.artist + " - " + discInfo.title + " (Year: " + discInfo.year + ", Tracks: " + std::to_string(discInfo.tracks.size()) + ")");
+                            if (SearchDiscogsRelease(searchArtist, albumClean, discInfo, g_DiscogsToken)) {
                                 releaseGroupMbId = "discogs_" + discInfo.id;
-                                if (!discInfo.year.empty()) {
-                                    firstReleaseDate = discInfo.year;
-                                }
+                                firstReleaseDate = discInfo.year;
                                 if (!discInfo.coverUrl.empty()) {
-                                    coverData = HttpGetBytes(Utf8ToWide(discInfo.coverUrl));
-                                    if (!coverData.empty()) {
-                                        coverSource = "Discogs";
-                                        LOG_INFO("[DISCOGS COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from Discogs via " + discInfo.coverUrl);
-                                    }
+                                    coverData = HttpGetBytes(Utf8ToWide(discInfo.coverUrl), g_DiscogsToken);
+                                    if (!coverData.empty()) coverSource = "Discogs";
                                 }
+                                resolvedTracks = discInfo.tracks;
                                 isMatched = true;
                                 detectedTier = MatchTier::Discogs;
-
-                                for (size_t k = 0; k < files.size(); ++k) {
-                                    std::string aKey = NormalizeKey(m_tagItems[k].albumBuf);
-                                    if (aKey.empty() || aKey == "unknown" || aKey == "tosort" || aKey == "music" || aKey == "media") {
-                                        aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
-                                    }
-                                    if (aKey == albumKey) {
-                                        if (!discInfo.artist.empty()) {
-                                            strncpy_s(m_tagItems[k].artistBuf, discInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
-                                        }
-                                        if (!discInfo.title.empty()) {
-                                            strncpy_s(m_tagItems[k].albumBuf, discInfo.title.c_str(), sizeof(m_tagItems[k].albumBuf) - 1);
-                                        }
-                                        if (!discInfo.year.empty()) {
-                                            strncpy_s(m_tagItems[k].yearBuf, discInfo.year.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
-                                        }
-                                        if (!discInfo.tracks.empty()) {
-                                            ApplyTrackMatch(m_tagItems[k], discInfo.tracks);
-                                        }
-                                        m_tagItems[k].matchTier = detectedTier;
-                                        m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
-                                        if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
-                                            m_tagItems[k].onlineCoverBytes = coverData;
-                                            m_tagItems[k].onlineCoverSource = coverSource;
-                                        }
-                                        m_tagItems[k].isMusicBrainzMatched = isMatched;
-                                    }
-                                }
-
-                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, discInfo.tracks, "", "", "", "", "", "", isMatched, true, detectedTier };
-                                if (!releaseGroupMbId.empty()) {
-                                    albumCache[releaseGroupMbId] = albumCache[albumKey];
-                                }
                             }
                         }
 
-                        // 5. Fetch Cover Art from CoverArtArchive.org for MusicBrainz releases (Cascading Fallback: Original -> 1200px -> 500px -> 250px)
+                        // 5. If MusicBrainz matched: Download Cover Art & Tracklist & Romaji Enrichment
                         if (!releaseGroupMbId.empty() && releaseGroupMbId.rfind("discogs_", 0) != 0 && releaseGroupMbId.rfind("touhoudb_", 0) != 0 && releaseGroupMbId.rfind("vocadb_", 0) != 0 && releaseGroupMbId.rfind("utaitedb_", 0) != 0) {
-                            LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive image...");
-                            
                             const char* endpoints[] = {
                                 "https://coverartarchive.org/release-group/%s/front",
                                 "https://coverartarchive.org/release/%s/front",
@@ -5813,131 +4120,108 @@ void AppWindow::StartTagScan() {
                                 coverData = HttpGetBytes(Utf8ToWide(urlBuf));
                                 if (!coverData.empty()) {
                                     coverSource = "CoverArtArchive";
-                                    LOG_INFO("[COVER ART DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art via " + std::string(urlBuf));
                                     break;
                                 }
                             }
 
                             if (coverData.empty()) {
-                                LOG_INFO("[COVER ART MISSING] CoverArtArchive image not available for MBID: " + releaseGroupMbId + ". Trying Discogs fallback...");
                                 DiscogsReleaseInfo discCoverInfo;
-                                if (SearchDiscogsRelease(artistClean, albumClean, discCoverInfo) && !discCoverInfo.coverUrl.empty()) {
-                                    coverData = HttpGetBytes(Utf8ToWide(discCoverInfo.coverUrl));
-                                    if (!coverData.empty()) {
-                                        coverSource = "Discogs";
-                                        LOG_INFO("[DISCOGS COVER FALLBACK SUCCESS] " + std::to_string(coverData.size()) + " bytes cover art downloaded from Discogs via " + discCoverInfo.coverUrl);
-                                    }
+                                if (SearchDiscogsRelease(artistClean, albumClean, discCoverInfo, g_DiscogsToken) && !discCoverInfo.coverUrl.empty()) {
+                                    coverData = HttpGetBytes(Utf8ToWide(discCoverInfo.coverUrl), g_DiscogsToken);
+                                    if (!coverData.empty()) coverSource = "Discogs";
                                 }
                             }
 
-                            // Fetch Release Tracklist from MusicBrainz to enrich track numbers, titles, and individual track artists
-                            std::vector<MBTrackEntry> mbTracks = FetchMusicBrainzReleaseTracks(releaseGroupMbId, &firstReleaseDate);
-                            if (!mbTracks.empty()) {
-                                LOG_INFO("[MUSICBRAINZ TRACKLIST] Loaded " + std::to_string(mbTracks.size()) + " tracks from MusicBrainz release.");
-                            }
-
-                            // Romaji Enrichment: check if CJK characters or catalog numbers exist, and fetch Romaji from TouhouDB / VocaDB / UtaiteDB
-                            std::string mbRomajiAlb, mbEnglishAlb, mbJapaneseAlb;
-                            std::string mbRomajiArt, mbEnglishArt, mbJapaneseArt;
-                            std::vector<MBTrackEntry> enrichedVdbTracks;
+                            resolvedTracks = FetchMusicBrainzReleaseTracks(releaseGroupMbId, &firstReleaseDate);
 
                             if (ContainsCJK(artistClean) || ContainsCJK(albumClean) || !catalogNo.empty()) {
-                                LOG_INFO("[ROMAJI ENRICHMENT] Detected Japanese/CJK text or catalog number in MusicBrainz match. Checking VDB for Romaji variants...");
                                 VdbReleaseInfo vdbEnrich;
                                 if (SearchVdbRelease("https://touhoudb.com", "TouhouDB", artistClean, albumClean, catalogNo, vdbEnrich) ||
                                     SearchVdbRelease("https://vocadb.net", "VocaDB", artistClean, albumClean, catalogNo, vdbEnrich) ||
                                     SearchVdbRelease("https://utaitedb.net", "UtaiteDB", artistClean, albumClean, catalogNo, vdbEnrich)) {
-                                    
-                                    LOG_INFO("[ROMAJI ENRICHMENT SUCCESS] Found Romaji in " + vdbEnrich.service + ": " + vdbEnrich.artistRomaji + " - " + vdbEnrich.titleRomaji);
-                                    mbRomajiAlb = vdbEnrich.titleRomaji;
-                                    mbEnglishAlb = vdbEnrich.titleEnglish;
-                                    mbJapaneseAlb = vdbEnrich.titleJapanese;
-                                    mbRomajiArt = vdbEnrich.artistRomaji;
-                                    mbEnglishArt = vdbEnrich.artistEnglish;
-                                    mbJapaneseArt = vdbEnrich.artistJapanese;
-                                    enrichedVdbTracks = vdbEnrich.tracks;
+                                    albRomaji = vdbEnrich.titleRomaji;
+                                    albEnglish = vdbEnrich.titleEnglish;
+                                    albJapanese = vdbEnrich.titleJapanese;
+                                    artRomaji = vdbEnrich.artistRomaji;
+                                    artEnglish = vdbEnrich.artistEnglish;
+                                    artJapanese = vdbEnrich.artistJapanese;
+                                    if (!vdbEnrich.tracks.empty()) resolvedTracks = vdbEnrich.tracks;
                                 }
                             }
+                        }
 
-                            std::string mbChosenAlb = PickBestName(mbRomajiAlb, mbEnglishAlb, mbJapaneseAlb, "");
-                            std::string mbChosenArt = PickBestName(mbRomajiArt, mbEnglishArt, mbJapaneseArt, "");
-                            
-                            // Apply track match for current item and all items matching albumKey or MBID
-                            for (size_t k = 0; k < files.size(); ++k) {
-                                std::string aKey = NormalizeKey(m_tagItems[k].albumBuf);
-                                if (aKey.empty() || aKey == "unknown" || aKey == "tosort" || aKey == "music" || aKey == "media") {
-                                    aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
-                                }
-                                if (aKey == albumKey) {
-                                    m_tagItems[k].albumRomaji = mbRomajiAlb;
-                                    m_tagItems[k].albumEnglish = mbEnglishAlb;
-                                    m_tagItems[k].albumJapanese = mbJapaneseAlb;
-                                    m_tagItems[k].artistRomaji = mbRomajiArt;
-                                    m_tagItems[k].artistEnglish = mbEnglishArt;
-                                    m_tagItems[k].artistJapanese = mbJapaneseArt;
+                        cacheResult = {
+                            releaseGroupMbId, firstReleaseDate, coverData, coverSource,
+                            resolvedTracks, albRomaji, albEnglish, albJapanese,
+                            artRomaji, artEnglish, artJapanese, isMatched, true, detectedTier
+                        };
 
-                                    if (!mbChosenAlb.empty()) {
-                                        strncpy_s(m_tagItems[k].albumBuf, mbChosenAlb.c_str(), sizeof(m_tagItems[k].albumBuf) - 1);
-                                    }
-                                    if (!mbChosenArt.empty()) {
-                                        strncpy_s(m_tagItems[k].artistBuf, mbChosenArt.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
-                                    }
-
-                                    if (!enrichedVdbTracks.empty()) {
-                                        ApplyTrackMatch(m_tagItems[k], enrichedVdbTracks);
-                                    } else {
-                                        ApplyTrackMatch(m_tagItems[k], mbTracks);
-                                    }
-
-                                    if (!firstReleaseDate.empty()) {
-                                        strncpy_s(m_tagItems[k].yearBuf, firstReleaseDate.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
-                                    }
-                                    m_tagItems[k].matchTier = detectedTier;
-                                    m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
-                                    if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
-                                        m_tagItems[k].onlineCoverBytes = coverData;
-                                        m_tagItems[k].onlineCoverSource = coverSource;
-                                    }
-                                    m_tagItems[k].isMusicBrainzMatched = isMatched;
-                                }
-                            }
-                            
-                            const auto& cacheTracks = !enrichedVdbTracks.empty() ? enrichedVdbTracks : mbTracks;
-                            albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, cacheTracks, mbRomajiAlb, mbEnglishAlb, mbJapaneseAlb, mbRomajiArt, mbEnglishArt, mbJapaneseArt, isMatched, true, detectedTier };
+                        {
+                            std::lock_guard<std::mutex> lock(albumCacheMutex);
+                            albumCache[albumKey] = cacheResult;
                             if (!releaseGroupMbId.empty()) {
-                                albumCache[releaseGroupMbId] = albumCache[albumKey];
+                                albumCache[releaseGroupMbId] = cacheResult;
                             }
-                        } else if (releaseGroupMbId.empty()) {
-                            detectedTier = MatchTier::Niche_Local;
-                            LOG_INFO("[NICHE TRACK] MusicBrainz, TouhouDB, VocaDB, UtaiteDB and Discogs records not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
-                            albumCache[albumKey] = { "", "", {}, "", {}, "", "", "", "", "", "", false, true, MatchTier::Niche_Local };
                         }
-
-                        // 4. Fetch Synced Romanized LRC Lyrics via LrcLib REST API
-                        std::string lrcLyrics = FetchLrcLibSyncedLyrics(artistClean, titleClean, albumClean);
-                        if (!lrcLyrics.empty()) {
-                            item.hasLyrics = true;
-                            strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
-                            LOG_INFO("[LRC LYRICS FETCHED] Found synced lyrics (" + std::to_string(lrcLyrics.size()) + " chars) for " + artistClean + " - " + titleClean);
-                        } else {
-                            LOG_INFO("[LRC LYRICS NOT FOUND] No synced lyrics available for " + artistClean + " - " + titleClean);
-                        }
-
-                        if (!firstReleaseDate.empty()) {
-                            strncpy_s(item.yearBuf, firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
-                        }
-
-                        item.isMusicBrainzMatched = isMatched;
-                        item.onlineCoverBytes = coverData;
-                        item.onlineCoverSource = coverSource;
-                        item.matchTier = detectedTier;
-                        item.releaseGroupMbId = releaseGroupMbId;
-                        item.isFetchCompleted = true;
-                        m_fetchedCount++;
                     }
 
-                    m_tagScanEndTime = std::chrono::steady_clock::now();
-                    m_isTagScanning = false;
-                    LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz, TouhouDB, VocaDB, UtaiteDB & Discogs queries finished.");
+                    // Apply metadata from cacheResult to all tracks in this cluster
+                    std::string bestAlb = PickBestName(cacheResult.albumRomaji, cacheResult.albumEnglish, cacheResult.albumJapanese, "");
+                    std::string bestArt = PickBestName(cacheResult.artistRomaji, cacheResult.artistEnglish, cacheResult.artistJapanese, "");
+
+                    for (size_t idx : indices) {
+                        auto& item = m_tagItems[idx];
+                        item.isMusicBrainzMatched = cacheResult.isMatched;
+                        item.onlineCoverBytes = cacheResult.coverBytes;
+                        item.onlineCoverSource = cacheResult.coverSource;
+                        item.matchTier = cacheResult.matchTier;
+                        item.releaseGroupMbId = cacheResult.releaseGroupMbId;
+                        item.albumRomaji = cacheResult.albumRomaji;
+                        item.albumEnglish = cacheResult.albumEnglish;
+                        item.albumJapanese = cacheResult.albumJapanese;
+                        item.artistRomaji = cacheResult.artistRomaji;
+                        item.artistEnglish = cacheResult.artistEnglish;
+                        item.artistJapanese = cacheResult.artistJapanese;
+
+                        if (!bestAlb.empty()) strncpy_s(item.albumBuf, bestAlb.c_str(), sizeof(item.albumBuf) - 1);
+                        if (!bestArt.empty()) strncpy_s(item.artistBuf, bestArt.c_str(), sizeof(item.artistBuf) - 1);
+                        if (!cacheResult.firstReleaseDate.empty()) {
+                            strncpy_s(item.yearBuf, cacheResult.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
+                        }
+
+                        if (!cacheResult.tracks.empty()) {
+                            ApplyTrackMatch(item, cacheResult.tracks);
+                        }
+                    }
+
+                    // Fetch lyrics for all tracks in this cluster
+                    for (size_t idx : indices) {
+                        auto& item = m_tagItems[idx];
+                        if (!item.isFetchCompleted) {
+                            std::string trackArtist(item.artistBuf);
+                            std::string trackTitle(item.titleBuf);
+                            std::string trackAlbum(item.albumBuf);
+
+                            std::string lrcLyrics = FetchLrcLibSyncedLyrics(trackArtist, trackTitle, trackAlbum);
+                            if (!lrcLyrics.empty()) {
+                                item.hasLyrics = true;
+                                strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+                            }
+
+                            item.isFetchCompleted = true;
+                            m_fetchedCount.fetch_add(1);
+                        }
+                    }
+                }
+            });
+        }
+
+        for (auto& w : albumWorkers) {
+            if (w.joinable()) w.join();
+        }
+
+        m_tagScanEndTime = std::chrono::steady_clock::now();
+        m_isTagScanning = false;
+        LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz, TouhouDB, VocaDB, UtaiteDB & Discogs queries finished.");
     }).detach();
 }
