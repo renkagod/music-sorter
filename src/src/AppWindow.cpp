@@ -269,6 +269,7 @@ static const char* GetTierName(MatchTier tier) {
         case MatchTier::TierC_Loose: return "Tier C (Нечеткий поиск)";
         case MatchTier::TouhouDB: return "TouhouDB (Додзин-база)";
         case MatchTier::VocaDB: return "VocaDB (Вокалоид-база)";
+        case MatchTier::UtaiteDB: return "UtaiteDB (Утаитэ-база)";
         case MatchTier::Discogs: return "Discogs (База данных)";
         case MatchTier::Niche_Local: return "Niche (Локальные теги)";
     }
@@ -290,6 +291,8 @@ static ImVec4 GetTierColor(MatchTier tier) {
             return ImVec4(0.95f, 0.35f, 0.55f, 1.0f);
         case MatchTier::VocaDB:
             return ImVec4(0.2f, 0.85f, 0.85f, 1.0f);
+        case MatchTier::UtaiteDB:
+            return ImVec4(0.65f, 0.45f, 0.95f, 1.0f);
         case MatchTier::Discogs:
             return ImVec4(0.2f, 0.9f, 0.3f, 1.0f);
         case MatchTier::Niche_Local:
@@ -2906,6 +2909,7 @@ void AppWindow::RenderReleaseSummaryTable() {
     size_t countTierC = 0;
     size_t countTouhouDb = 0;
     size_t countVocaDb = 0;
+    size_t countUtaiteDb = 0;
     size_t countDiscogs = 0;
     size_t countNiche = 0;
     size_t totalUnprocessedFiles = 0;
@@ -2962,6 +2966,8 @@ void AppWindow::RenderReleaseSummaryTable() {
             countTouhouDb++;
         } else if (g.matchTier == MatchTier::VocaDB) {
             countVocaDb++;
+        } else if (g.matchTier == MatchTier::UtaiteDB) {
+            countUtaiteDb++;
         } else if (g.matchTier == MatchTier::Discogs) {
             countDiscogs++;
         } else {
@@ -3005,6 +3011,8 @@ void AppWindow::RenderReleaseSummaryTable() {
     drawFilterBtn("TouhouDB", 6, countTouhouDb, ImVec4(0.95f, 0.35f, 0.55f, 1.0f));
     ImGui::SameLine();
     drawFilterBtn("VocaDB", 7, countVocaDb, ImVec4(0.2f, 0.85f, 0.85f, 1.0f));
+    ImGui::SameLine();
+    drawFilterBtn("UtaiteDB", 8, countUtaiteDb, ImVec4(0.65f, 0.45f, 0.95f, 1.0f));
     ImGui::SameLine();
     drawFilterBtn("Discogs", 5, countDiscogs, ImVec4(0.2f, 0.9f, 0.3f, 1.0f));
     ImGui::SameLine();
@@ -3074,6 +3082,9 @@ void AppWindow::RenderReleaseSummaryTable() {
                 if (m_releaseSummaryTierFilter == 7 && !(g.matchTier == MatchTier::VocaDB)) {
                     continue;
                 }
+                if (m_releaseSummaryTierFilter == 8 && !(g.matchTier == MatchTier::UtaiteDB)) {
+                    continue;
+                }
 
                 if (!filterLower.empty()) {
                     std::string aLower = g.artist;
@@ -3137,6 +3148,8 @@ void AppWindow::RenderReleaseSummaryTable() {
                             targetUrl = "https://touhoudb.com/Al/" + g.releaseGroupMbId.substr(9);
                         } else if (g.releaseGroupMbId.rfind("vocadb_", 0) == 0) {
                             targetUrl = "https://vocadb.net/Al/" + g.releaseGroupMbId.substr(7);
+                        } else if (g.releaseGroupMbId.rfind("utaitedb_", 0) == 0) {
+                            targetUrl = "https://utaitedb.net/Al/" + g.releaseGroupMbId.substr(9);
                         } else if (g.releaseGroupMbId.rfind("discogs_", 0) == 0) {
                             targetUrl = "https://www.discogs.com/release/" + g.releaseGroupMbId.substr(8);
                         } else {
@@ -3644,6 +3657,96 @@ void AppWindow::FetchManualVocaDbMetadata(const std::string& inputUrl, bool appl
     }).detach();
 }
 
+void AppWindow::FetchManualUtaiteDbMetadata(const std::string& inputUrl, bool applyToAllInAlbum) {
+    if (m_tagItems.empty() || m_currentTagIndex >= m_tagItems.size()) {
+        LOG_WARN("[MANUAL UTAITEDB] Очередь треков пуста или индекс некорректен.");
+        return;
+    }
+
+    int albumId = 0;
+    std::regex idRegex(R"((\d{1,8}))");
+    std::smatch match;
+    if (std::regex_search(inputUrl, match, idRegex)) {
+        try { albumId = std::stoi(match.str(1)); } catch (...) {}
+    }
+
+    if (albumId <= 0) {
+        LOG_WARN("[MANUAL UTAITEDB] В строке не найден валидный ID альбома UtaiteDB: " + inputUrl);
+        return;
+    }
+
+    LOG_INFO("[MANUAL UTAITEDB] Запуск ручной загрузки метаданных для UtaiteDB ID: " + std::to_string(albumId));
+
+    std::thread([this, albumId, applyToAllInAlbum]() {
+        VdbReleaseInfo info;
+        if (!FetchVdbAlbumDetails("https://utaitedb.net", "UtaiteDB", albumId, info)) {
+            LOG_WARN("[MANUAL UTAITEDB ERROR] Не удалось получить данные с UtaiteDB для ID: " + std::to_string(albumId));
+            return;
+        }
+
+        std::vector<unsigned char> coverData;
+        if (!info.coverUrl.empty()) {
+            LOG_INFO("[MANUAL UTAITEDB] Загрузка обложки с UtaiteDB: " + info.coverUrl);
+            coverData = HttpGetBytes(Utf8ToWide(info.coverUrl));
+        }
+
+        auto& currentItem = m_tagItems[m_currentTagIndex];
+        std::string targetFolder = fs::path(currentItem.filePath).parent_path().string();
+
+        std::vector<size_t> targetIndices;
+        if (applyToAllInAlbum) {
+            for (size_t i = 0; i < m_tagItems.size(); ++i) {
+                if (fs::path(m_tagItems[i].filePath).parent_path().string() == targetFolder) {
+                    targetIndices.push_back(i);
+                }
+            }
+        } else {
+            targetIndices.push_back(m_currentTagIndex);
+        }
+
+        for (size_t idx : targetIndices) {
+            auto& item = m_tagItems[idx];
+            if (!info.artist.empty()) {
+                strncpy_s(item.artistBuf, info.artist.c_str(), sizeof(item.artistBuf) - 1);
+            }
+            if (!info.title.empty()) {
+                strncpy_s(item.albumBuf, info.title.c_str(), sizeof(item.albumBuf) - 1);
+            }
+            if (!info.releaseDate.empty()) {
+                strncpy_s(item.yearBuf, info.releaseDate.c_str(), sizeof(item.yearBuf) - 1);
+            }
+
+            if (!info.tracks.empty()) {
+                ApplyTrackMatch(item, info.tracks);
+            }
+
+            item.matchTier = MatchTier::UtaiteDB;
+            item.releaseGroupMbId = "utaitedb_" + std::to_string(albumId);
+            item.isMusicBrainzMatched = true;
+            item.isFetchCompleted = true;
+
+            if (!coverData.empty()) {
+                item.onlineCoverBytes = coverData;
+                item.onlineCoverSource = "UtaiteDB";
+                if (item.onlineTexture) {
+                    item.onlineTexture->Release();
+                    item.onlineTexture = NULL;
+                }
+                item.selectedCoverChoice = 1;
+            }
+
+            // Fetch LRC lyrics
+            std::string lrcLyrics = FetchLrcLibSyncedLyrics(item.artistBuf, item.titleBuf, item.albumBuf);
+            if (!lrcLyrics.empty()) {
+                item.hasLyrics = true;
+                strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+            }
+        }
+
+        LOG_INFO("[MANUAL UTAITEDB MATCHED] Успешно загружен релиз UtaiteDB: \"" + info.title + "\" (" + info.artist + ", дата: " + info.releaseDate + ", треков: " + std::to_string(info.tracks.size()) + ")");
+    }).detach();
+}
+
 void AppWindow::RunMessageLoop() {
     bool done = false;
     while (!done) {
@@ -4041,9 +4144,9 @@ void AppWindow::RunMessageLoop() {
                 RenderTagScanProgressBar(false);
                 ImGui::Spacing();
 
-                // Manual MusicBrainz / TouhouDB / VocaDB / Discogs URL / ID Input Row
+                // Manual MusicBrainz / TouhouDB / VocaDB / UtaiteDB / Discogs URL / ID Input Row
                 ImGui::PushItemWidth(360);
-                ImGui::InputTextWithHint("##ManualMbUrlInput", "Ссылка MB / TouhouDB / VocaDB / Discogs или ID", m_manualMbUrlBuf, sizeof(m_manualMbUrlBuf));
+                ImGui::InputTextWithHint("##ManualMbUrlInput", "Ссылка MB / TouhouDB / VocaDB / UtaiteDB / Discogs или ID", m_manualMbUrlBuf, sizeof(m_manualMbUrlBuf));
                 ImGui::PopItemWidth();
                 ImGui::SameLine();
                 if (ImGui::Button("Загрузить метаданные", ImVec2(185, 24))) {
@@ -4056,6 +4159,8 @@ void AppWindow::RunMessageLoop() {
                             FetchManualTouhouDbMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
                         } else if (inputLower.find("vocadb.net") != std::string::npos || inputLower.find("vocadb:") == 0 || inputLower.find("vdb:") == 0) {
                             FetchManualVocaDbMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
+                        } else if (inputLower.find("utaitedb.net") != std::string::npos || inputLower.find("utaitedb:") == 0 || inputLower.find("udb:") == 0) {
+                            FetchManualUtaiteDbMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
                         } else if (inputLower.find("discogs.com") != std::string::npos || inputLower.find("r") == 0 || inputLower.find("m") == 0) {
                             FetchManualDiscogsMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
                         } else {
@@ -5354,9 +5459,63 @@ void AppWindow::StartTagScan() {
                                     }
                                 }
                             }
+
+                            // UtaiteDB Search (if TouhouDB and VocaDB didn't match)
+                            if (releaseGroupMbId.empty()) {
+                                VdbReleaseInfo utaiteInfo;
+                                if (SearchVdbRelease("https://utaitedb.net", "UtaiteDB", searchArtist, albumClean, catalogNo, utaiteInfo)) {
+                                    LOG_INFO("[UTAITEDB METADATA FOUND] Matched release: " + utaiteInfo.artist + " - " + utaiteInfo.title + " (Cat: " + utaiteInfo.catalogNumber + ", Date: " + utaiteInfo.releaseDate + ", Tracks: " + std::to_string(utaiteInfo.tracks.size()) + ")");
+                                    releaseGroupMbId = "utaitedb_" + std::to_string(utaiteInfo.id);
+                                    if (!utaiteInfo.releaseDate.empty()) {
+                                        firstReleaseDate = utaiteInfo.releaseDate;
+                                    }
+                                    if (!utaiteInfo.coverUrl.empty()) {
+                                        coverData = HttpGetBytes(Utf8ToWide(utaiteInfo.coverUrl));
+                                        if (!coverData.empty()) {
+                                            coverSource = "UtaiteDB";
+                                            LOG_INFO("[UTAITEDB COVER DOWNLOADED] " + std::to_string(coverData.size()) + " bytes cover art from UtaiteDB via " + utaiteInfo.coverUrl);
+                                        }
+                                    }
+                                    isMatched = true;
+                                    detectedTier = MatchTier::UtaiteDB;
+
+                                    for (size_t k = 0; k < files.size(); ++k) {
+                                        std::string aKey = NormalizeKey(m_tagItems[k].albumBuf);
+                                        if (aKey.empty() || aKey == "unknown" || aKey == "tosort" || aKey == "music" || aKey == "media") {
+                                            aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
+                                        }
+                                        if (aKey == albumKey) {
+                                            if (!utaiteInfo.artist.empty()) {
+                                                strncpy_s(m_tagItems[k].artistBuf, utaiteInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
+                                            }
+                                            if (!utaiteInfo.title.empty()) {
+                                                strncpy_s(m_tagItems[k].albumBuf, utaiteInfo.title.c_str(), sizeof(m_tagItems[k].albumBuf) - 1);
+                                            }
+                                            if (!utaiteInfo.releaseDate.empty()) {
+                                                strncpy_s(m_tagItems[k].yearBuf, utaiteInfo.releaseDate.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
+                                            }
+                                            if (!utaiteInfo.tracks.empty()) {
+                                                ApplyTrackMatch(m_tagItems[k], utaiteInfo.tracks);
+                                            }
+                                            m_tagItems[k].matchTier = detectedTier;
+                                            m_tagItems[k].releaseGroupMbId = releaseGroupMbId;
+                                            if (!coverData.empty() && m_tagItems[k].onlineCoverBytes.empty()) {
+                                                m_tagItems[k].onlineCoverBytes = coverData;
+                                                m_tagItems[k].onlineCoverSource = coverSource;
+                                            }
+                                            m_tagItems[k].isMusicBrainzMatched = isMatched;
+                                        }
+                                    }
+
+                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, utaiteInfo.tracks, isMatched, true, detectedTier };
+                                    if (!releaseGroupMbId.empty()) {
+                                        albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, utaiteInfo.tracks, isMatched, true, detectedTier };
+                                    }
+                                }
+                            }
                         }
 
-                        // 4. Fallback: Discogs Database Search (if MusicBrainz, TouhouDB, VocaDB & AcoustID did not match)
+                        // 4. Fallback: Discogs Database Search (if MusicBrainz, TouhouDB, VocaDB, UtaiteDB & AcoustID did not match)
                         if (releaseGroupMbId.empty() && !albumClean.empty()) {
                             std::string searchArtist = artistClean;
                             std::string searchTitle = titleClean;
@@ -5422,7 +5581,7 @@ void AppWindow::StartTagScan() {
                         }
 
                         // 5. Fetch Cover Art from CoverArtArchive.org for MusicBrainz releases (Cascading Fallback: Original -> 1200px -> 500px -> 250px)
-                        if (!releaseGroupMbId.empty() && releaseGroupMbId.rfind("discogs_", 0) != 0 && releaseGroupMbId.rfind("touhoudb_", 0) != 0 && releaseGroupMbId.rfind("vocadb_", 0) != 0) {
+                        if (!releaseGroupMbId.empty() && releaseGroupMbId.rfind("discogs_", 0) != 0 && releaseGroupMbId.rfind("touhoudb_", 0) != 0 && releaseGroupMbId.rfind("vocadb_", 0) != 0 && releaseGroupMbId.rfind("utaitedb_", 0) != 0) {
                             LOG_INFO("[MUSICBRAINZ MATCHED] MBID " + releaseGroupMbId + " for " + artistClean + " - " + albumClean + ". Downloading CoverArtArchive image...");
                             
                             const char* endpoints[] = {
@@ -5492,7 +5651,7 @@ void AppWindow::StartTagScan() {
                             }
                         } else if (releaseGroupMbId.empty()) {
                             detectedTier = MatchTier::Niche_Local;
-                            LOG_INFO("[NICHE TRACK] MusicBrainz, TouhouDB, VocaDB and Discogs records not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
+                            LOG_INFO("[NICHE TRACK] MusicBrainz, TouhouDB, VocaDB, UtaiteDB and Discogs records not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
                             albumCache[albumKey] = { "", "", {}, "", {}, false, true, MatchTier::Niche_Local };
                         }
 
@@ -5521,6 +5680,6 @@ void AppWindow::StartTagScan() {
 
                     m_tagScanEndTime = std::chrono::steady_clock::now();
                     m_isTagScanning = false;
-                    LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz, TouhouDB, VocaDB & Discogs queries finished.");
+                    LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz, TouhouDB, VocaDB, UtaiteDB & Discogs queries finished.");
     }).detach();
 }
