@@ -4,46 +4,67 @@
 
 TEST_CASE("Live Network Fetch", "Live LRCLIB Lyrics Fetch") {
     std::string lyrics = FetchServices::FetchLrcLibSyncedLyrics("nomico", "Bad Apple!!", "Lovelight");
-    if (!lyrics.empty()) {
-        ASSERT_TRUE(lyrics.find("Nagare yuku") != std::string::npos || lyrics.find("[00:") != std::string::npos);
-    } else {
-        std::cout << "    [SKIP/NOTE] LRCLIB live fetch returned empty (network offline or endpoint unreachable)\n";
-    }
+    ASSERT_FALSE(lyrics.empty());
+    ASSERT_TRUE(lyrics.find("[00:") != std::string::npos || lyrics.find("Nagare yuku") != std::string::npos);
+    std::cout << "      -> Fetched " << lyrics.size() << " bytes of lyrics. Sample: " 
+              << lyrics.substr(0, lyrics.find('\n')) << "\n";
 }
 
 TEST_CASE("Live Network Fetch", "Live TouhouDB API Search and Fetch") {
     VdbReleaseInfo info;
     bool ok = FetchServices::SearchVdbRelease("https://touhoudb.com", "TouhouDB", "Diabolic Phantasma", "Daydream In the Dead of Night", "DBPS-001", info);
-    if (ok) {
-        ASSERT_FALSE(info.title.empty());
-        ASSERT_STR_EQ(info.catalogNumber, "DBPS-001");
-        ASSERT_FALSE(info.tracks.empty());
-    } else {
-        std::cout << "    [SKIP/NOTE] TouhouDB live fetch returned empty (network offline or rate limited)\n";
-    }
+    ASSERT_TRUE(ok);
+    ASSERT_STR_EQ(info.title, "Daydream In the Dead of Night");
+    ASSERT_STR_EQ(info.catalogNumber, "DBPS-001");
+    ASSERT_FALSE(info.tracks.empty());
+    ASSERT_FALSE(info.coverUrl.empty());
+    std::cout << "      -> TouhouDB matched album ID " << info.id << ", " << info.tracks.size() 
+              << " tracks, Cover: " << info.coverUrl << "\n";
 }
 
 TEST_CASE("Live Network Fetch", "Live VocaDB API Search and Fetch") {
     VdbReleaseInfo info;
     bool ok = FetchServices::SearchVdbRelease("https://vocadb.net", "VocaDB", "wowaka", "Unhappy Refrain", "DGSA-10008", info);
-    if (ok) {
-        ASSERT_FALSE(info.title.empty());
-        ASSERT_FALSE(info.tracks.empty());
-    } else {
-        std::cout << "    [SKIP/NOTE] VocaDB live fetch returned empty (network offline or rate limited)\n";
-    }
+    ASSERT_TRUE(ok);
+    ASSERT_FALSE(info.title.empty());
+    ASSERT_FALSE(info.tracks.empty());
+    ASSERT_FALSE(info.coverUrl.empty());
+    std::cout << "      -> VocaDB matched album ID " << info.id << " (" << info.title << "), " 
+              << info.tracks.size() << " tracks\n";
 }
 
-TEST_CASE("Live Network Fetch", "Live MusicBrainz Release Group Search") {
+TEST_CASE("Live Network Fetch", "Live UtaiteDB API Fetch Album Details") {
+    VdbReleaseInfo info;
+    bool ok = FetchServices::FetchVdbAlbumDetails("https://utaitedb.net", "UtaiteDB", 1, info);
+    ASSERT_TRUE(ok);
+    ASSERT_FALSE(info.title.empty());
+    ASSERT_FALSE(info.tracks.empty());
+    std::cout << "      -> UtaiteDB fetched album ID " << info.id << " (" << info.title << "), " 
+              << info.tracks.size() << " tracks\n";
+}
+
+TEST_CASE("Live Network Fetch", "Live MusicBrainz Release Group Search and Tracks Fetch") {
     std::string url = "https://musicbrainz.org/ws/2/release-group?query=releasegroup:Lovelight%20AND%20artist:%22Alstroemeria%20Records%22&fmt=json";
     std::string res = FetchServices::HttpGetString(Utf8ToWide(url));
-    if (!res.empty()) {
-        auto candidates = FetchServices::ParseMusicBrainzReleaseGroups(res);
-        if (!candidates.empty()) {
-            ASSERT_STR_EQ(candidates[0].title, "Lovelight");
-            ASSERT_EQ(candidates[0].id.length(), 36);
-        }
-    } else {
-        std::cout << "    [SKIP/NOTE] MusicBrainz live search returned empty (network offline or throttled)\n";
-    }
+    ASSERT_FALSE(res.empty());
+    auto candidates = FetchServices::ParseMusicBrainzReleaseGroups(res);
+    ASSERT_FALSE(candidates.empty());
+    ASSERT_STR_EQ(candidates[0].title, "Lovelight");
+    ASSERT_EQ(candidates[0].id.length(), 36);
+
+    std::string relDate;
+    auto tracks = FetchServices::FetchMusicBrainzReleaseTracks(candidates[0].id, &relDate);
+    ASSERT_FALSE(tracks.empty());
+    std::cout << "      -> MusicBrainz MBID: " << candidates[0].id << ", Date: " << relDate 
+              << ", Tracks: " << tracks.size() << " (Track #1: " << tracks[0].title << ")\n";
+}
+
+TEST_CASE("Live Network Fetch", "Live Cover Art Archive Download") {
+    // Release Group MBID for Lovelight (actual MusicBrainz UUID)
+    std::string rgMbId = "8ef0427c-bd47-360b-b2f7-63f88eff7960";
+    std::string coverUrl = "https://coverartarchive.org/release-group/" + rgMbId + "/front";
+    auto bytes = FetchServices::HttpGetBytes(Utf8ToWide(coverUrl));
+    ASSERT_FALSE(bytes.empty());
+    ASSERT_GE(bytes.size(), 1000); // Image file should be at least a few KB
+    std::cout << "      -> Cover Art Archive downloaded " << bytes.size() << " bytes of image data\n";
 }
