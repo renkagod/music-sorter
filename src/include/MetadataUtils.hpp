@@ -402,6 +402,11 @@ inline std::string KanaToRomaji(const std::string& input) {
     return result;
 }
 
+inline bool IsKanjiUtf8(unsigned char c0, unsigned char c1, unsigned char c2) {
+    uint32_t cp = ((c0 & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F);
+    return (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || cp == 0x3005;
+}
+
 inline std::string RomanizeJapaneseLyrics(const std::string& text) {
     if (text.empty()) return "";
 
@@ -423,6 +428,7 @@ inline std::string RomanizeJapaneseLyrics(const std::string& text) {
         }
 
         // Replace furigana in parentheses with the reading inside parentheses
+        // e.g. 私の運命(さだめ) -> 私の + さだめ
         std::string processedLine;
         size_t p = 0;
         while (p < lineContent.size()) {
@@ -441,10 +447,11 @@ inline std::string RomanizeJapaneseLyrics(const std::string& text) {
                 std::string inside = lineContent.substr(nextOpen + openLen, closeP - (nextOpen + openLen));
                 if (ContainsCJK(inside)) {
                     size_t kStart = nextOpen;
-                    while (kStart > p) {
-                        unsigned char c = (unsigned char)lineContent[kStart - 1];
-                        if (c < 0x80) break;
-                        if (kStart >= 3) {
+                    while (kStart >= p + 3) {
+                        unsigned char c0 = (unsigned char)lineContent[kStart - 3];
+                        unsigned char c1 = (unsigned char)lineContent[kStart - 2];
+                        unsigned char c2 = (unsigned char)lineContent[kStart - 1];
+                        if ((c0 & 0xF0) == 0xE0 && IsKanjiUtf8(c0, c1, c2)) {
                             kStart -= 3;
                         } else {
                             break;

@@ -16,11 +16,13 @@ TEST_CASE("Lyrics Romanization", "KanaToRomaji converts hiragana and katakana wi
 }
 
 TEST_CASE("Lyrics Romanization", "RomanizeJapaneseLyrics handles furigana in parentheses and keeps timestamps") {
-    std::string text = "[00:22.50]私の運命(さだめ)\n[00:30.00]Hello world";
+    std::string text = "[00:22.50]愛しい手のひらに握られている私の運命(さだめ)\n[00:30.00]Hello world";
     std::string res = RomanizeJapaneseLyrics(text);
     
-    // Check that furigana "さだめ" became "sadame" and timestamp "[00:22.50]" is preserved
+    // Check that furigana "さだめ" became "sadame", kana is converted, and timestamp "[00:22.50]" is preserved
     ASSERT_TRUE(res.find("[00:22.50]") != std::string::npos);
     ASSERT_TRUE(res.find("sadame") != std::string::npos);
+    ASSERT_TRUE(res.find("手nohirani") != std::string::npos);
+    ASSERT_TRUE(res.find("私no") != std::string::npos);
     ASSERT_TRUE(res.find("[00:30.00]Hello world") != std::string::npos);
 }
