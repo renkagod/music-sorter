@@ -42,7 +42,7 @@ struct TagReviewItem {
     char titleBuf[256] = {0};
     char trackNoBuf[32] = {0};
     char yearBuf[32] = {0};
-    char lyricsBuf[2048] = {0};
+    char lyricsBuf[16384] = {0};
 
     // Multi-language metadata variants (Romaji, English, Japanese)
     std::string titleRomaji;
@@ -56,6 +56,12 @@ struct TagReviewItem {
     std::string albumRomaji;
     std::string albumEnglish;
     std::string albumJapanese;
+
+    // Unsynced lyrics fallback variants (Original, Romaji, English)
+    std::string lyricsOriginal;
+    std::string lyricsRomaji;
+    std::string lyricsEnglish;
+    bool hasSyncedLyrics = false;
 
     bool isMusicBrainzMatched = false;
     bool isFetchCompleted = false;

@@ -28,6 +28,9 @@ struct MBTrackEntry {
     std::string artistEnglish;
     std::string artistJapanese;
     int lengthMs = 0;
+    std::string lyricsOriginal;
+    std::string lyricsRomaji;
+    std::string lyricsEnglish;
 };
 
 struct MBReleaseGroupCandidate {
@@ -70,6 +73,24 @@ inline std::string PickBestName(const std::string& romaji, const std::string& en
     if (!japanese.empty()) return japanese;
     return def;
 }
+
+inline std::string PickBestLyrics(const std::string& romaji, const std::string& english, const std::string& japanese, const std::string& langPreference = "Romaji") {
+    if (langPreference == "English") {
+        if (!english.empty()) return english;
+        if (!romaji.empty()) return romaji;
+        if (!japanese.empty()) return japanese;
+    } else if (langPreference == "Japanese") {
+        if (!japanese.empty()) return japanese;
+        if (!romaji.empty()) return romaji;
+        if (!english.empty()) return english;
+    } else { // Romaji (default)
+        if (!romaji.empty()) return romaji;
+        if (!japanese.empty()) return japanese;
+        if (!english.empty()) return english;
+    }
+    return "";
+}
+
 
 inline bool ContainsCJK(const std::string& str) {
     for (size_t i = 0; i < str.length(); ) {
@@ -120,6 +141,9 @@ using ::WideToUtf8;
 using ::ExtractYearFromString;
 using ::ExtractCatalogNumber;
 using ::ExtractArtistFromFilename;
+using ::PickBestName;
+using ::PickBestLyrics;
+
 
 inline std::mutex g_mbThrottleMutex;
 inline std::chrono::steady_clock::time_point g_lastMbRequestTime;
@@ -843,21 +867,129 @@ inline bool ParseVdbAlbumDetailsJson(const std::string& jsonStr, const std::stri
 
             int durMs = 0;
             std::string tArtist = outInfo.artist;
+            std::string lyOriginal, lyRomaji, lyEnglish;
             if (song.type == JsonVal::Object) {
                 int lenSec = (int)song.get("lengthSeconds").numVal;
                 durMs = lenSec * 1000;
                 std::string sArt = song.get("artistString").strVal;
                 if (!sArt.empty()) tArtist = sArt;
+
+                const auto& lyArray = song.get("lyrics");
+                if (lyArray.type == JsonVal::Array) {
+                    for (size_t l = 0; l < lyArray.arrVal.size(); ++l) {
+                        const auto& lyObj = lyArray.get(l);
+                        std::string tType = lyObj.get("translationType").strVal;
+                        std::string val = lyObj.get("value").strVal;
+                        std::string culture = lyObj.get("cultureCode").strVal;
+                        if (culture.empty()) {
+                            const auto& cCodes = lyObj.get("cultureCodes");
+                            if (cCodes.type == JsonVal::Array && !cCodes.arrVal.empty()) {
+                                culture = cCodes.get(0).strVal;
+                            }
+                        }
+                        if (tType == "Romanized" && lyRomaji.empty()) {
+                            lyRomaji = val;
+                        } else if (tType == "Original" && lyOriginal.empty()) {
+                            lyOriginal = val;
+                        } else if (tType == "Translation") {
+                            if (culture == "en" || culture.empty() || lyEnglish.empty()) {
+                                lyEnglish = val;
+                            }
+                        }
+                    }
+                }
             }
 
             if (!bestTrackTitle.empty()) {
-                outInfo.tracks.push_back({ pos, bestTrackTitle, tRomaji, tEnglish, tJapanese, tArtist, outInfo.artistRomaji, outInfo.artistEnglish, outInfo.artistJapanese, durMs });
+                outInfo.tracks.push_back({ pos, bestTrackTitle, tRomaji, tEnglish, tJapanese, tArtist, outInfo.artistRomaji, outInfo.artistEnglish, outInfo.artistJapanese, durMs, lyOriginal, lyRomaji, lyEnglish });
             }
         }
     }
 
     return !outInfo.title.empty() || !outInfo.tracks.empty();
 }
+
+inline bool ParseVdbSongLyricsJson(const std::string& jsonStr, std::string& outOriginal, std::string& outRomaji, std::string& outEnglish) {
+    if (jsonStr.empty()) return false;
+    size_t p = 0;
+    JsonVal doc = ParseJsonSimple(jsonStr, p);
+    if (doc.type != JsonVal::Object) return false;
+    const auto& lyArray = doc.get("lyrics");
+    if (lyArray.type != JsonVal::Array || lyArray.arrVal.empty()) return false;
+    for (size_t l = 0; l < lyArray.arrVal.size(); ++l) {
+        const auto& lyObj = lyArray.get(l);
+        std::string tType = lyObj.get("translationType").strVal;
+        std::string val = lyObj.get("value").strVal;
+        std::string culture = lyObj.get("cultureCode").strVal;
+        if (culture.empty()) {
+            const auto& cCodes = lyObj.get("cultureCodes");
+            if (cCodes.type == JsonVal::Array && !cCodes.arrVal.empty()) {
+                culture = cCodes.get(0).strVal;
+            }
+        }
+        if (tType == "Romanized" && outRomaji.empty()) {
+            outRomaji = val;
+        } else if (tType == "Original" && outOriginal.empty()) {
+            outOriginal = val;
+        } else if (tType == "Translation") {
+            if (culture == "en" || culture.empty() || outEnglish.empty()) {
+                outEnglish = val;
+            }
+        }
+    }
+    return !outOriginal.empty() || !outRomaji.empty() || !outEnglish.empty();
+}
+
+inline bool FetchVdbSongLyrics(const std::string& baseUrl, int songId, std::string& outOriginal, std::string& outRomaji, std::string& outEnglish) {
+    if (baseUrl.empty() || songId <= 0) return false;
+    std::string url = baseUrl + "/api/songs/" + std::to_string(songId) + "?fields=Lyrics";
+    std::string jsonStr = HttpGetString(Utf8ToWide(url));
+    return ParseVdbSongLyricsJson(jsonStr, outOriginal, outRomaji, outEnglish);
+}
+
+inline bool SearchVdbSongLyrics(const std::string& baseUrl, const std::string& title, const std::string& artist, std::string& outOriginal, std::string& outRomaji, std::string& outEnglish) {
+    if (baseUrl.empty() || title.empty()) return false;
+    std::string query = title;
+    if (!artist.empty() && artist != "Unknown Artist") query = artist + " " + title;
+    std::string url = baseUrl + "/api/songs?query=" + UrlEncode(query) + "&fields=Lyrics,Artists&maxResults=5&nameMatchMode=Auto";
+    std::string jsonStr = HttpGetString(Utf8ToWide(url));
+    if (jsonStr.empty()) return false;
+    size_t p = 0;
+    JsonVal doc = ParseJsonSimple(jsonStr, p);
+    if (doc.type != JsonVal::Object) return false;
+    const auto& items = doc.get("items");
+    if (items.type != JsonVal::Array || items.arrVal.empty()) return false;
+    for (size_t i = 0; i < items.arrVal.size(); ++i) {
+        const auto& it = items.get(i);
+        const auto& lyArray = it.get("lyrics");
+        if (lyArray.type == JsonVal::Array && !lyArray.arrVal.empty()) {
+            for (size_t l = 0; l < lyArray.arrVal.size(); ++l) {
+                const auto& lyObj = lyArray.get(l);
+                std::string tType = lyObj.get("translationType").strVal;
+                std::string val = lyObj.get("value").strVal;
+                std::string culture = lyObj.get("cultureCode").strVal;
+                if (culture.empty()) {
+                    const auto& cCodes = lyObj.get("cultureCodes");
+                    if (cCodes.type == JsonVal::Array && !cCodes.arrVal.empty()) {
+                        culture = cCodes.get(0).strVal;
+                    }
+                }
+                if (tType == "Romanized" && outRomaji.empty()) {
+                    outRomaji = val;
+                } else if (tType == "Original" && outOriginal.empty()) {
+                    outOriginal = val;
+                } else if (tType == "Translation") {
+                    if (culture == "en" || culture.empty() || outEnglish.empty()) {
+                        outEnglish = val;
+                    }
+                }
+            }
+            if (!outOriginal.empty() || !outRomaji.empty() || !outEnglish.empty()) return true;
+        }
+    }
+    return false;
+}
+
 
 inline bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& service, int albumId, VdbReleaseInfo& outInfo) {
     std::string endpoint = baseUrl + "/api/albums/" + std::to_string(albumId) + "?lang=Romaji&fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics,Names";

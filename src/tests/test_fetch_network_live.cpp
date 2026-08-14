@@ -99,4 +99,16 @@ TEST_CASE("Live Network Fetch", "Live Discogs Search and Details Fetch") {
               << ", Token: " << (!token.empty() ? "Present in folders.cfg" : "Anonymous") << "\n";
 }
 
+TEST_CASE("Live Network Fetch", "Live VocaDB Song Lyrics Fetch") {
+    std::string orig, romaji, eng;
+    bool ok = FetchServices::FetchVdbSongLyrics("https://vocadb.net", 1500, orig, romaji, eng); // Unhappy Refrain
+    ASSERT_TRUE(ok);
+    ASSERT_FALSE(orig.empty());
+    ASSERT_FALSE(romaji.empty());
+    ASSERT_FALSE(eng.empty());
+    std::cout << "      -> VocaDB song 1500 lyrics: Orig=" << orig.size() << " bytes, Romaji=" 
+              << romaji.size() << " bytes, English=" << eng.size() << " bytes\n";
+}
+
+
 

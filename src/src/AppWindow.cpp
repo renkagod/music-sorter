@@ -681,6 +681,10 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
         if (!bestMatch->artistEnglish.empty()) albItem.artistEnglish = bestMatch->artistEnglish;
         if (!bestMatch->artistJapanese.empty()) albItem.artistJapanese = bestMatch->artistJapanese;
 
+        albItem.lyricsOriginal = bestMatch->lyricsOriginal;
+        albItem.lyricsRomaji = bestMatch->lyricsRomaji;
+        albItem.lyricsEnglish = bestMatch->lyricsEnglish;
+
         std::string chosenTitle = PickBestName(bestMatch->titleRomaji, bestMatch->titleEnglish, bestMatch->titleJapanese, bestMatch->title);
         if (!chosenTitle.empty()) {
             strncpy_s(albItem.titleBuf, chosenTitle.c_str(), sizeof(albItem.titleBuf) - 1);
@@ -689,6 +693,17 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
         if (!chosenArtist.empty() && chosenArtist != "Various Artists" && chosenArtist != "V.A.") {
             strncpy_s(albItem.artistBuf, chosenArtist.c_str(), sizeof(albItem.artistBuf) - 1);
         }
+
+        // Apply unsynced lyrics fallback if lyricsBuf is currently empty
+        if (albItem.lyricsBuf[0] == '\0' && (!albItem.lyricsRomaji.empty() || !albItem.lyricsEnglish.empty() || !albItem.lyricsOriginal.empty())) {
+            std::string bestLyrics = PickBestLyrics(albItem.lyricsRomaji, albItem.lyricsEnglish, albItem.lyricsOriginal);
+            if (!bestLyrics.empty()) {
+                strncpy_s(albItem.lyricsBuf, bestLyrics.c_str(), sizeof(albItem.lyricsBuf) - 1);
+                albItem.hasLyrics = true;
+                albItem.hasSyncedLyrics = false;
+            }
+        }
+
         LOG_INFO("[TRACK MATCHED] Track #" + std::string(trackStr) + ": " + std::string(albItem.artistBuf) + " - " + std::string(albItem.titleBuf) + " for file: " + albItem.originalFilename);
     }
 }
@@ -2349,7 +2364,15 @@ void AppWindow::FetchManualTouhouDbMetadata(const std::string& inputUrl, bool ap
             std::string lrcLyrics = FetchLrcLibSyncedLyrics(item.artistBuf, item.titleBuf, item.albumBuf);
             if (!lrcLyrics.empty()) {
                 item.hasLyrics = true;
+                item.hasSyncedLyrics = true;
                 strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+            } else if (item.lyricsBuf[0] == '\0') {
+                std::string bestFallback = PickBestLyrics(item.lyricsRomaji, item.lyricsEnglish, item.lyricsOriginal);
+                if (!bestFallback.empty()) {
+                    item.hasLyrics = true;
+                    item.hasSyncedLyrics = false;
+                    strncpy_s(item.lyricsBuf, bestFallback.c_str(), sizeof(item.lyricsBuf) - 1);
+                }
             }
         }
 
@@ -2446,7 +2469,15 @@ void AppWindow::FetchManualVocaDbMetadata(const std::string& inputUrl, bool appl
             std::string lrcLyrics = FetchLrcLibSyncedLyrics(item.artistBuf, item.titleBuf, item.albumBuf);
             if (!lrcLyrics.empty()) {
                 item.hasLyrics = true;
+                item.hasSyncedLyrics = true;
                 strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+            } else if (item.lyricsBuf[0] == '\0') {
+                std::string bestFallback = PickBestLyrics(item.lyricsRomaji, item.lyricsEnglish, item.lyricsOriginal);
+                if (!bestFallback.empty()) {
+                    item.hasLyrics = true;
+                    item.hasSyncedLyrics = false;
+                    strncpy_s(item.lyricsBuf, bestFallback.c_str(), sizeof(item.lyricsBuf) - 1);
+                }
             }
         }
 
@@ -2542,7 +2573,15 @@ void AppWindow::FetchManualUtaiteDbMetadata(const std::string& inputUrl, bool ap
             std::string lrcLyrics = FetchLrcLibSyncedLyrics(item.artistBuf, item.titleBuf, item.albumBuf);
             if (!lrcLyrics.empty()) {
                 item.hasLyrics = true;
+                item.hasSyncedLyrics = true;
                 strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+            } else if (item.lyricsBuf[0] == '\0') {
+                std::string bestFallback = PickBestLyrics(item.lyricsRomaji, item.lyricsEnglish, item.lyricsOriginal);
+                if (!bestFallback.empty()) {
+                    item.hasLyrics = true;
+                    item.hasSyncedLyrics = false;
+                    strncpy_s(item.lyricsBuf, bestFallback.c_str(), sizeof(item.lyricsBuf) - 1);
+                }
             }
         }
 
@@ -3044,9 +3083,25 @@ void AppWindow::RunMessageLoop() {
                                 std::string t = itm.titleJapanese.empty() ? itm.titleRomaji : itm.titleJapanese;
                                 if (!t.empty()) strncpy_s(itm.titleBuf, t.c_str(), sizeof(itm.titleBuf) - 1);
                             }
+
+                            // Switch unsynced lyrics variant if track is using unsynced fallback lyrics
+                            if (!itm.hasSyncedLyrics) {
+                                std::string ly;
+                                if (langCode == "RO") {
+                                    ly = itm.lyricsRomaji.empty() ? (itm.lyricsEnglish.empty() ? itm.lyricsOriginal : itm.lyricsEnglish) : itm.lyricsRomaji;
+                                } else if (langCode == "EN") {
+                                    ly = itm.lyricsEnglish.empty() ? (itm.lyricsRomaji.empty() ? itm.lyricsOriginal : itm.lyricsRomaji) : itm.lyricsEnglish;
+                                } else if (langCode == "JP") {
+                                    ly = itm.lyricsOriginal.empty() ? (itm.lyricsRomaji.empty() ? itm.lyricsEnglish : itm.lyricsRomaji) : itm.lyricsOriginal;
+                                }
+                                if (!ly.empty()) {
+                                    strncpy_s(itm.lyricsBuf, ly.c_str(), sizeof(itm.lyricsBuf) - 1);
+                                    itm.hasLyrics = true;
+                                }
+                            }
                         }
                     }
-                    LOG_INFO("[LANG SWITCH] Switched tags to " + langCode + " for " + std::to_string(langAlbIndices.size()) + " tracks in album.");
+                    LOG_INFO("[LANG SWITCH] Switched tags and lyrics to " + langCode + " for " + std::to_string(langAlbIndices.size()) + " tracks in album.");
                 };
 
                 if (ImGui::SmallButton("RO##LangRO")) {
@@ -4205,7 +4260,16 @@ void AppWindow::StartTagScan() {
                             std::string lrcLyrics = FetchLrcLibSyncedLyrics(trackArtist, trackTitle, trackAlbum);
                             if (!lrcLyrics.empty()) {
                                 item.hasLyrics = true;
+                                item.hasSyncedLyrics = true;
                                 strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+                            } else if (item.lyricsBuf[0] == '\0') {
+                                std::string bestFallback = PickBestLyrics(item.lyricsRomaji, item.lyricsEnglish, item.lyricsOriginal);
+                                if (!bestFallback.empty()) {
+                                    item.hasLyrics = true;
+                                    item.hasSyncedLyrics = false;
+                                    strncpy_s(item.lyricsBuf, bestFallback.c_str(), sizeof(item.lyricsBuf) - 1);
+                                    LOG_INFO("[LYRICS FALLBACK] Applied VDB unsynced lyrics for: " + trackTitle);
+                                }
                             }
 
                             item.isFetchCompleted = true;

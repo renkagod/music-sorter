@@ -7,7 +7,7 @@ Desktop application for acoustic analysis, duplicate detection, and music collec
 ### Metadata & Lyrics Fetch Services
 - [x] **TouhouDB / VocaDB / UtaiteDB API** (`https://touhoudb.com/api`, `https://vocadb.net/api`, `https://utaitedb.net/api`)
   - REST API (JSON), tracks, durations in seconds, artists, original high-res covers
-- [ ] **TouhouDB / VocaDB / UtaiteDB Lyrics Fallback**
+- [x] **TouhouDB / VocaDB / UtaiteDB Lyrics Fallback**
   - Unsynced lyrics (original Japanese, Romaji, English translation) as fallback when synced LRC is not found in LRCLIB
 - [x] **TouhouDB / VocaDB / UtaiteDB Language Preference & Romaji Fallback**
   - Romaji track, album, and artist title support (`lang=Romaji`) with fallback chain: Romaji -> English -> Japanese, interactive `[RO] [EN] [JP]` language switcher buttons
