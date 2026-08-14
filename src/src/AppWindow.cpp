@@ -259,6 +259,7 @@ static const char* GetTierName(MatchTier tier) {
         case MatchTier::TierB_Katakana: return "Tier B (Катакана)";
         case MatchTier::TierC_Loose: return "Tier C (Нечеткий поиск)";
         case MatchTier::TouhouDB: return "TouhouDB (Додзин-база)";
+        case MatchTier::THBWiki: return "THBWiki (Touhou Wiki)";
         case MatchTier::VocaDB: return "VocaDB (Вокалоид-база)";
         case MatchTier::UtaiteDB: return "UtaiteDB (Утаитэ-база)";
         case MatchTier::Discogs: return "Discogs (База данных)";
@@ -280,6 +281,8 @@ static ImVec4 GetTierColor(MatchTier tier) {
             return ImVec4(1.0f, 0.55f, 0.2f, 1.0f);
         case MatchTier::TouhouDB:
             return ImVec4(0.95f, 0.35f, 0.55f, 1.0f);
+        case MatchTier::THBWiki:
+            return ImVec4(0.2f, 0.75f, 0.85f, 1.0f);
         case MatchTier::VocaDB:
             return ImVec4(0.2f, 0.85f, 0.85f, 1.0f);
         case MatchTier::UtaiteDB:
@@ -1706,6 +1709,7 @@ void AppWindow::RenderReleaseSummaryTable() {
     size_t countTierB = 0;
     size_t countTierC = 0;
     size_t countTouhouDb = 0;
+    size_t countThwiki = 0;
     size_t countVocaDb = 0;
     size_t countUtaiteDb = 0;
     size_t countDiscogs = 0;
@@ -1762,6 +1766,8 @@ void AppWindow::RenderReleaseSummaryTable() {
             countTierC++;
         } else if (g.matchTier == MatchTier::TouhouDB) {
             countTouhouDb++;
+        } else if (g.matchTier == MatchTier::THBWiki) {
+            countThwiki++;
         } else if (g.matchTier == MatchTier::VocaDB) {
             countVocaDb++;
         } else if (g.matchTier == MatchTier::UtaiteDB) {
@@ -1807,6 +1813,8 @@ void AppWindow::RenderReleaseSummaryTable() {
     drawFilterBtn("Tier C", 3, countTierC, ImVec4(1.0f, 0.55f, 0.2f, 1.0f));
     ImGui::SameLine();
     drawFilterBtn("TouhouDB", 6, countTouhouDb, ImVec4(0.95f, 0.35f, 0.55f, 1.0f));
+    ImGui::SameLine();
+    drawFilterBtn("THBWiki", 9, countThwiki, ImVec4(0.2f, 0.75f, 0.85f, 1.0f));
     ImGui::SameLine();
     drawFilterBtn("VocaDB", 7, countVocaDb, ImVec4(0.2f, 0.85f, 0.85f, 1.0f));
     ImGui::SameLine();
@@ -1875,6 +1883,9 @@ void AppWindow::RenderReleaseSummaryTable() {
                     continue;
                 }
                 if (m_releaseSummaryTierFilter == 6 && !(g.matchTier == MatchTier::TouhouDB)) {
+                    continue;
+                }
+                if (m_releaseSummaryTierFilter == 9 && !(g.matchTier == MatchTier::THBWiki)) {
                     continue;
                 }
                 if (m_releaseSummaryTierFilter == 7 && !(g.matchTier == MatchTier::VocaDB)) {
@@ -2377,6 +2388,115 @@ void AppWindow::FetchManualTouhouDbMetadata(const std::string& inputUrl, bool ap
         }
 
         LOG_INFO("[MANUAL TOUHOUDB MATCHED] Успешно загружен релиз TouhouDB: \"" + info.title + "\" (" + info.artist + ", дата: " + info.releaseDate + ", треков: " + std::to_string(info.tracks.size()) + ")");
+    }).detach();
+}
+
+void AppWindow::FetchManualThwikiMetadata(const std::string& inputUrl, bool applyToAllInAlbum) {
+    if (m_tagItems.empty() || m_currentTagIndex >= m_tagItems.size()) {
+        LOG_WARN("[MANUAL THBWIKI] Очередь треков пуста или индекс некорректен.");
+        return;
+    }
+
+    int albumId = ExtractThwikiId(inputUrl);
+    std::string customTitle;
+    if (albumId <= 0) {
+        std::string cleaned = CleanMetadataString(inputUrl);
+        if (!cleaned.empty() && cleaned.find("http") == std::string::npos) {
+            customTitle = cleaned;
+        }
+    }
+
+    if (albumId <= 0 && customTitle.empty()) {
+        LOG_WARN("[MANUAL THBWIKI] В строке не найден валидный ID или название альбома THBWiki: " + inputUrl);
+        return;
+    }
+
+    LOG_INFO("[MANUAL THBWIKI] Запуск ручной загрузки метаданных для THBWiki: " + (albumId > 0 ? std::to_string(albumId) : customTitle));
+
+    std::thread([this, albumId, customTitle, applyToAllInAlbum]() {
+        ThwikiReleaseInfo info;
+        bool ok = false;
+        if (albumId > 0) {
+            ok = FetchThwikiAlbumDetails(albumId, info);
+        } else {
+            ok = FetchThwikiAlbumDetailsByTitle(customTitle, info);
+        }
+
+        if (!ok) {
+            LOG_WARN("[MANUAL THBWIKI ERROR] Не удалось получить данные с THBWiki для: " + (albumId > 0 ? std::to_string(albumId) : customTitle));
+            return;
+        }
+
+        std::vector<unsigned char> coverData;
+        if (!info.coverUrl.empty()) {
+            LOG_INFO("[MANUAL THBWIKI] Загрузка обложки с THBWiki: " + info.coverUrl);
+            coverData = HttpGetBytes(Utf8ToWide(info.coverUrl));
+        }
+
+        auto& currentItem = m_tagItems[m_currentTagIndex];
+        std::string targetFolder = fs::path(currentItem.filePath).parent_path().string();
+
+        std::vector<size_t> targetIndices;
+        if (applyToAllInAlbum) {
+            for (size_t i = 0; i < m_tagItems.size(); ++i) {
+                if (fs::path(m_tagItems[i].filePath).parent_path().string() == targetFolder) {
+                    targetIndices.push_back(i);
+                }
+            }
+        } else {
+            targetIndices.push_back(m_currentTagIndex);
+        }
+
+        for (size_t idx : targetIndices) {
+            auto& item = m_tagItems[idx];
+            item.albumJapanese = info.title;
+            item.artistJapanese = info.circle;
+
+            if (!info.circle.empty()) {
+                strncpy_s(item.artistBuf, info.circle.c_str(), sizeof(item.artistBuf) - 1);
+            }
+            if (!info.title.empty()) {
+                strncpy_s(item.albumBuf, info.title.c_str(), sizeof(item.albumBuf) - 1);
+            }
+            if (!info.releaseDate.empty()) {
+                strncpy_s(item.yearBuf, info.releaseDate.c_str(), sizeof(item.yearBuf) - 1);
+            }
+
+            if (!info.tracks.empty()) {
+                ApplyTrackMatch(item, info.tracks);
+            }
+
+            item.matchTier = MatchTier::THBWiki;
+            item.releaseGroupMbId = "thwiki_" + std::to_string(info.id > 0 ? info.id : albumId);
+            item.isMusicBrainzMatched = true;
+            item.isFetchCompleted = true;
+
+            if (!coverData.empty()) {
+                item.onlineCoverBytes = coverData;
+                item.onlineCoverSource = "THBWiki";
+                if (item.onlineTexture) {
+                    item.onlineTexture->Release();
+                    item.onlineTexture = NULL;
+                }
+                item.selectedCoverChoice = 1;
+            }
+
+            // Fetch LRC lyrics
+            std::string lrcLyrics;
+            if (!item.lyricsOriginal.empty() && item.lyricsOriginal.find("http") == 0) {
+                lrcLyrics = FetchThwikiLrc(item.lyricsOriginal);
+            }
+            if (lrcLyrics.empty()) {
+                lrcLyrics = FetchLrcLibSyncedLyrics(item.artistBuf, item.titleBuf, item.albumBuf);
+            }
+            if (!lrcLyrics.empty()) {
+                item.hasLyrics = true;
+                item.hasSyncedLyrics = true;
+                strncpy_s(item.lyricsBuf, lrcLyrics.c_str(), sizeof(item.lyricsBuf) - 1);
+            }
+        }
+
+        LOG_INFO("[MANUAL THBWIKI MATCHED] Успешно загружен релиз THBWiki: \"" + info.title + "\" (" + info.circle + ", дата: " + info.releaseDate + ", треков: " + std::to_string(info.tracks.size()) + ")");
     }).detach();
 }
 
@@ -2999,6 +3119,8 @@ void AppWindow::RunMessageLoop() {
 
                         if (inputLower.find("touhoudb.com") != std::string::npos || inputLower.find("touhoudb:") == 0 || inputLower.find("tdb:") == 0) {
                             FetchManualTouhouDbMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
+                        } else if (inputLower.find("thwiki.cc") != std::string::npos || inputLower.find("thwiki:") == 0 || inputLower.find("thbwiki:") == 0 || inputLower.find("thwiki_") == 0) {
+                            FetchManualThwikiMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
                         } else if (inputLower.find("vocadb.net") != std::string::npos || inputLower.find("vocadb:") == 0 || inputLower.find("vdb:") == 0) {
                             FetchManualVocaDbMetadata(m_manualMbUrlBuf, m_manualMbApplyToAlbum);
                         } else if (inputLower.find("utaitedb.net") != std::string::npos || inputLower.find("utaitedb:") == 0 || inputLower.find("udb:") == 0) {
@@ -4095,10 +4217,11 @@ void AppWindow::StartTagScan() {
                             }
                         }
 
-                        // 3. TouhouDB, VocaDB, UtaiteDB Search
+                        // 3. TouhouDB, THBWiki, VocaDB, UtaiteDB Search
                         if (releaseGroupMbId.empty() && (!albumClean.empty() || !catalogNo.empty())) {
                             std::string searchArtist = !acoustRecArtist.empty() ? acoustRecArtist : artistClean;
                             VdbReleaseInfo vdbInfo;
+                            ThwikiReleaseInfo thInfo;
 
                             if (SearchVdbRelease("https://touhoudb.com", "TouhouDB", searchArtist, albumClean, catalogNo, vdbInfo)) {
                                 releaseGroupMbId = "touhoudb_" + std::to_string(vdbInfo.id);
@@ -4112,6 +4235,18 @@ void AppWindow::StartTagScan() {
                                 artRomaji = vdbInfo.artistRomaji; artEnglish = vdbInfo.artistEnglish; artJapanese = vdbInfo.artistJapanese;
                                 isMatched = true;
                                 detectedTier = MatchTier::TouhouDB;
+                            } else if (SearchThwikiRelease(searchArtist, albumClean, thInfo)) {
+                                releaseGroupMbId = "thwiki_" + std::to_string(thInfo.id);
+                                firstReleaseDate = thInfo.releaseDate;
+                                if (!thInfo.coverUrl.empty()) {
+                                    coverData = HttpGetBytes(Utf8ToWide(thInfo.coverUrl));
+                                    if (!coverData.empty()) coverSource = "THBWiki";
+                                }
+                                resolvedTracks = thInfo.tracks;
+                                albJapanese = thInfo.title;
+                                artJapanese = thInfo.circle;
+                                isMatched = true;
+                                detectedTier = MatchTier::THBWiki;
                             } else if (SearchVdbRelease("https://vocadb.net", "VocaDB", searchArtist, albumClean, catalogNo, vdbInfo)) {
                                 releaseGroupMbId = "vocadb_" + std::to_string(vdbInfo.id);
                                 firstReleaseDate = vdbInfo.releaseDate;
@@ -4157,7 +4292,7 @@ void AppWindow::StartTagScan() {
                         }
 
                         // 5. If MusicBrainz matched: Download Cover Art & Tracklist & Romaji Enrichment
-                        if (!releaseGroupMbId.empty() && releaseGroupMbId.rfind("discogs_", 0) != 0 && releaseGroupMbId.rfind("touhoudb_", 0) != 0 && releaseGroupMbId.rfind("vocadb_", 0) != 0 && releaseGroupMbId.rfind("utaitedb_", 0) != 0) {
+                        if (!releaseGroupMbId.empty() && releaseGroupMbId.rfind("discogs_", 0) != 0 && releaseGroupMbId.rfind("touhoudb_", 0) != 0 && releaseGroupMbId.rfind("thwiki_", 0) != 0 && releaseGroupMbId.rfind("vocadb_", 0) != 0 && releaseGroupMbId.rfind("utaitedb_", 0) != 0) {
                             const char* endpoints[] = {
                                 "https://coverartarchive.org/release-group/%s/front",
                                 "https://coverartarchive.org/release/%s/front",
@@ -4191,6 +4326,7 @@ void AppWindow::StartTagScan() {
 
                             if (ContainsCJK(artistClean) || ContainsCJK(albumClean) || !catalogNo.empty()) {
                                 VdbReleaseInfo vdbEnrich;
+                                ThwikiReleaseInfo thEnrich;
                                 if (SearchVdbRelease("https://touhoudb.com", "TouhouDB", artistClean, albumClean, catalogNo, vdbEnrich) ||
                                     SearchVdbRelease("https://vocadb.net", "VocaDB", artistClean, albumClean, catalogNo, vdbEnrich) ||
                                     SearchVdbRelease("https://utaitedb.net", "UtaiteDB", artistClean, albumClean, catalogNo, vdbEnrich)) {
@@ -4201,6 +4337,14 @@ void AppWindow::StartTagScan() {
                                     artEnglish = vdbEnrich.artistEnglish;
                                     artJapanese = vdbEnrich.artistJapanese;
                                     if (!vdbEnrich.tracks.empty()) resolvedTracks = vdbEnrich.tracks;
+                                } else if (SearchThwikiRelease(artistClean, albumClean, thEnrich)) {
+                                    albJapanese = thEnrich.title;
+                                    artJapanese = thEnrich.circle;
+                                    if (!thEnrich.tracks.empty()) resolvedTracks = thEnrich.tracks;
+                                    if (coverData.empty() && !thEnrich.coverUrl.empty()) {
+                                        coverData = HttpGetBytes(Utf8ToWide(thEnrich.coverUrl));
+                                        if (!coverData.empty()) coverSource = "THBWiki";
+                                    }
                                 }
                             }
                         }
@@ -4257,7 +4401,13 @@ void AppWindow::StartTagScan() {
                             std::string trackTitle(item.titleBuf);
                             std::string trackAlbum(item.albumBuf);
 
-                            std::string lrcLyrics = FetchLrcLibSyncedLyrics(trackArtist, trackTitle, trackAlbum);
+                            std::string lrcLyrics;
+                            if (!item.lyricsOriginal.empty() && item.lyricsOriginal.find("http") == 0) {
+                                lrcLyrics = FetchThwikiLrc(item.lyricsOriginal);
+                            }
+                            if (lrcLyrics.empty()) {
+                                lrcLyrics = FetchLrcLibSyncedLyrics(trackArtist, trackTitle, trackAlbum);
+                            }
                             if (!lrcLyrics.empty()) {
                                 item.hasLyrics = true;
                                 item.hasSyncedLyrics = true;
@@ -4268,7 +4418,7 @@ void AppWindow::StartTagScan() {
                                     item.hasLyrics = true;
                                     item.hasSyncedLyrics = false;
                                     strncpy_s(item.lyricsBuf, bestFallback.c_str(), sizeof(item.lyricsBuf) - 1);
-                                    LOG_INFO("[LYRICS FALLBACK] Applied VDB unsynced lyrics for: " + trackTitle);
+                                    LOG_INFO("[LYRICS FALLBACK] Applied unsynced lyrics for: " + trackTitle);
                                 }
                             }
 
@@ -4286,6 +4436,6 @@ void AppWindow::StartTagScan() {
 
         m_tagScanEndTime = std::chrono::steady_clock::now();
         m_isTagScanning = false;
-        LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz, TouhouDB, VocaDB, UtaiteDB & Discogs queries finished.");
+        LOG_INFO("Step 2 Background Online Fetching Complete. 100% of MusicBrainz, TouhouDB, THBWiki, VocaDB, UtaiteDB & Discogs queries finished.");
     }).detach();
 }

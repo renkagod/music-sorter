@@ -23,6 +23,18 @@ TEST_CASE("Live Network Fetch", "Live TouhouDB API Search and Fetch") {
               << " tracks, Cover: " << info.coverUrl << "\n";
 }
 
+TEST_CASE("Live Network Fetch", "Live THBWiki API Search and Fetch") {
+    ThwikiReleaseInfo info;
+    bool ok = FetchServices::SearchThwikiRelease("FELT", "Stand Up", info);
+    ASSERT_TRUE(ok);
+    ASSERT_STR_EQ(info.title, "Stand Up");
+    ASSERT_STR_EQ(info.circle, "FELT");
+    ASSERT_FALSE(info.tracks.empty());
+    ASSERT_FALSE(info.coverUrl.empty());
+    std::cout << "      -> THBWiki matched album ID " << info.id << ", " << info.tracks.size() 
+              << " tracks, Cover: " << info.coverUrl << "\n";
+}
+
 TEST_CASE("Live Network Fetch", "Live VocaDB API Search and Fetch") {
     VdbReleaseInfo info;
     bool ok = FetchServices::SearchVdbRelease("https://vocadb.net", "VocaDB", "wowaka", "Unhappy Refrain", "DGSA-10008", info);

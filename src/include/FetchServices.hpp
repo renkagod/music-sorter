@@ -67,6 +67,17 @@ struct VdbReleaseInfo {
     std::vector<MBTrackEntry> tracks;
 };
 
+struct ThwikiReleaseInfo {
+    int id = 0;
+    std::string title;
+    std::string circle;
+    std::string releaseDate;
+    std::string event;
+    std::string coverUrl;
+    std::vector<MBTrackEntry> tracks;
+    std::vector<std::string> lrcUrls;
+};
+
 inline std::string PickBestName(const std::string& romaji, const std::string& english, const std::string& japanese, const std::string& def) {
     if (!romaji.empty()) return romaji;
     if (!english.empty()) return english;
@@ -206,6 +217,21 @@ inline void AcoustIdThrottle() {
     g_lastAcoustIdRequestTime = std::chrono::steady_clock::now();
 }
 
+inline std::mutex g_thwikiThrottleMutex;
+inline std::chrono::steady_clock::time_point g_lastThwikiRequestTime;
+
+inline void ThwikiThrottle() {
+    std::lock_guard<std::mutex> lock(g_thwikiThrottleMutex);
+    auto now = std::chrono::steady_clock::now();
+    auto sinceLast = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastThwikiRequestTime).count();
+    const long long kMinGapMs = 300; // 300 ms delay between sequential THBWiki requests
+    if (sinceLast < kMinGapMs) {
+        long long sleepMs = kMinGapMs - sinceLast;
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+    }
+    g_lastThwikiRequestTime = std::chrono::steady_clock::now();
+}
+
 
 inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const std::string& discogsToken = "", int maxRetries = 3) {
     std::vector<unsigned char> result;
@@ -220,6 +246,9 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
     bool isLrcLib = (narrowUrl.find("lrclib.net") != std::string::npos);
     if (isLrcLib) LrcLibThrottle();
 
+    bool isThwiki = (narrowUrl.find("thwiki.cc") != std::string::npos);
+    if (isThwiki) ThwikiThrottle();
+
     for (int attempt = 0; attempt < maxRetries; ++attempt) {
         HINTERNET hNet = InternetOpenW(L"MusicSorter/2.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (hNet) {
@@ -229,6 +258,8 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
                 customHeaders = L"Authorization: Discogs token=" + Utf8ToWide(discogsToken) + L"\r\nUser-Agent: MusicSorter/2.0 (https://github.com/renkagod/music-sorter)\r\n";
             } else if (isLrcLib) {
                 customHeaders = L"User-Agent: MusicSorter v2.0 (https://github.com/renkagod/music-sorter)\r\nLrclib-Client: MusicSorter v2.0 (https://github.com/renkagod/music-sorter)\r\n";
+            } else if (isThwiki) {
+                customHeaders = L"User-Agent: MusicSorter/2.0 (https://github.com/renkagod/music-sorter)\r\n";
             }
             HINTERNET hFile = InternetOpenUrlW(hNet, url.c_str(), customHeaders.empty() ? NULL : customHeaders.c_str(), (DWORD)customHeaders.length(), flags, 0);
             if (!hFile) {
@@ -1169,6 +1200,245 @@ inline int ExtractVdbId(const std::string& inputUrl) {
             return std::stoi(match.str(1));
         } catch (...) {}
     }
+    return 0;
+}
+
+struct ThwikiSearchResult {
+    int id = 0;
+    std::string title;
+    std::string circle;
+};
+
+inline std::vector<ThwikiSearchResult> ParseThwikiSearchResultsJson(const std::string& jsonStr) {
+    std::vector<ThwikiSearchResult> results;
+    if (jsonStr.empty()) return results;
+    size_t p = 0;
+    JsonVal doc = ParseJsonSimple(jsonStr, p);
+    if (doc.type != JsonVal::Array) return results;
+    for (size_t i = 0; i < doc.arrVal.size(); ++i) {
+        const auto& item = doc.get(i);
+        if (item.type != JsonVal::Array) continue;
+        int id = (int)item.get(0).numVal;
+        std::string title = item.get(1).strVal;
+        std::string circle = item.get(2).strVal;
+        if (id > 0 && !title.empty()) {
+            results.push_back({ id, title, circle });
+        }
+    }
+    return results;
+}
+
+inline bool ParseThwikiAlbumDetailsJson(const std::string& jsonStr, int albumId, ThwikiReleaseInfo& outInfo) {
+    if (jsonStr.empty()) return false;
+    size_t p = 0;
+    JsonVal doc = ParseJsonSimple(jsonStr, p);
+    if (doc.type != JsonVal::Array || doc.arrVal.size() < 2) return false;
+
+    outInfo.id = albumId;
+
+    auto getValStr = [](const JsonVal& v) -> std::string {
+        if (v.type == JsonVal::String) return v.strVal;
+        if (v.type == JsonVal::Number) {
+            int n = (int)v.numVal;
+            return std::to_string(n);
+        }
+        if (v.type == JsonVal::Array) {
+            std::string res;
+            for (size_t i = 0; i < v.arrVal.size(); ++i) {
+                std::string s = v.get(i).strVal;
+                if (s.empty() && v.get(i).type == JsonVal::Number) s = std::to_string((int)v.get(i).numVal);
+                if (!s.empty()) {
+                    if (!res.empty()) res += ", ";
+                    res += s;
+                }
+            }
+            return res;
+        }
+        return "";
+    };
+
+    // 1. Album Properties (doc[0])
+    const auto& albSection = doc.get(0);
+    if (albSection.type == JsonVal::Array) {
+        for (size_t i = 0; i < albSection.arrVal.size(); ++i) {
+            const auto& pair = albSection.get(i);
+            if (pair.type != JsonVal::Array || pair.arrVal.size() < 2) continue;
+            std::string key = pair.get(0).strVal;
+            const auto& val = pair.get(1);
+
+            if (key == "alname") outInfo.title = getValStr(val);
+            else if (key == "circle") outInfo.circle = getValStr(val);
+            else if (key == "date") outInfo.releaseDate = getValStr(val);
+            else if (key == "event") outInfo.event = getValStr(val);
+            else if (key == "coverurl") outInfo.coverUrl = getValStr(val);
+        }
+    }
+
+    // 2. Tracklist (doc[1])
+    const auto& trkSection = doc.get(1);
+    if (trkSection.type == JsonVal::Array) {
+        for (size_t i = 0; i < trkSection.arrVal.size(); ++i) {
+            const auto& trkItem = trkSection.get(i);
+            if (trkItem.type != JsonVal::Array) continue;
+
+            int trackNo = (int)(i + 1);
+            std::string trackName;
+            std::string artistStr;
+            std::string arrangeStr;
+            std::string vocalStr;
+            std::string ogMusic;
+            std::string lrcUrl;
+            int durSec = 0;
+
+            for (size_t f = 0; f < trkItem.arrVal.size(); ++f) {
+                const auto& fPair = trkItem.get(f);
+                if (fPair.type != JsonVal::Array || fPair.arrVal.size() < 2) continue;
+                std::string fKey = fPair.get(0).strVal;
+                const auto& fVal = fPair.get(1);
+
+                if (fKey == "name") trackName = getValStr(fVal);
+                else if (fKey == "trackno") {
+                    try {
+                        std::string tStr = getValStr(fVal);
+                        if (!tStr.empty()) trackNo = std::stoi(tStr);
+                    } catch (...) {}
+                }
+                else if (fKey == "artist") artistStr = getValStr(fVal);
+                else if (fKey == "arrange") arrangeStr = getValStr(fVal);
+                else if (fKey == "vocal") vocalStr = getValStr(fVal);
+                else if (fKey == "ogmusic") ogMusic = getValStr(fVal);
+                else if (fKey == "lrc") lrcUrl = getValStr(fVal);
+                else if (fKey == "time") {
+                    try {
+                        std::string s = getValStr(fVal);
+                        if (!s.empty()) durSec = std::stoi(s);
+                    } catch (...) {}
+                }
+            }
+
+            if (!trackName.empty()) {
+                std::string chosenArtist = artistStr;
+                if (chosenArtist.empty()) chosenArtist = vocalStr;
+                if (chosenArtist.empty()) chosenArtist = arrangeStr;
+                if (chosenArtist.empty()) chosenArtist = outInfo.circle;
+
+                MBTrackEntry entry;
+                entry.position = trackNo;
+                entry.title = trackName;
+                entry.titleJapanese = trackName;
+                entry.artist = chosenArtist;
+                entry.artistJapanese = chosenArtist;
+                entry.lengthMs = durSec * 1000;
+                entry.lyricsOriginal = lrcUrl;
+
+                outInfo.tracks.push_back(entry);
+                outInfo.lrcUrls.push_back(lrcUrl);
+            }
+        }
+    }
+
+    return !outInfo.title.empty() || !outInfo.tracks.empty();
+}
+
+inline bool FetchThwikiAlbumDetails(int albumId, ThwikiReleaseInfo& outInfo) {
+    if (albumId <= 0) return false;
+    std::string url = "https://thwiki.cc/album.php?m=ga&a=" + std::to_string(albumId) + "&f=alname+circle+date+coverurl+event&p=name+trackno+artist+arrange+vocal+ogmusic+lrc&d=nm&g=0";
+    std::string jsonStr = HttpGetString(Utf8ToWide(url));
+    return ParseThwikiAlbumDetailsJson(jsonStr, albumId, outInfo);
+}
+
+inline bool FetchThwikiAlbumDetailsByTitle(const std::string& title, ThwikiReleaseInfo& outInfo) {
+    if (title.empty()) return false;
+    std::string url = "https://thwiki.cc/album.php?m=ga&t=" + UrlEncode(title) + "&f=alname+circle+date+coverurl+event&p=name+trackno+artist+arrange+vocal+ogmusic+lrc&d=nm&g=0";
+    std::string jsonStr = HttpGetString(Utf8ToWide(url));
+    return ParseThwikiAlbumDetailsJson(jsonStr, 0, outInfo);
+}
+
+inline bool SearchThwikiRelease(const std::string& artist, const std::string& album, ThwikiReleaseInfo& outInfo) {
+    if (album.empty()) return false;
+
+    auto executeSearch = [](const std::string& q) -> std::vector<ThwikiSearchResult> {
+        if (q.empty()) return {};
+        std::string url = "https://thwiki.cc/album.php?m=sa&v=" + UrlEncode(q) + "&o=1&g=0";
+        std::string jsonStr = HttpGetString(Utf8ToWide(url));
+        return ParseThwikiSearchResultsJson(jsonStr);
+    };
+
+    LOG_INFO("[THBWiki SEARCH] Querying album: " + album);
+    auto candidates = executeSearch(album);
+
+    if (candidates.empty() && !artist.empty() && artist != "Unknown Artist") {
+        LOG_INFO("[THBWiki SEARCH] Querying artist + album: " + artist + " " + album);
+        candidates = executeSearch(artist + " " + album);
+    }
+
+    if (candidates.empty()) return false;
+
+    int bestScore = -100;
+    int pickedId = 0;
+    std::string albNorm = NormalizeKey(album);
+    std::string artNorm = NormalizeKey(artist);
+
+    for (const auto& cand : candidates) {
+        int id = cand.id;
+        if (id <= 0) continue;
+
+        int score = 0;
+        std::string candNameNorm = NormalizeKey(cand.title);
+        std::string candCircleNorm = NormalizeKey(cand.circle);
+
+        if (!albNorm.empty() && !candNameNorm.empty()) {
+            if (albNorm == candNameNorm) score += 100;
+            else if (candNameNorm.find(albNorm) != std::string::npos || albNorm.find(candNameNorm) != std::string::npos) score += 70;
+        }
+
+        if (!artNorm.empty() && artNorm != "unknown artist" && !candCircleNorm.empty()) {
+            if (candCircleNorm == artNorm) score += 50;
+            else if (candCircleNorm.find(artNorm) != std::string::npos || artNorm.find(candCircleNorm) != std::string::npos) score += 30;
+        }
+
+        if (score > bestScore) {
+            bestScore = score;
+            pickedId = id;
+        }
+    }
+
+    if (pickedId > 0 && bestScore >= 40) {
+        LOG_INFO("[THBWiki MATCHED] Found album ID " + std::to_string(pickedId) + " (Score: " + std::to_string(bestScore) + "). Fetching full details...");
+        return FetchThwikiAlbumDetails(pickedId, outInfo);
+    }
+
+    return false;
+}
+
+inline std::string FetchThwikiLrc(const std::string& lrcUrl) {
+    if (lrcUrl.empty()) return "";
+    return HttpGetString(Utf8ToWide(lrcUrl));
+}
+
+inline int ExtractThwikiId(const std::string& inputUrl) {
+    if (inputUrl.empty()) return 0;
+    std::regex aParamRegex(R"([?&][ai]=(\d{1,10}))");
+    std::smatch match;
+    if (std::regex_search(inputUrl, match, aParamRegex)) {
+        try { return std::stoi(match.str(1)); } catch (...) {}
+    }
+
+    std::regex prefixRegex(R"(thwiki_(\d{1,10}))", std::regex::icase);
+    if (std::regex_search(inputUrl, match, prefixRegex)) {
+        try { return std::stoi(match.str(1)); } catch (...) {}
+    }
+
+    std::regex numRegex(R"(^\s*(\d{1,10})\s*$)");
+    if (std::regex_search(inputUrl, match, numRegex)) {
+        try { return std::stoi(match.str(1)); } catch (...) {}
+    }
+
+    std::regex genNumRegex(R"((\d{1,10}))");
+    if (std::regex_search(inputUrl, match, genNumRegex)) {
+        try { return std::stoi(match.str(1)); } catch (...) {}
+    }
+
     return 0;
 }
 

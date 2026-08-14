@@ -20,6 +20,7 @@ enum class MatchTier {
     TierB_Katakana,
     TierC_Loose,
     TouhouDB,
+    THBWiki,
     VocaDB,
     UtaiteDB,
     Discogs,
@@ -179,12 +180,13 @@ private:
     char m_discogsTokenBuf[128] = {0};
     bool m_foldersInited = false;
 
-    // Manual MusicBrainz / Discogs / TouhouDB / VocaDB / UtaiteDB Release URL / ID Input
+    // Manual MusicBrainz / Discogs / TouhouDB / THBWiki / VocaDB / UtaiteDB Release URL / ID Input
     char m_manualMbUrlBuf[512] = {0};
     bool m_manualMbApplyToAlbum = true;
     void FetchManualMusicBrainzMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
     void FetchManualDiscogsMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
     void FetchManualTouhouDbMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
+    void FetchManualThwikiMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
     void FetchManualVocaDbMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
     void FetchManualUtaiteDbMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
 };
