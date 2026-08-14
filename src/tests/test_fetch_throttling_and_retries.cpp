@@ -39,3 +39,16 @@ TEST_CASE("Fetch Throttling", "Exponential Backoff Calculation Formula") {
     ASSERT_EQ(calcBackoff(false, 1), 800);
     ASSERT_EQ(calcBackoff(false, 2), 1200);
 }
+
+TEST_CASE("Fetch Throttling", "LRCLIB Proactive Rate Limit Throttle") {
+    auto t1 = std::chrono::steady_clock::now();
+    FetchServices::LrcLibThrottle();
+    auto t2 = std::chrono::steady_clock::now();
+    FetchServices::LrcLibThrottle();
+    auto t3 = std::chrono::steady_clock::now();
+
+    auto gap1 = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
+    // Must be at least 250ms (300ms target with variance margin)
+    ASSERT_GE(gap1, 240);
+}
+

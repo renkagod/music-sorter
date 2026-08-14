@@ -151,6 +151,21 @@ inline void DiscogsThrottle() {
     g_lastDiscogsRequestTime = std::chrono::steady_clock::now();
 }
 
+inline std::mutex g_lrclibThrottleMutex;
+inline std::chrono::steady_clock::time_point g_lastLrclibRequestTime;
+
+inline void LrcLibThrottle() {
+    std::lock_guard<std::mutex> lock(g_lrclibThrottleMutex);
+    auto now = std::chrono::steady_clock::now();
+    auto sinceLast = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastLrclibRequestTime).count();
+    const long long kMinGapMs = 300; // 300 ms delay between sequential LRCLIB requests (recommended 200-500ms range)
+    if (sinceLast < kMinGapMs) {
+        long long sleepMs = kMinGapMs - sinceLast;
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+    }
+    g_lastLrclibRequestTime = std::chrono::steady_clock::now();
+}
+
 inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const std::string& discogsToken = "", int maxRetries = 3) {
     std::vector<unsigned char> result;
     std::string narrowUrl = WideToUtf8(url);
@@ -161,13 +176,18 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
     bool isDiscogs = (narrowUrl.find("api.discogs.com") != std::string::npos);
     if (isDiscogs) DiscogsThrottle();
 
+    bool isLrcLib = (narrowUrl.find("lrclib.net") != std::string::npos);
+    if (isLrcLib) LrcLibThrottle();
+
     for (int attempt = 0; attempt < maxRetries; ++attempt) {
-        HINTERNET hNet = InternetOpenW(L"MusicSorterApp/1.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+        HINTERNET hNet = InternetOpenW(L"MusicSorter/2.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (hNet) {
             DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
             std::wstring customHeaders;
             if (isDiscogs && !discogsToken.empty()) {
-                customHeaders = L"Authorization: Discogs token=" + Utf8ToWide(discogsToken) + L"\r\nUser-Agent: MusicSorterApp/1.0 (https://github.com/renkagod/music-sorter)\r\n";
+                customHeaders = L"Authorization: Discogs token=" + Utf8ToWide(discogsToken) + L"\r\nUser-Agent: MusicSorter/2.0 (https://github.com/renkagod/music-sorter)\r\n";
+            } else if (isLrcLib) {
+                customHeaders = L"User-Agent: MusicSorter v2.0 (https://github.com/renkagod/music-sorter)\r\nLrclib-Client: MusicSorter v2.0 (https://github.com/renkagod/music-sorter)\r\n";
             }
             HINTERNET hFile = InternetOpenUrlW(hNet, url.c_str(), customHeaders.empty() ? NULL : customHeaders.c_str(), (DWORD)customHeaders.length(), flags, 0);
             if (!hFile) {
@@ -181,7 +201,21 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
 
                 if (statusCode == 429 || statusCode == 503) {
                     long long backoffMs = (isMusicBrainz || isDiscogs) ? (1500 * (attempt + 1)) : (400 * (attempt + 1));
-                    LOG_INFO("[HTTP " + std::to_string(statusCode) + " RATE LIMIT] Backing off " + std::to_string(backoffMs) + "ms for URL: " + narrowUrl);
+                    
+                    wchar_t retryAfterBuf[64] = { 0 };
+                    DWORD retryAfterSize = sizeof(retryAfterBuf);
+                    if (HttpQueryInfoW(hFile, HTTP_QUERY_RETRY_AFTER, retryAfterBuf, &retryAfterSize, NULL)) {
+                        try {
+                            int sec = std::stoi(WideToUtf8(retryAfterBuf));
+                            if (sec > 0) {
+                                backoffMs = (long long)sec * 1000;
+                                LOG_INFO("[HTTP 429 RETRY-AFTER] Honoring Retry-After header: " + std::to_string(sec) + "s for URL: " + narrowUrl);
+                            }
+                        } catch (...) {}
+                    } else {
+                        LOG_INFO("[HTTP " + std::to_string(statusCode) + " RATE LIMIT] Backing off " + std::to_string(backoffMs) + "ms for URL: " + narrowUrl);
+                    }
+
                     InternetCloseHandle(hFile);
                     InternetCloseHandle(hNet);
                     std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
@@ -192,6 +226,10 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
                     if (isDiscogs) {
                         std::lock_guard<std::mutex> lock(g_discogsThrottleMutex);
                         g_lastDiscogsRequestTime = std::chrono::steady_clock::now();
+                    }
+                    if (isLrcLib) {
+                        std::lock_guard<std::mutex> lock(g_lrclibThrottleMutex);
+                        g_lastLrclibRequestTime = std::chrono::steady_clock::now();
                     }
                     continue;
                 }
@@ -226,7 +264,7 @@ inline std::string HttpGetString(const std::wstring& url, const std::string& dis
 
 inline std::string AcoustIdHttpPost(const std::string& postData) {
     std::vector<unsigned char> result;
-    HINTERNET hNet = InternetOpenW(L"MusicSorterApp/1.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    HINTERNET hNet = InternetOpenW(L"MusicSorter/2.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hNet) return "";
 
     HINTERNET hConnect = InternetConnectW(hNet, L"api.acoustid.org", INTERNET_DEFAULT_HTTPS_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
