@@ -4101,19 +4101,65 @@ void AppWindow::RunMessageLoop() {
 
                 // 2. НИЖНИЙ БЛОК: ПРЕДЛАГАЕМЫЕ ТЕГИ
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
-                ImGui::PushItemWidth(180);
+
+                ImGui::PushItemWidth(140);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
+                ImGui::PopItemWidth();
+                ImGui::SameLine();
+                if (ImGui::SmallButton(">> Альбом##ApplyArtist")) {
+                    auto albIndices = GetAlbumTrackIndices(m_currentTagIndex);
+                    for (size_t aIdx : albIndices) {
+                        if (aIdx < m_tagItems.size()) {
+                            strncpy_s(m_tagItems[aIdx].artistBuf, item.artistBuf, sizeof(m_tagItems[aIdx].artistBuf) - 1);
+                        }
+                    }
+                    LOG_INFO("[TAG SYNC] Applied artist '" + std::string(item.artistBuf) + "' to " + std::to_string(albIndices.size()) + " tracks in album.");
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Скопировать этого исполнителя во все треки текущего альбома");
+                }
+
+                ImGui::PushItemWidth(140);
                 ImGui::InputText("Альбом##New", item.albumBuf, sizeof(item.albumBuf));
+                ImGui::PopItemWidth();
+                ImGui::SameLine();
+                if (ImGui::SmallButton(">> Альбом##ApplyAlbum")) {
+                    auto albIndices = GetAlbumTrackIndices(m_currentTagIndex);
+                    for (size_t aIdx : albIndices) {
+                        if (aIdx < m_tagItems.size()) {
+                            strncpy_s(m_tagItems[aIdx].albumBuf, item.albumBuf, sizeof(m_tagItems[aIdx].albumBuf) - 1);
+                        }
+                    }
+                    LOG_INFO("[TAG SYNC] Applied album title '" + std::string(item.albumBuf) + "' to " + std::to_string(albIndices.size()) + " tracks in album.");
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Скопировать название альбома во все треки текущего альбома");
+                }
+
+                ImGui::PushItemWidth(180);
                 ImGui::InputText("Название##New", item.titleBuf, sizeof(item.titleBuf));
                 ImGui::PopItemWidth();
 
-                ImGui::PushItemWidth(60);
+                ImGui::PushItemWidth(50);
                 ImGui::InputText("№##New", item.trackNoBuf, sizeof(item.trackNoBuf));
+                ImGui::PopItemWidth();
                 ImGui::SameLine();
-                ImGui::PushItemWidth(90);
-                ImGui::InputText("Год/Дата##New", item.yearBuf, sizeof(item.yearBuf));
+                ImGui::PushItemWidth(70);
+                ImGui::InputText("Год##New", item.yearBuf, sizeof(item.yearBuf));
                 ImGui::PopItemWidth();
-                ImGui::PopItemWidth();
+                ImGui::SameLine();
+                if (ImGui::SmallButton(">> Альбом##ApplyYear")) {
+                    auto albIndices = GetAlbumTrackIndices(m_currentTagIndex);
+                    for (size_t aIdx : albIndices) {
+                        if (aIdx < m_tagItems.size()) {
+                            strncpy_s(m_tagItems[aIdx].yearBuf, item.yearBuf, sizeof(m_tagItems[aIdx].yearBuf) - 1);
+                        }
+                    }
+                    LOG_INFO("[TAG SYNC] Applied year '" + std::string(item.yearBuf) + "' to " + std::to_string(albIndices.size()) + " tracks in album.");
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Скопировать год/дату во все треки текущего альбома");
+                }
 
                 ImGui::EndGroup();
 
