@@ -7,6 +7,10 @@ Desktop application for acoustic analysis, duplicate detection, and music collec
 ### Metadata & Lyrics Fetch Services
 - [x] **TouhouDB / VocaDB API** (`https://touhoudb.com/api`, `https://vocadb.net/api`)
   - REST API (JSON), tracks, durations in seconds, artists, original high-res covers
+- [ ] **TouhouDB / VocaDB Lyrics Fallback**
+  - Unsynced lyrics (original Japanese, Romaji, English translation) as fallback when synced LRC is not found in LRCLIB
+- [ ] **TouhouDB / VocaDB Language Preference & Romaji Fallback**
+  - Romaji track, album, and artist title support (`lang=Romaji`) with fallback chain: Romaji -> English -> Japanese
 - [ ] **THBWiki API** (`https://thwiki.cc/api.php`)
   - MediaWiki API, wikitext templates `{{同人专辑信息}}` and `{{同人曲目信息}}`, staff and original ZUN themes
 - [ ] **Genius API** (`https://genius.com/api`, `https://api.genius.com`)
