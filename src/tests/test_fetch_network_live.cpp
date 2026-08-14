@@ -1,6 +1,7 @@
 #include "TestFramework.hpp"
 #include "../include/FetchServices.hpp"
 #include "../include/MetadataUtils.hpp"
+#include <fstream>
 
 TEST_CASE("Live Network Fetch", "Live LRCLIB Lyrics Fetch") {
     std::string lyrics = FetchServices::FetchLrcLibSyncedLyrics("nomico", "Bad Apple!!", "Lovelight");
@@ -68,3 +69,34 @@ TEST_CASE("Live Network Fetch", "Live Cover Art Archive Download") {
     ASSERT_GE(bytes.size(), 1000); // Image file should be at least a few KB
     std::cout << "      -> Cover Art Archive downloaded " << bytes.size() << " bytes of image data\n";
 }
+
+TEST_CASE("Live Network Fetch", "Live Discogs Search and Details Fetch") {
+    std::string token;
+    std::ifstream in("folders.cfg");
+    if (in.is_open()) {
+        std::string line;
+        while (std::getline(in, line)) {
+            size_t eq = line.find('=');
+            if (eq != std::string::npos) {
+                std::string k = line.substr(0, eq);
+                std::string v = line.substr(eq + 1);
+                if (k == "discogs_token") {
+                    token = v;
+                    break;
+                }
+            }
+        }
+    }
+
+    DiscogsReleaseInfo info;
+    bool ok = FetchServices::SearchDiscogsRelease("Daft Punk", "Discovery", info, token);
+    ASSERT_TRUE(ok);
+    ASSERT_FALSE(info.id.empty());
+    ASSERT_STR_EQ(info.title, "Discovery");
+    ASSERT_FALSE(info.tracks.empty());
+    std::cout << "      -> Discogs matched ID " << info.id << " (" << info.title << "), " 
+              << info.tracks.size() << " tracks, Year: " << info.year 
+              << ", Token: " << (!token.empty() ? "Present in folders.cfg" : "Anonymous") << "\n";
+}
+
+
