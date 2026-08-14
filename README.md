@@ -24,8 +24,6 @@ Desktop application for acoustic analysis, duplicate detection, and music collec
   - Discogs: 60 запросов в минуту с персональным токеном (25 запросов в минуту без токена)
   - AcoustID: лимиты на частоту вызовов /v2/lookup
   - TouhouDB / VocaDB / UtaiteDB: допустимая частота пакетных поисковых запросов
-  - CoverArtArchive: допустимая нагрузка при загрузке полноразмерных обложек
 
 ### Albums to Download
 - [ ] **Diabolic Phantasma - Daydream In the Dead of Night** (DBPS-001)
-
