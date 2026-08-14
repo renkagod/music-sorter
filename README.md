@@ -17,14 +17,6 @@ Desktop application for acoustic analysis, duplicate detection, and music collec
   - Track lyrics, track/album artwork
 - [ ] **RateYourMusic / Sonemic API** (`https://rateyourmusic.com/data-access/register-interest/`)
   - Upcoming official Sonemic API and datasets (pending API access)
-### Rate Limits / Проверка ограничений частоты запросов
-- [ ] Проверить и протестировать соблюдение рейт-лимитов для всех внешних сервисов:
-  - MusicBrainz: базовый лимит 1 запрос в секунду на IP
-  - Discogs: 60 запросов в минуту с персональным токеном (25 запросов в минуту без токена)
-  - AcoustID: лимиты на частоту вызовов /v2/lookup
-  - LRCLIB: нагрузка при параллельных запросах текстов песен
-  - TouhouDB / VocaDB / UtaiteDB: допустимая частота пакетных поисковых запросов
-  - CoverArtArchive: допустимая нагрузка при загрузке полноразмерных обложек
 
 ### Albums to Download
 - [ ] **Diabolic Phantasma - Daydream In the Dead of Night** (DBPS-001)
