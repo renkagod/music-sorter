@@ -244,7 +244,13 @@ static void LoadFolderSettings() {
 struct MBTrackEntry {
     int position = 0;
     std::string title;
+    std::string titleRomaji;
+    std::string titleEnglish;
+    std::string titleJapanese;
     std::string artist;
+    std::string artistRomaji;
+    std::string artistEnglish;
+    std::string artistJapanese;
     int lengthMs = 0;
 };
 
@@ -254,10 +260,50 @@ struct AlbumMetadataCache {
     std::vector<unsigned char> coverBytes;
     std::string coverSource;
     std::vector<MBTrackEntry> tracks;
+    std::string albumRomaji;
+    std::string albumEnglish;
+    std::string albumJapanese;
+    std::string artistRomaji;
+    std::string artistEnglish;
+    std::string artistJapanese;
     bool isMatched = false;
     bool isFetched = false;
     MatchTier matchTier = MatchTier::Niche_Local;
 };
+
+static std::string PickBestName(const std::string& romaji, const std::string& english, const std::string& japanese, const std::string& def) {
+    if (!romaji.empty()) return romaji;
+    if (!english.empty()) return english;
+    if (!japanese.empty()) return japanese;
+    return def;
+}
+
+static bool ContainsCJK(const std::string& str) {
+    for (size_t i = 0; i < str.length(); ) {
+        unsigned char c = (unsigned char)str[i];
+        if (c < 0x80) {
+            i++;
+        } else if ((c & 0xE0) == 0xC0) {
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 < str.length()) {
+                unsigned char c2 = (unsigned char)str[i+1];
+                unsigned char c3 = (unsigned char)str[i+2];
+                uint32_t cp = ((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+                // Hiragana: 0x3040-0x309F, Katakana: 0x30A0-0x30FF, CJK: 0x4E00-0x9FFF, CJK Ext A: 0x3400-0x4DBF
+                if ((cp >= 0x3040 && cp <= 0x30FF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF)) {
+                    return true;
+                }
+            }
+            i += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            i += 4;
+        } else {
+            i++;
+        }
+    }
+    return false;
+}
 
 static const char* GetTierName(MatchTier tier) {
     switch (tier) {
@@ -1257,7 +1303,7 @@ static std::vector<MBTrackEntry> FetchMusicBrainzReleaseTracks(const std::string
                     }
                 }
                 if (pos > 0 && !title.empty()) {
-                    out.push_back({ pos, title, artist, lengthMs });
+                    out.push_back({ pos, title, "", "", "", artist, "", "", "", lengthMs });
                 }
             }
         }
@@ -1395,13 +1441,22 @@ static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEnt
         sprintf_s(trackStr, sizeof(trackStr), "%02d", bestMatch->position);
         strncpy_s(albItem.trackNoBuf, trackStr, sizeof(albItem.trackNoBuf) - 1);
 
-        if (!bestMatch->title.empty()) {
-            strncpy_s(albItem.titleBuf, bestMatch->title.c_str(), sizeof(albItem.titleBuf) - 1);
+        albItem.titleRomaji = bestMatch->titleRomaji;
+        albItem.titleEnglish = bestMatch->titleEnglish;
+        albItem.titleJapanese = bestMatch->titleJapanese;
+        if (!bestMatch->artistRomaji.empty()) albItem.artistRomaji = bestMatch->artistRomaji;
+        if (!bestMatch->artistEnglish.empty()) albItem.artistEnglish = bestMatch->artistEnglish;
+        if (!bestMatch->artistJapanese.empty()) albItem.artistJapanese = bestMatch->artistJapanese;
+
+        std::string chosenTitle = PickBestName(bestMatch->titleRomaji, bestMatch->titleEnglish, bestMatch->titleJapanese, bestMatch->title);
+        if (!chosenTitle.empty()) {
+            strncpy_s(albItem.titleBuf, chosenTitle.c_str(), sizeof(albItem.titleBuf) - 1);
         }
-        if (!bestMatch->artist.empty() && bestMatch->artist != "Various Artists" && bestMatch->artist != "V.A.") {
-            strncpy_s(albItem.artistBuf, bestMatch->artist.c_str(), sizeof(albItem.artistBuf) - 1);
+        std::string chosenArtist = PickBestName(bestMatch->artistRomaji, bestMatch->artistEnglish, bestMatch->artistJapanese, bestMatch->artist);
+        if (!chosenArtist.empty() && chosenArtist != "Various Artists" && chosenArtist != "V.A.") {
+            strncpy_s(albItem.artistBuf, chosenArtist.c_str(), sizeof(albItem.artistBuf) - 1);
         }
-        LOG_INFO("[MUSICBRAINZ TRACK MATCHED] Track #" + std::string(trackStr) + ": " + std::string(albItem.artistBuf) + " - " + std::string(albItem.titleBuf) + " for file: " + albItem.originalFilename);
+        LOG_INFO("[TRACK MATCHED] Track #" + std::string(trackStr) + ": " + std::string(albItem.artistBuf) + " - " + std::string(albItem.titleBuf) + " for file: " + albItem.originalFilename);
     }
 }
 
@@ -1554,7 +1609,7 @@ static bool FetchDiscogsReleaseDetails(const std::string& releaseId, bool isMast
             }
 
             if (!trkTitle.empty()) {
-                outInfo.tracks.push_back({ pos, trkTitle, trkArtist, durMs });
+                outInfo.tracks.push_back({ pos, trkTitle, "", "", "", trkArtist, "", "", "", durMs });
             }
             trackPosCounter++;
         }
@@ -1681,9 +1736,15 @@ static bool SearchDiscogsRelease(const std::string& artist, const std::string& a
 
 struct VdbReleaseInfo {
     int id = 0;
-    std::string service; // "TouhouDB" or "VocaDB"
+    std::string service; // "TouhouDB", "VocaDB", or "UtaiteDB"
     std::string title;
+    std::string titleRomaji;
+    std::string titleEnglish;
+    std::string titleJapanese;
     std::string artist;
+    std::string artistRomaji;
+    std::string artistEnglish;
+    std::string artistJapanese;
     std::string catalogNumber;
     std::string releaseDate;
     std::string coverUrl;
@@ -1691,7 +1752,7 @@ struct VdbReleaseInfo {
 };
 
 static bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& service, int albumId, VdbReleaseInfo& outInfo) {
-    std::string endpoint = baseUrl + "/api/albums/" + std::to_string(albumId) + "?fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics";
+    std::string endpoint = baseUrl + "/api/albums/" + std::to_string(albumId) + "?lang=Romaji&fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics,Names";
     std::string jsonStr = HttpGetString(Utf8ToWide(endpoint));
     if (jsonStr.empty()) return false;
 
@@ -1701,9 +1762,25 @@ static bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& 
 
     outInfo.id = albumId;
     outInfo.service = service;
-    outInfo.title = doc.get("name").strVal;
-    if (outInfo.title.empty()) outInfo.title = doc.get("defaultName").strVal;
     outInfo.catalogNumber = doc.get("catalogNumber").strVal;
+
+    // Album Names (Romaji / English / Japanese)
+    const auto& names = doc.get("names");
+    if (names.type == JsonVal::Array) {
+        for (size_t n = 0; n < names.arrVal.size(); ++n) {
+            const auto& nObj = names.get(n);
+            std::string lang = nObj.get("language").strVal;
+            std::string val = nObj.get("value").strVal;
+            if (lang == "Romaji" && outInfo.titleRomaji.empty()) outInfo.titleRomaji = val;
+            else if (lang == "English" && outInfo.titleEnglish.empty()) outInfo.titleEnglish = val;
+            else if (lang == "Japanese" && outInfo.titleJapanese.empty()) outInfo.titleJapanese = val;
+        }
+    }
+    std::string rawName = doc.get("name").strVal;
+    if (rawName.empty()) rawName = doc.get("defaultName").strVal;
+    if (outInfo.titleRomaji.empty()) outInfo.titleRomaji = rawName;
+    if (outInfo.titleJapanese.empty()) outInfo.titleJapanese = doc.get("defaultName").strVal;
+    outInfo.title = PickBestName(outInfo.titleRomaji, outInfo.titleEnglish, outInfo.titleJapanese, rawName);
 
     // Release Date
     const auto& rd = doc.get("releaseDate");
@@ -1720,7 +1797,7 @@ static bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& 
         }
     }
 
-    // Artist / Circle determination
+    // Artist / Circle determination & multi-language
     std::string circleName;
     std::string producerName;
     const auto& artists = doc.get("artists");
@@ -1732,6 +1809,18 @@ static bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& 
             std::string name = aObj.get("name").strVal;
             if (name.empty()) name = aObj.get("artist").get("name").strVal;
 
+            const auto& aNames = aObj.get("artist").get("names");
+            if (aNames.type == JsonVal::Array) {
+                for (size_t n = 0; n < aNames.arrVal.size(); ++n) {
+                    const auto& nObj = aNames.get(n);
+                    std::string lang = nObj.get("language").strVal;
+                    std::string val = nObj.get("value").strVal;
+                    if (lang == "Romaji" && outInfo.artistRomaji.empty()) outInfo.artistRomaji = val;
+                    else if (lang == "English" && outInfo.artistEnglish.empty()) outInfo.artistEnglish = val;
+                    else if (lang == "Japanese" && outInfo.artistJapanese.empty()) outInfo.artistJapanese = val;
+                }
+            }
+
             if (cat.find("Circle") != std::string::npos || roles.find("Circle") != std::string::npos || 
                 aObj.get("artist").get("artistType").strVal == "Circle") {
                 if (circleName.empty()) circleName = name;
@@ -1741,18 +1830,19 @@ static bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& 
         }
     }
 
-    if (!circleName.empty()) {
-        outInfo.artist = circleName;
-    } else {
-        std::string artStr = doc.get("artistString").strVal;
+    std::string artStr = doc.get("artistString").strVal;
+    std::string rawArtist = circleName;
+    if (rawArtist.empty()) {
         if (!artStr.empty() && artStr != "Various artists" && artStr != "Various Artists" && artStr != "V.A.") {
-            outInfo.artist = artStr;
+            rawArtist = artStr;
         } else if (!producerName.empty()) {
-            outInfo.artist = producerName;
+            rawArtist = producerName;
         } else if (!artStr.empty()) {
-            outInfo.artist = artStr;
+            rawArtist = artStr;
         }
     }
+    if (outInfo.artistRomaji.empty()) outInfo.artistRomaji = rawArtist;
+    outInfo.artist = PickBestName(outInfo.artistRomaji, outInfo.artistEnglish, outInfo.artistJapanese, rawArtist);
 
     // Cover Art
     const auto& mp = doc.get("mainPicture");
@@ -1762,7 +1852,7 @@ static bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& 
         if (outInfo.coverUrl.empty()) outInfo.coverUrl = mp.get("urlSmallThumb").strVal;
     }
 
-    // Tracklist
+    // Tracklist with multi-language
     const auto& trks = doc.get("tracks");
     if (trks.type == JsonVal::Array) {
         for (size_t t = 0; t < trks.arrVal.size(); ++t) {
@@ -1776,6 +1866,24 @@ static bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& 
                 tTitle = song.get("name").strVal;
             }
 
+            std::string tRomaji, tEnglish, tJapanese;
+            if (song.type == JsonVal::Object) {
+                const auto& songNames = song.get("names");
+                if (songNames.type == JsonVal::Array) {
+                    for (size_t n = 0; n < songNames.arrVal.size(); ++n) {
+                        const auto& nObj = songNames.get(n);
+                        std::string lang = nObj.get("language").strVal;
+                        std::string val = nObj.get("value").strVal;
+                        if (lang == "Romaji" && tRomaji.empty()) tRomaji = val;
+                        else if (lang == "English" && tEnglish.empty()) tEnglish = val;
+                        else if (lang == "Japanese" && tJapanese.empty()) tJapanese = val;
+                    }
+                }
+                if (tJapanese.empty()) tJapanese = song.get("defaultName").strVal;
+            }
+            if (tRomaji.empty()) tRomaji = tTitle;
+            std::string bestTrackTitle = PickBestName(tRomaji, tEnglish, tJapanese, tTitle);
+
             int durMs = 0;
             std::string tArtist = outInfo.artist;
             if (song.type == JsonVal::Object) {
@@ -1785,8 +1893,8 @@ static bool FetchVdbAlbumDetails(const std::string& baseUrl, const std::string& 
                 if (!sArt.empty()) tArtist = sArt;
             }
 
-            if (!tTitle.empty()) {
-                outInfo.tracks.push_back({ pos, tTitle, tArtist, durMs });
+            if (!bestTrackTitle.empty()) {
+                outInfo.tracks.push_back({ pos, bestTrackTitle, tRomaji, tEnglish, tJapanese, tArtist, outInfo.artistRomaji, outInfo.artistEnglish, outInfo.artistJapanese, durMs });
             }
         }
     }
@@ -1799,7 +1907,7 @@ static bool SearchVdbRelease(const std::string& baseUrl, const std::string& serv
 
     auto executeQuery = [&](const std::string& q) -> std::string {
         if (q.empty()) return "";
-        std::string url = baseUrl + "/api/albums?query=" + UrlEncode(q) + "&fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics&maxResults=5";
+        std::string url = baseUrl + "/api/albums?query=" + UrlEncode(q) + "&lang=Romaji&fields=Tracks,MainPicture,Artists,Names,Identifiers&songFields=Lyrics,Names&maxResults=5";
         return HttpGetString(Utf8ToWide(url));
     };
 
@@ -3526,6 +3634,13 @@ void AppWindow::FetchManualTouhouDbMetadata(const std::string& inputUrl, bool ap
 
         for (size_t idx : targetIndices) {
             auto& item = m_tagItems[idx];
+            item.albumRomaji = info.titleRomaji;
+            item.albumEnglish = info.titleEnglish;
+            item.albumJapanese = info.titleJapanese;
+            item.artistRomaji = info.artistRomaji;
+            item.artistEnglish = info.artistEnglish;
+            item.artistJapanese = info.artistJapanese;
+
             if (!info.artist.empty()) {
                 strncpy_s(item.artistBuf, info.artist.c_str(), sizeof(item.artistBuf) - 1);
             }
@@ -3616,6 +3731,13 @@ void AppWindow::FetchManualVocaDbMetadata(const std::string& inputUrl, bool appl
 
         for (size_t idx : targetIndices) {
             auto& item = m_tagItems[idx];
+            item.albumRomaji = info.titleRomaji;
+            item.albumEnglish = info.titleEnglish;
+            item.albumJapanese = info.titleJapanese;
+            item.artistRomaji = info.artistRomaji;
+            item.artistEnglish = info.artistEnglish;
+            item.artistJapanese = info.artistJapanese;
+
             if (!info.artist.empty()) {
                 strncpy_s(item.artistBuf, info.artist.c_str(), sizeof(item.artistBuf) - 1);
             }
@@ -3706,6 +3828,12 @@ void AppWindow::FetchManualUtaiteDbMetadata(const std::string& inputUrl, bool ap
 
         for (size_t idx : targetIndices) {
             auto& item = m_tagItems[idx];
+            item.albumRomaji = info.titleRomaji;
+            item.albumEnglish = info.titleEnglish;
+            item.albumJapanese = info.titleJapanese;
+            item.artistRomaji = info.artistRomaji;
+            item.artistEnglish = info.artistEnglish;
+            item.artistJapanese = info.artistJapanese;
             if (!info.artist.empty()) {
                 strncpy_s(item.artistBuf, info.artist.c_str(), sizeof(item.artistBuf) - 1);
             }
@@ -4211,6 +4339,57 @@ void AppWindow::RunMessageLoop() {
 
                 // 2. НИЖНИЙ БЛОК: ПРЕДЛАГАЕМЫЕ ТЕГИ
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
+                ImGui::SameLine();
+
+                // Language Switcher Buttons: [RO] [EN] [JP]
+                auto langAlbIndices = GetAlbumTrackIndices(m_currentTagIndex);
+                auto switchLang = [&](const std::string& langCode) {
+                    for (size_t aIdx : langAlbIndices) {
+                        if (aIdx < m_tagItems.size()) {
+                            auto& itm = m_tagItems[aIdx];
+                            if (langCode == "RO") {
+                                std::string a = itm.artistRomaji.empty() ? itm.artistEnglish : itm.artistRomaji;
+                                if (!a.empty()) strncpy_s(itm.artistBuf, a.c_str(), sizeof(itm.artistBuf) - 1);
+                                std::string alb = itm.albumRomaji.empty() ? itm.albumEnglish : itm.albumRomaji;
+                                if (!alb.empty()) strncpy_s(itm.albumBuf, alb.c_str(), sizeof(itm.albumBuf) - 1);
+                                std::string t = itm.titleRomaji.empty() ? itm.titleEnglish : itm.titleRomaji;
+                                if (!t.empty()) strncpy_s(itm.titleBuf, t.c_str(), sizeof(itm.titleBuf) - 1);
+                            } else if (langCode == "EN") {
+                                std::string a = itm.artistEnglish.empty() ? itm.artistRomaji : itm.artistEnglish;
+                                if (!a.empty()) strncpy_s(itm.artistBuf, a.c_str(), sizeof(itm.artistBuf) - 1);
+                                std::string alb = itm.albumEnglish.empty() ? itm.albumRomaji : itm.albumEnglish;
+                                if (!alb.empty()) strncpy_s(itm.albumBuf, alb.c_str(), sizeof(itm.albumBuf) - 1);
+                                std::string t = itm.titleEnglish.empty() ? itm.titleRomaji : itm.titleEnglish;
+                                if (!t.empty()) strncpy_s(itm.titleBuf, t.c_str(), sizeof(itm.titleBuf) - 1);
+                            } else if (langCode == "JP") {
+                                std::string a = itm.artistJapanese.empty() ? itm.artistRomaji : itm.artistJapanese;
+                                if (!a.empty()) strncpy_s(itm.artistBuf, a.c_str(), sizeof(itm.artistBuf) - 1);
+                                std::string alb = itm.albumJapanese.empty() ? itm.albumRomaji : itm.albumJapanese;
+                                if (!alb.empty()) strncpy_s(itm.albumBuf, alb.c_str(), sizeof(itm.albumBuf) - 1);
+                                std::string t = itm.titleJapanese.empty() ? itm.titleRomaji : itm.titleJapanese;
+                                if (!t.empty()) strncpy_s(itm.titleBuf, t.c_str(), sizeof(itm.titleBuf) - 1);
+                            }
+                        }
+                    }
+                    LOG_INFO("[LANG SWITCH] Switched tags to " + langCode + " for " + std::to_string(langAlbIndices.size()) + " tracks in album.");
+                };
+
+                if (ImGui::SmallButton("RO##LangRO")) {
+                    switchLang("RO");
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Переключить весь альбом на Ромадзи (Romaji)");
+
+                ImGui::SameLine();
+                if (ImGui::SmallButton("EN##LangEN")) {
+                    switchLang("EN");
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Переключить весь альбом на Английский (English)");
+
+                ImGui::SameLine();
+                if (ImGui::SmallButton("JP##LangJP")) {
+                    switchLang("JP");
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Переключить весь альбом на Японский / Оригинал (日本語)");
 
                 ImGui::PushItemWidth(140);
                 ImGui::InputText("Исполнитель##New", item.artistBuf, sizeof(item.artistBuf));
@@ -4983,6 +5162,18 @@ void AppWindow::StartTagScan() {
                             item.onlineCoverSource = c.coverSource;
                             item.matchTier = c.matchTier;
                             item.releaseGroupMbId = c.releaseGroupMbId;
+                            item.albumRomaji = c.albumRomaji;
+                            item.albumEnglish = c.albumEnglish;
+                            item.albumJapanese = c.albumJapanese;
+                            item.artistRomaji = c.artistRomaji;
+                            item.artistEnglish = c.artistEnglish;
+                            item.artistJapanese = c.artistJapanese;
+
+                            std::string bestAlb = PickBestName(c.albumRomaji, c.albumEnglish, c.albumJapanese, "");
+                            if (!bestAlb.empty()) strncpy_s(item.albumBuf, bestAlb.c_str(), sizeof(item.albumBuf) - 1);
+                            std::string bestArt = PickBestName(c.artistRomaji, c.artistEnglish, c.artistJapanese, "");
+                            if (!bestArt.empty()) strncpy_s(item.artistBuf, bestArt.c_str(), sizeof(item.artistBuf) - 1);
+
                             if (!c.firstReleaseDate.empty()) {
                                 strncpy_s(item.yearBuf, c.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
                             }
@@ -5378,6 +5569,13 @@ void AppWindow::StartTagScan() {
                                         aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
                                     }
                                     if (aKey == albumKey) {
+                                        m_tagItems[k].albumRomaji = touhouInfo.titleRomaji;
+                                        m_tagItems[k].albumEnglish = touhouInfo.titleEnglish;
+                                        m_tagItems[k].albumJapanese = touhouInfo.titleJapanese;
+                                        m_tagItems[k].artistRomaji = touhouInfo.artistRomaji;
+                                        m_tagItems[k].artistEnglish = touhouInfo.artistEnglish;
+                                        m_tagItems[k].artistJapanese = touhouInfo.artistJapanese;
+
                                         if (!touhouInfo.artist.empty()) {
                                             strncpy_s(m_tagItems[k].artistBuf, touhouInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
                                         }
@@ -5400,9 +5598,9 @@ void AppWindow::StartTagScan() {
                                     }
                                 }
 
-                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, touhouInfo.tracks, isMatched, true, detectedTier };
+                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, touhouInfo.tracks, touhouInfo.titleRomaji, touhouInfo.titleEnglish, touhouInfo.titleJapanese, touhouInfo.artistRomaji, touhouInfo.artistEnglish, touhouInfo.artistJapanese, isMatched, true, detectedTier };
                                 if (!releaseGroupMbId.empty()) {
-                                    albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, touhouInfo.tracks, isMatched, true, detectedTier };
+                                    albumCache[releaseGroupMbId] = albumCache[albumKey];
                                 }
                             }
 
@@ -5431,6 +5629,13 @@ void AppWindow::StartTagScan() {
                                             aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
                                         }
                                         if (aKey == albumKey) {
+                                            m_tagItems[k].albumRomaji = vocaInfo.titleRomaji;
+                                            m_tagItems[k].albumEnglish = vocaInfo.titleEnglish;
+                                            m_tagItems[k].albumJapanese = vocaInfo.titleJapanese;
+                                            m_tagItems[k].artistRomaji = vocaInfo.artistRomaji;
+                                            m_tagItems[k].artistEnglish = vocaInfo.artistEnglish;
+                                            m_tagItems[k].artistJapanese = vocaInfo.artistJapanese;
+
                                             if (!vocaInfo.artist.empty()) {
                                                 strncpy_s(m_tagItems[k].artistBuf, vocaInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
                                             }
@@ -5453,9 +5658,9 @@ void AppWindow::StartTagScan() {
                                         }
                                     }
 
-                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, vocaInfo.tracks, isMatched, true, detectedTier };
+                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, vocaInfo.tracks, vocaInfo.titleRomaji, vocaInfo.titleEnglish, vocaInfo.titleJapanese, vocaInfo.artistRomaji, vocaInfo.artistEnglish, vocaInfo.artistJapanese, isMatched, true, detectedTier };
                                     if (!releaseGroupMbId.empty()) {
-                                        albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, vocaInfo.tracks, isMatched, true, detectedTier };
+                                        albumCache[releaseGroupMbId] = albumCache[albumKey];
                                     }
                                 }
                             }
@@ -5485,6 +5690,13 @@ void AppWindow::StartTagScan() {
                                             aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
                                         }
                                         if (aKey == albumKey) {
+                                            m_tagItems[k].albumRomaji = utaiteInfo.titleRomaji;
+                                            m_tagItems[k].albumEnglish = utaiteInfo.titleEnglish;
+                                            m_tagItems[k].albumJapanese = utaiteInfo.titleJapanese;
+                                            m_tagItems[k].artistRomaji = utaiteInfo.artistRomaji;
+                                            m_tagItems[k].artistEnglish = utaiteInfo.artistEnglish;
+                                            m_tagItems[k].artistJapanese = utaiteInfo.artistJapanese;
+
                                             if (!utaiteInfo.artist.empty()) {
                                                 strncpy_s(m_tagItems[k].artistBuf, utaiteInfo.artist.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
                                             }
@@ -5507,9 +5719,9 @@ void AppWindow::StartTagScan() {
                                         }
                                     }
 
-                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, utaiteInfo.tracks, isMatched, true, detectedTier };
+                                    albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, utaiteInfo.tracks, utaiteInfo.titleRomaji, utaiteInfo.titleEnglish, utaiteInfo.titleJapanese, utaiteInfo.artistRomaji, utaiteInfo.artistEnglish, utaiteInfo.artistJapanese, isMatched, true, detectedTier };
                                     if (!releaseGroupMbId.empty()) {
-                                        albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, utaiteInfo.tracks, isMatched, true, detectedTier };
+                                        albumCache[releaseGroupMbId] = albumCache[albumKey];
                                     }
                                 }
                             }
@@ -5573,9 +5785,9 @@ void AppWindow::StartTagScan() {
                                     }
                                 }
 
-                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, discInfo.tracks, isMatched, true, detectedTier };
+                                albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, discInfo.tracks, "", "", "", "", "", "", isMatched, true, detectedTier };
                                 if (!releaseGroupMbId.empty()) {
-                                    albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, discInfo.tracks, isMatched, true, detectedTier };
+                                    albumCache[releaseGroupMbId] = albumCache[albumKey];
                                 }
                             }
                         }
@@ -5623,6 +5835,32 @@ void AppWindow::StartTagScan() {
                             if (!mbTracks.empty()) {
                                 LOG_INFO("[MUSICBRAINZ TRACKLIST] Loaded " + std::to_string(mbTracks.size()) + " tracks from MusicBrainz release.");
                             }
+
+                            // Romaji Enrichment: check if CJK characters or catalog numbers exist, and fetch Romaji from TouhouDB / VocaDB / UtaiteDB
+                            std::string mbRomajiAlb, mbEnglishAlb, mbJapaneseAlb;
+                            std::string mbRomajiArt, mbEnglishArt, mbJapaneseArt;
+                            std::vector<MBTrackEntry> enrichedVdbTracks;
+
+                            if (ContainsCJK(artistClean) || ContainsCJK(albumClean) || !catalogNo.empty()) {
+                                LOG_INFO("[ROMAJI ENRICHMENT] Detected Japanese/CJK text or catalog number in MusicBrainz match. Checking VDB for Romaji variants...");
+                                VdbReleaseInfo vdbEnrich;
+                                if (SearchVdbRelease("https://touhoudb.com", "TouhouDB", artistClean, albumClean, catalogNo, vdbEnrich) ||
+                                    SearchVdbRelease("https://vocadb.net", "VocaDB", artistClean, albumClean, catalogNo, vdbEnrich) ||
+                                    SearchVdbRelease("https://utaitedb.net", "UtaiteDB", artistClean, albumClean, catalogNo, vdbEnrich)) {
+                                    
+                                    LOG_INFO("[ROMAJI ENRICHMENT SUCCESS] Found Romaji in " + vdbEnrich.service + ": " + vdbEnrich.artistRomaji + " - " + vdbEnrich.titleRomaji);
+                                    mbRomajiAlb = vdbEnrich.titleRomaji;
+                                    mbEnglishAlb = vdbEnrich.titleEnglish;
+                                    mbJapaneseAlb = vdbEnrich.titleJapanese;
+                                    mbRomajiArt = vdbEnrich.artistRomaji;
+                                    mbEnglishArt = vdbEnrich.artistEnglish;
+                                    mbJapaneseArt = vdbEnrich.artistJapanese;
+                                    enrichedVdbTracks = vdbEnrich.tracks;
+                                }
+                            }
+
+                            std::string mbChosenAlb = PickBestName(mbRomajiAlb, mbEnglishAlb, mbJapaneseAlb, "");
+                            std::string mbChosenArt = PickBestName(mbRomajiArt, mbEnglishArt, mbJapaneseArt, "");
                             
                             // Apply track match for current item and all items matching albumKey or MBID
                             for (size_t k = 0; k < files.size(); ++k) {
@@ -5631,7 +5869,26 @@ void AppWindow::StartTagScan() {
                                     aKey = NormalizeKey(fs::path(files[k]).parent_path().string());
                                 }
                                 if (aKey == albumKey) {
-                                    ApplyTrackMatch(m_tagItems[k], mbTracks);
+                                    m_tagItems[k].albumRomaji = mbRomajiAlb;
+                                    m_tagItems[k].albumEnglish = mbEnglishAlb;
+                                    m_tagItems[k].albumJapanese = mbJapaneseAlb;
+                                    m_tagItems[k].artistRomaji = mbRomajiArt;
+                                    m_tagItems[k].artistEnglish = mbEnglishArt;
+                                    m_tagItems[k].artistJapanese = mbJapaneseArt;
+
+                                    if (!mbChosenAlb.empty()) {
+                                        strncpy_s(m_tagItems[k].albumBuf, mbChosenAlb.c_str(), sizeof(m_tagItems[k].albumBuf) - 1);
+                                    }
+                                    if (!mbChosenArt.empty()) {
+                                        strncpy_s(m_tagItems[k].artistBuf, mbChosenArt.c_str(), sizeof(m_tagItems[k].artistBuf) - 1);
+                                    }
+
+                                    if (!enrichedVdbTracks.empty()) {
+                                        ApplyTrackMatch(m_tagItems[k], enrichedVdbTracks);
+                                    } else {
+                                        ApplyTrackMatch(m_tagItems[k], mbTracks);
+                                    }
+
                                     if (!firstReleaseDate.empty()) {
                                         strncpy_s(m_tagItems[k].yearBuf, firstReleaseDate.c_str(), sizeof(m_tagItems[k].yearBuf) - 1);
                                     }
@@ -5645,14 +5902,15 @@ void AppWindow::StartTagScan() {
                                 }
                             }
                             
-                            albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, mbTracks, isMatched, true, detectedTier };
+                            const auto& cacheTracks = !enrichedVdbTracks.empty() ? enrichedVdbTracks : mbTracks;
+                            albumCache[albumKey] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, cacheTracks, mbRomajiAlb, mbEnglishAlb, mbJapaneseAlb, mbRomajiArt, mbEnglishArt, mbJapaneseArt, isMatched, true, detectedTier };
                             if (!releaseGroupMbId.empty()) {
-                                albumCache[releaseGroupMbId] = { releaseGroupMbId, firstReleaseDate, coverData, coverSource, mbTracks, isMatched, true, detectedTier };
+                                albumCache[releaseGroupMbId] = albumCache[albumKey];
                             }
                         } else if (releaseGroupMbId.empty()) {
                             detectedTier = MatchTier::Niche_Local;
                             LOG_INFO("[NICHE TRACK] MusicBrainz, TouhouDB, VocaDB, UtaiteDB and Discogs records not found for " + artistClean + " - " + albumClean + ". Using Level 3 prefilled metadata.");
-                            albumCache[albumKey] = { "", "", {}, "", {}, false, true, MatchTier::Niche_Local };
+                            albumCache[albumKey] = { "", "", {}, "", {}, "", "", "", "", "", "", false, true, MatchTier::Niche_Local };
                         }
 
                         // 4. Fetch Synced Romanized LRC Lyrics via LrcLib REST API
