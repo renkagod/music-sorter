@@ -13,8 +13,6 @@ Desktop application for acoustic analysis, duplicate detection, and music collec
   - Romaji track, album, and artist title support (`lang=Romaji`) with fallback chain: Romaji -> English -> Japanese, interactive `[RO] [EN] [JP]` language switcher buttons
 - [x] **THBWiki API** (`https://thwiki.cc/album.php`)
   - Lightweight JSON album queries (`m=sa`, `m=ga`), tracklists, circle/staff info, original ZUN theme references (`ogmusic`), high-resolution cover art (up to 800px), and synced `.lrc` lyrics integration via `https://lyrics.thwiki.cc/`
-- [ ] **Genius API** (`https://genius.com/api`, `https://api.genius.com`)
-  - Track lyrics, track/album artwork
 - [ ] **RateYourMusic / Sonemic API** (`https://rateyourmusic.com/data-access/register-interest/`)
   - Upcoming official Sonemic API and datasets (pending API access)
 
