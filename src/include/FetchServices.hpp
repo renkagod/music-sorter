@@ -390,6 +390,10 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
                 DWORD bytesRead = 0;
                 while (InternetReadFile(hFile, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
                     result.insert(result.end(), buffer, buffer + bytesRead);
+                    if (result.size() > 30 * 1024 * 1024) {
+                        LOG_INFO("[HTTP WARN] Download exceeded 30 MB limit, truncating: " + narrowUrl);
+                        break;
+                    }
                 }
                 InternetCloseHandle(hFile);
                 

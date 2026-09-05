@@ -16,9 +16,10 @@ echo Building MusicSorterTests with MSVC 2022 and Ninja...
 
 if %ERRORLEVEL% EQU 0 (
     echo ==================================================
-    echo Running MusicSorterTests.exe...
+    echo Starting memory watchdog and running MusicSorterTests.exe...
     echo ==================================================
     cd ..
+    start /b powershell -NoProfile -Command "while ($true) { Start-Sleep -Seconds 5; $p = Get-Process MusicSorterTests -ErrorAction SilentlyContinue; if (!$p) { break }; if ($p.WorkingSet64 -gt 1500MB) { Write-Host '[WATCHDOG ALERT] MusicSorterTests exceeded 1.5GB RAM! Terminating immediately...'; Stop-Process -Id $p.Id -Force; break } }"
     .\MusicSorterTests.exe
 ) else (
     echo ERROR: Build failed.

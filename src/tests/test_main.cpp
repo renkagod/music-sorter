@@ -8,6 +8,7 @@
 #include <map>
 
 int main(int argc, char** argv) {
+    setvbuf(stdout, NULL, _IONBF, 0);
     std::cout << "=======================================================\n";
     std::cout << "  MusicSorter Fetch Services & API Test Suite (C++20)\n";
     std::cout << "=======================================================\n\n";
@@ -24,6 +25,8 @@ int main(int argc, char** argv) {
             currentSuite = t.suite;
             std::cout << "\n--- [SUITE: " << currentSuite << "] ---\n";
         }
+
+        std::cout << "  -> Starting: " << t.name << std::endl;
 
         TestFramework::g_ctx.assertionsRun = 0;
         TestFramework::g_ctx.assertionsFailed = 0;

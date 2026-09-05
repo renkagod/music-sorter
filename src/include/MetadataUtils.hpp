@@ -1138,15 +1138,32 @@ inline JsonVal ParseJsonSimple(const std::string& str, size_t& pos) {
         while (pos < str.size()) {
             skipWs();
             if (pos < str.size() && str[pos] == '}') { pos++; break; }
+            size_t keyStart = pos;
             JsonVal k = ParseJsonSimple(str, pos);
-            if (k.type != JsonVal::String) break;
+            if (k.type != JsonVal::String || pos <= keyStart) break;
             skipWs();
-            if (pos < str.size() && str[pos] == ':') pos++;
+            if (pos < str.size() && str[pos] == ':') {
+                pos++;
+            } else {
+                break;
+            }
+            size_t valStart = pos;
             JsonVal val = ParseJsonSimple(str, pos);
-            v.objVal[k.strVal] = val;
+            v.objVal[k.strVal] = std::move(val);
+            if (pos <= valStart) {
+                pos++;
+                break;
+            }
+            if (v.objVal.size() > 10000) break;
             skipWs();
-            if (pos < str.size() && str[pos] == ',') pos++;
-            else if (pos < str.size() && str[pos] == '}') { pos++; break; }
+            if (pos < str.size() && str[pos] == ',') {
+                pos++;
+            } else if (pos < str.size() && str[pos] == '}') {
+                pos++;
+                break;
+            } else {
+                break;
+            }
         }
         return v;
     }
@@ -1156,28 +1173,46 @@ inline JsonVal ParseJsonSimple(const std::string& str, size_t& pos) {
         while (pos < str.size()) {
             skipWs();
             if (pos < str.size() && str[pos] == ']') { pos++; break; }
+            size_t valStart = pos;
             JsonVal val = ParseJsonSimple(str, pos);
-            v.arrVal.push_back(val);
+            v.arrVal.push_back(std::move(val));
+            if (pos <= valStart) {
+                pos++;
+                break;
+            }
+            if (v.arrVal.size() > 10000) break;
             skipWs();
-            if (pos < str.size() && str[pos] == ',') pos++;
-            else if (pos < str.size() && str[pos] == ']') { pos++; break; }
+            if (pos < str.size() && str[pos] == ',') {
+                pos++;
+            } else if (pos < str.size() && str[pos] == ']') {
+                pos++;
+                break;
+            } else {
+                break;
+            }
         }
         return v;
     }
-    if (c == 't' || c == 'f') {
-        JsonVal v; v.type = JsonVal::Bool;
-        if (str.compare(pos, 4, "true") == 0) { v.boolVal = true; pos += 4; }
-        else if (str.compare(pos, 5, "false") == 0) { v.boolVal = false; pos += 5; }
-        return v;
+    if (c == 't') {
+        if (str.compare(pos, 4, "true") == 0) { pos += 4; JsonVal v; v.type = JsonVal::Bool; v.boolVal = true; return v; }
+        pos++;
+        return {};
+    }
+    if (c == 'f') {
+        if (str.compare(pos, 5, "false") == 0) { pos += 5; JsonVal v; v.type = JsonVal::Bool; v.boolVal = false; return v; }
+        pos++;
+        return {};
     }
     if (c == 'n') {
-        if (str.compare(pos, 4, "null") == 0) pos += 4;
+        if (str.compare(pos, 4, "null") == 0) { pos += 4; return {}; }
+        pos++;
         return {};
     }
     if ((c >= '0' && c <= '9') || c == '-') {
         size_t start = pos;
         if (c == '-') pos++;
         while (pos < str.size() && (std::isdigit((unsigned char)str[pos]) || str[pos] == '.' || str[pos] == 'e' || str[pos] == 'E' || str[pos] == '+' || str[pos] == '-')) pos++;
+        if (pos <= start) { pos++; return {}; }
         JsonVal v; v.type = JsonVal::Number;
         try { v.numVal = std::stod(str.substr(start, pos - start)); } catch (...) {}
         return v;
