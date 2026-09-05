@@ -268,6 +268,7 @@ inline std::string StripPathAndExtension(const std::string& filepath) {
     if (lastSlash != std::string::npos) {
         s = s.substr(lastSlash + 1);
     }
+    s = TrimWhitespace(s);
 
     size_t dot = s.rfind('.');
     if (dot != std::string::npos && dot > 0) {
@@ -321,6 +322,14 @@ inline std::string NormalizeDelimiters(const std::string& input) {
             i++;
         }
     }
+
+    while ((pos = out.find(" -- ")) != std::string::npos) {
+        out.replace(pos, 4, " - ");
+    }
+    while ((pos = out.find(" - - ")) != std::string::npos) {
+        out.replace(pos, 5, " - ");
+    }
+
     return out;
 }
 
@@ -510,11 +519,14 @@ inline ParsedFilenameInfo ParseFilenameHeuristic(const std::string& input) {
                 res.artist = tokens[0];
                 res.title = tokens[2];
             } catch (...) {}
-        } else if (!res.hasTrackNumber && detail::IsAllDigits(tokens[2])) {
+        } else if (!res.hasTrackNumber && detail::IsAllDigits(tokens[2]) && tokens[2].size() <= 3) {
             try {
-                res.trackNumber = std::stoi(tokens[2]);
-                res.artist = tokens[0];
-                res.title = tokens[1];
+                int num = std::stoi(tokens[2]);
+                if (num < 1000) {
+                    res.trackNumber = num;
+                    res.artist = tokens[0];
+                    res.title = tokens[1];
+                }
             } catch (...) {}
         } else {
             res.artist = tokens[0];
@@ -528,6 +540,14 @@ inline ParsedFilenameInfo ParseFilenameHeuristic(const std::string& input) {
                 res.trackNumber = std::stoi(tokens[2]);
                 res.title = tokens[3];
             } catch (...) {}
+        } else if (detail::IsAllDigits(tokens[1])) {
+            res.artist = tokens[0];
+            res.hasArtist = !res.artist.empty();
+            try {
+                res.trackNumber = std::stoi(tokens[1]);
+                res.hasTrackNumber = true;
+            } catch (...) {}
+            res.title = tokens[2] + " - " + tokens[3];
         } else if (!res.hasTrackNumber && detail::IsAllDigits(tokens[0])) {
             try {
                 res.trackNumber = std::stoi(tokens[0]);
@@ -559,6 +579,10 @@ inline ParsedFilenameInfo ParseFilenameHeuristic(const std::string& input) {
             }
             res.title = remTitle;
         }
+    }
+
+    while (res.title.size() >= 2 && res.title[0] == '-' && res.title[1] == ' ') {
+        res.title = detail::TrimWhitespace(res.title.substr(2));
     }
 
     res.hasArtist = !res.artist.empty();
