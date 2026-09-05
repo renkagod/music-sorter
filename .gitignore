@@ -37,3 +37,5 @@ folders.cfg
 imgui.ini
 logs_*.txt
 *.db
+PROJECT.md
+TEST_INFRA.md
