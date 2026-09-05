@@ -1797,8 +1797,8 @@ inline std::string ExtractLastFmImage(const JsonVal& imageNode) {
 
 inline bool IsJsonWellFormed(const std::string& s) {
     if (s.empty()) return false;
-    int braceDepth = 0;
-    int bracketDepth = 0;
+    std::vector<char> delimStack;
+    delimStack.reserve(32);
     bool inString = false;
     bool escape = false;
     bool hasStructure = false;
@@ -1815,22 +1815,19 @@ inline bool IsJsonWellFormed(const std::string& s) {
         } else {
             if (c == '"') {
                 inString = true;
-            } else if (c == '{') {
-                braceDepth++;
+            } else if (c == '{' || c == '[') {
+                delimStack.push_back(c);
                 hasStructure = true;
             } else if (c == '}') {
-                braceDepth--;
-                if (braceDepth < 0) return false;
-            } else if (c == '[') {
-                bracketDepth++;
-                hasStructure = true;
+                if (delimStack.empty() || delimStack.back() != '{') return false;
+                delimStack.pop_back();
             } else if (c == ']') {
-                bracketDepth--;
-                if (bracketDepth < 0) return false;
+                if (delimStack.empty() || delimStack.back() != '[') return false;
+                delimStack.pop_back();
             }
         }
     }
-    return !inString && hasStructure && braceDepth == 0 && bracketDepth == 0;
+    return !inString && hasStructure && delimStack.empty();
 }
 
 inline std::vector<LastFmTrackInfo> ParseLastFmTrackSearchJson(const std::string& jsonStr) {
@@ -2083,7 +2080,13 @@ inline std::vector<YtMusicTrackInfo> ParseYouTubeMusicSearchJson(const std::stri
         return results;
     }
 
-    auto parseItem = [](const JsonVal& item) -> YtMusicTrackInfo {
+    struct CandidateRun {
+        std::string text;
+        std::string browseId;
+        std::string pageType;
+    };
+
+    auto parseItem = [&](const JsonVal& item) -> YtMusicTrackInfo {
         YtMusicTrackInfo t;
         const auto& flexCols = item.get("flexColumns");
         if (flexCols.type != JsonVal::Array || flexCols.arrVal.empty()) {
@@ -2125,11 +2128,6 @@ inline std::vector<YtMusicTrackInfo> ParseYouTubeMusicSearchJson(const std::stri
         }
 
         // 4. Columns 1..N: Subtitle / Metadata runs
-        struct CandidateRun {
-            std::string text;
-            std::string browseId;
-            std::string pageType;
-        };
         std::vector<CandidateRun> candRuns;
 
         for (size_t c = 1; c < flexCols.arrVal.size(); ++c) {
@@ -2175,14 +2173,17 @@ inline std::vector<YtMusicTrackInfo> ParseYouTubeMusicSearchJson(const std::stri
                 continue;
             }
 
-            // Check tags
+            // Check tags and stream badges
             if (cr.text == "Song" || cr.text == "Video" || cr.text == "Single" ||
-                cr.text == "Album" || cr.text == "EP" || cr.text == "Artist") {
+                cr.text == "Album" || cr.text == "EP" || cr.text == "Artist" ||
+                cr.text == "LIVE" || cr.text == "Live") {
                 continue;
             }
 
             // Check view/play counters
-            if (cr.text.find("views") != std::string::npos || cr.text.find("plays") != std::string::npos) {
+            if (cr.text.find("views") != std::string::npos ||
+                cr.text.find("plays") != std::string::npos ||
+                cr.text.find("watching") != std::string::npos) {
                 continue;
             }
 
@@ -2196,24 +2197,36 @@ inline std::vector<YtMusicTrackInfo> ParseYouTubeMusicSearchJson(const std::stri
         }
 
         // Assign artist and album
-        for (const auto& mc : metaCandidates) {
-            if (t.artist.empty() && (mc.browseId.rfind("UC", 0) == 0 || mc.pageType.find("ARTIST") != std::string::npos)) {
+        int artistIdx = -1;
+        int albumIdx = -1;
+        for (int i = 0; i < (int)metaCandidates.size(); ++i) {
+            const auto& mc = metaCandidates[i];
+            if (artistIdx == -1 && (mc.browseId.rfind("UC", 0) == 0 || mc.pageType.find("ARTIST") != std::string::npos)) {
                 t.artist = mc.text;
-            } else if (t.album.empty() && (mc.browseId.rfind("MPRE", 0) == 0 || mc.pageType.find("ALBUM") != std::string::npos)) {
+                artistIdx = i;
+            } else if (albumIdx == -1 && (mc.browseId.rfind("MPRE", 0) == 0 || mc.pageType.find("ALBUM") != std::string::npos)) {
                 t.album = mc.text;
+                albumIdx = i;
             }
         }
 
-        if (t.artist.empty() && !metaCandidates.empty()) {
-            t.artist = metaCandidates[0].text;
-            if (t.album.empty() && metaCandidates.size() >= 2) {
-                t.album = metaCandidates[1].text;
+        if (artistIdx == -1) {
+            for (int i = 0; i < (int)metaCandidates.size(); ++i) {
+                if (i != albumIdx) {
+                    t.artist = metaCandidates[i].text;
+                    artistIdx = i;
+                    break;
+                }
             }
-        } else if (!t.artist.empty() && t.album.empty() && metaCandidates.size() >= 2) {
-            if (metaCandidates[0].text == t.artist) {
-                t.album = metaCandidates[1].text;
-            } else {
-                t.album = metaCandidates[0].text;
+        }
+
+        if (albumIdx == -1) {
+            for (int i = 0; i < (int)metaCandidates.size(); ++i) {
+                if (i != artistIdx) {
+                    t.album = metaCandidates[i].text;
+                    albumIdx = i;
+                    break;
+                }
             }
         }
 
@@ -2246,26 +2259,73 @@ inline std::vector<YtMusicTrackInfo> ParseYouTubeMusicSearchJson(const std::stri
 
         const auto& subRuns = card.get("subtitle").get("runs");
         if (subRuns.type == JsonVal::Array) {
-            std::vector<std::string> candTexts;
+            std::vector<CandidateRun> candRuns;
             for (size_t r = 0; r < subRuns.arrVal.size(); ++r) {
-                std::string rawTxt = subRuns.get(r).get("text").strVal;
+                const auto& runObj = subRuns.get(r);
+                std::string rawTxt = runObj.get("text").strVal;
                 size_t first = rawTxt.find_first_not_of(" \t\r\n");
                 if (first == std::string::npos) continue;
                 size_t last = rawTxt.find_last_not_of(" \t\r\n");
                 std::string txt = rawTxt.substr(first, last - first + 1);
-                if (txt == "•" || txt == "·") continue;
+                if (txt == "•" || txt == "·" || txt == "|") continue;
 
                 int dMs = ParseDurationMs(txt);
                 if (dMs > 0 && txt.find(':') != std::string::npos) {
                     t.durationSec = dMs / 1000;
                     continue;
                 }
-                if (txt == "Song" || txt == "Video" || txt == "Single" || txt == "Album") continue;
-                if (txt.find("views") != std::string::npos || txt.find("plays") != std::string::npos) continue;
-                candTexts.push_back(txt);
+                if (txt == "Song" || txt == "Video" || txt == "Single" ||
+                    txt == "Album" || txt == "EP" || txt == "Artist" ||
+                    txt == "LIVE" || txt == "Live") continue;
+                if (txt.find("views") != std::string::npos ||
+                    txt.find("plays") != std::string::npos ||
+                    txt.find("watching") != std::string::npos) continue;
+                if (txt.size() == 4 && (txt[0] == '1' || txt[0] == '2') &&
+                    isdigit(txt[1]) && isdigit(txt[2]) && isdigit(txt[3])) continue;
+
+                CandidateRun cr;
+                cr.text = txt;
+                const auto& nav = runObj.get("navigationEndpoint");
+                const auto& bEndpoint = nav.get("browseEndpoint");
+                cr.browseId = bEndpoint.get("browseId").strVal;
+                cr.pageType = bEndpoint.get("browseEndpointContextSupportedConfigs")
+                                      .get("browseEndpointContextMusicConfig")
+                                      .get("pageType").strVal;
+                candRuns.push_back(cr);
             }
-            if (!candTexts.empty()) t.artist = candTexts[0];
-            if (candTexts.size() >= 2) t.album = candTexts[1];
+
+            int cardArtistIdx = -1;
+            int cardAlbumIdx = -1;
+            for (int i = 0; i < (int)candRuns.size(); ++i) {
+                const auto& mc = candRuns[i];
+                if (cardArtistIdx == -1 && (mc.browseId.rfind("UC", 0) == 0 || mc.pageType.find("ARTIST") != std::string::npos)) {
+                    t.artist = mc.text;
+                    cardArtistIdx = i;
+                } else if (cardAlbumIdx == -1 && (mc.browseId.rfind("MPRE", 0) == 0 || mc.pageType.find("ALBUM") != std::string::npos)) {
+                    t.album = mc.text;
+                    cardAlbumIdx = i;
+                }
+            }
+
+            if (cardArtistIdx == -1) {
+                for (int i = 0; i < (int)candRuns.size(); ++i) {
+                    if (i != cardAlbumIdx) {
+                        t.artist = candRuns[i].text;
+                        cardArtistIdx = i;
+                        break;
+                    }
+                }
+            }
+
+            if (cardAlbumIdx == -1) {
+                for (int i = 0; i < (int)candRuns.size(); ++i) {
+                    if (i != cardArtistIdx) {
+                        t.album = candRuns[i].text;
+                        cardAlbumIdx = i;
+                        break;
+                    }
+                }
+            }
         }
         return t;
     };
