@@ -147,7 +147,7 @@ inline AggregationResult AggregateTrackCandidates(
     }
 
     std::vector<MetadataCandidate> scoredCandidates = rawCandidates;
-    int localNum = ExtractTrailingOrEmbeddedNumber(currentTitle);
+    int localNum = IsUnknownArtist(currentTitle) ? -1 : ExtractTrailingOrEmbeddedNumber(currentTitle);
     bool hasLocalArtist = !IsUnknownArtist(currentArtist);
 
     // Phase 1: Compute base local similarity score or preserve caller-provided candidate confidence
