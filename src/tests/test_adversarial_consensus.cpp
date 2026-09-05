@@ -209,6 +209,7 @@ TEST_CASE("Adversarial Aggregator", "Adv 3.3: Strict Weak Ordering Transitivity 
         }
     }
     std::cout << "      -> Total sort inversions due to non-transitive comparator: " << inversions << " / 199 pairs" << std::endl;
+    ASSERT_EQ(inversions, 0);
 }
 
 TEST_CASE("Adversarial Aggregator", "Adv 4.1: Japanese CJK Title and Japanese Fullwidth Brackets") {
@@ -217,10 +218,11 @@ TEST_CASE("Adversarial Aggregator", "Adv 4.1: Japanese CJK Title and Japanese Fu
         { "MusicBrainz", "COOL&CREATE", "Flowering Night", "Help me, ERINNNNNN!! (Off Vocal)", "2004", 1, "", 0.88, {} }
     };
     auto res = AggregateTrackCandidates("COOL&CREATE", "Help me, ERINNNNNN!! (Off Vocal)", cands);
-    std::cout << "      -> [EMPIRICAL BUG 2] Fullwidth bracket conflict: hasConflict=" << res.hasConflict
+    std::cout << "      -> Fullwidth bracket consensus: hasConflict=" << res.hasConflict
               << ", reason=" << res.conflictReason << ", conf=" << res.confidence << std::endl;
-    // Empirically document the false conflict caused by unhandled fullwidth parentheses
-    ASSERT_TRUE(res.hasConflict); // Document current buggy behavior: spurious conflict flagged
+    ASSERT_FALSE(res.hasConflict);
+    ASSERT_GE(res.confidence, 0.95);
+    ASSERT_STR_EQ(res.conflictReason, "Approved: confidence >= 80% with clear consensus");
 }
 
 TEST_CASE("Adversarial Aggregator", "Adv 4.2: Japanese Wave Dash (〜) and Fullwidth Tilde (～)") {
@@ -358,11 +360,15 @@ TEST_CASE("Adversarial Aggregator", "Adv 6.1: Roman Numeral Sequel Discriminatio
     };
     auto res = AggregateTrackCandidates("Nobuo Uematsu", "Final Fantasy VII Main Theme", cands);
     bool inAgreement = AreTrackCandidatesInAgreement(cands[0], cands[1]);
-    std::cout << "      -> [EMPIRICAL BUG 3] Roman numeral mid-title: AreInAgreement=" << inAgreement
+    std::cout << "      -> Roman numeral mid-title: AreInAgreement=" << inAgreement
               << ", hasConflict=" << res.hasConflict << ", bestConf=" << res.confidence << std::endl;
-    // Empirically document current bug: VII vs VIII in mid-title treated as in agreement!
-    ASSERT_TRUE(inAgreement);
+    ASSERT_FALSE(inAgreement);
     ASSERT_FALSE(res.hasConflict);
+    ASSERT_STR_EQ(res.bestCandidate.title, "Final Fantasy VII Main Theme");
+    ASSERT_NEAR(res.confidence, 0.88, 0.02);
+
+    auto resAmbiguous = AggregateTrackCandidates("Nobuo Uematsu", "Final Fantasy Main Theme", cands);
+    ASSERT_TRUE(resAmbiguous.hasConflict);
 }
 
 TEST_CASE("Adversarial Aggregator", "Adv 6.2: Classical Movement Discrimination (No. 5 vs No. 9)") {

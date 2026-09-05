@@ -219,6 +219,26 @@ TEST_CASE("Consensus Aggregator Tier 2", "Album Candidate with Empty Tracklist")
     ASSERT_TRUE(res.hasConflict);
 }
 
+TEST_CASE("Consensus Aggregator Tier 2", "Album Candidate Caller Confidence Preserved") {
+    std::vector<MetadataCandidate> raw = {
+        { "MusicBrainz", "Daft Punk", "Discovery", "", "2001", 0, "", 0.93, {} }
+    };
+    std::vector<std::string> localTitles;
+    auto res = AggregateAlbumCandidates("Daft Punk", "Discovery", localTitles, raw);
+    ASSERT_FALSE(res.hasConflict);
+    ASSERT_GE(res.confidence, 0.90);
+}
+
+TEST_CASE("Consensus Aggregator Tier 2", "Album Candidate Sequel Mismatch Penalized") {
+    std::vector<MetadataCandidate> raw = {
+        { "MusicBrainz", "Final Fantasy", "Final Fantasy VIII OST", "", "1999", 0, "", 0.90, {} }
+    };
+    std::vector<std::string> localTitles;
+    auto res = AggregateAlbumCandidates("Final Fantasy", "Final Fantasy VII OST", localTitles, raw);
+    ASSERT_TRUE(res.hasConflict);
+    ASSERT_LE(res.confidence, 0.20);
+}
+
 // ============================================================================
 // TIER 3: CROSS-FEATURE COMBINATIONS
 // ============================================================================

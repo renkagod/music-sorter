@@ -75,7 +75,7 @@ TEST_CASE("Live Network Fetch", "Live MusicBrainz Release Group Search and Track
 TEST_CASE("Live Network Fetch", "Live Cover Art Archive Download") {
     // Release Group MBID for Lovelight (actual MusicBrainz UUID)
     std::string rgMbId = "8ef0427c-bd47-360b-b2f7-63f88eff7960";
-    std::string coverUrl = "https://coverartarchive.org/release-group/" + rgMbId + "/front";
+    std::string coverUrl = "https://coverartarchive.org/release-group/" + rgMbId + "/front-250";
     auto bytes = FetchServices::HttpGetBytes(Utf8ToWide(coverUrl));
     ASSERT_FALSE(bytes.empty());
     ASSERT_GE(bytes.size(), 1000); // Image file should be at least a few KB

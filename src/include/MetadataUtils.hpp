@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <regex>
 #include <algorithm>
 #include <cctype>
@@ -57,6 +58,11 @@ inline std::string CleanMetadataString(const std::string& str) {
         char c = str[i];
         if (c == '[' || c == '(' || c == '{') { bLevel++; continue; }
         if (c == ']' || c == ')' || c == '}') { if (bLevel > 0) bLevel--; continue; }
+        if ((unsigned char)c == 0xEF && i + 2 < str.size() && (unsigned char)str[i + 1] == 0xBC) {
+            unsigned char c3 = (unsigned char)str[i + 2];
+            if (c3 == 0x88 || c3 == 0xBB) { bLevel++; i += 2; continue; }
+            if (c3 == 0x89 || c3 == 0xBD) { if (bLevel > 0) bLevel--; i += 2; continue; }
+        }
         if (bLevel == 0) res.push_back(c);
     }
 
@@ -943,6 +949,15 @@ inline std::string NormalizeKey(const std::string& text) {
         unsigned char c = (unsigned char)text[i];
         if (c == '[' || c == '(' || c == '{') { bLevel++; continue; }
         if (c == ']' || c == ')' || c == '}') { if (bLevel > 0) bLevel--; continue; }
+
+        // UTF-8 fullwidth Japanese parentheses: （ (0xEF 0xBC 0x88) / ） (0xEF 0xBC 0x89)
+        // and fullwidth square brackets: ［ (0xEF 0xBC 0xBB) / ］ (0xEF 0xBC 0xBD)
+        if (c == 0xEF && i + 2 < text.size() && (unsigned char)text[i + 1] == 0xBC) {
+            unsigned char c3 = (unsigned char)text[i + 2];
+            if (c3 == 0x88 || c3 == 0xBB) { bLevel++; i += 2; continue; }
+            if (c3 == 0x89 || c3 == 0xBD) { if (bLevel > 0) bLevel--; i += 2; continue; }
+        }
+
         if (bLevel > 0) continue;
 
         if (c <= 32 || c == '-' || c == '_' || c == '/' || c == '\\' || c == ',' || c == '.' || c == '~') continue;
@@ -1175,7 +1190,11 @@ inline double CalculatePerceptualSharpness(const unsigned char* data, size_t siz
     if (!data || size == 0) return 0.0;
     int width = 0, height = 0, channels = 0;
     unsigned char* gray = stbi_load_from_memory(data, (int)size, &width, &height, &channels, 1);
-    if (!gray || width < 4 || height < 4) return 0.0;
+    if (!gray) return 0.0;
+    if (width < 4 || height < 4) {
+        stbi_image_free(gray);
+        return 0.0;
+    }
 
     double sum = 0.0;
     double sumSq = 0.0;
@@ -1243,6 +1262,12 @@ inline size_t ComputeLevenshteinDistance(const std::string& s1, const std::strin
     if (m == 0) return n;
     if (n == 0) return m;
 
+    if (m > 512 || n > 512) {
+        size_t capM = (std::min)(m, (size_t)512);
+        size_t capN = (std::min)(n, (size_t)512);
+        return ComputeLevenshteinDistance(s1.substr(0, capM), s2.substr(0, capN)) + (m > capM ? m - capM : 0) + (n > capN ? n - capN : 0);
+    }
+
     std::vector<size_t> prev(n + 1);
     std::vector<size_t> curr(n + 1);
 
@@ -1282,11 +1307,36 @@ inline int ParseRomanNumeralWord(const std::string& word) {
         {"VI", 6}, {"VII", 7}, {"VIII", 8}, {"IX", 9}, {"X", 10},
         {"XI", 11}, {"XII", 12}, {"XIII", 13}, {"XIV", 14}, {"XV", 15},
         {"XVI", 16}, {"XVII", 17}, {"XVIII", 18}, {"XIX", 19}, {"XX", 20},
-        {"XXI", 21}, {"XXII", 22}, {"XXIII", 23}, {"XXIV", 24}, {"XXV", 25}
+        {"XXI", 21}, {"XXII", 22}, {"XXIII", 23}, {"XXIV", 24}, {"XXV", 25},
+        {"XXVI", 26}, {"XXVII", 27}, {"XXVIII", 28}, {"XXIX", 29}, {"XXX", 30}
     };
     auto it = romanMap.find(up);
     if (it != romanMap.end()) return it->second;
     return -1;
+}
+
+inline bool IsTrailingDescriptorWord(const std::string& word) {
+    if (word.empty()) return false;
+    std::string w = word;
+    for (char& c : w) c = (char)::tolower((unsigned char)c);
+    while (!w.empty() && (w.back() == '.' || w.back() == ',' || w.back() == ':' || w.back() == ';' || w.back() == '-')) {
+        w.pop_back();
+    }
+    if (w.empty()) return false;
+    static const std::unordered_set<std::string> descriptors = {
+        "theme", "themes", "main", "title", "opening", "ending", "op", "ed", "intro", "outro",
+        "prologue", "epilogue", "overture", "prelude", "interlude", "finale",
+        "ost", "soundtrack", "soundtracks", "score", "scores", "bgm", "music", "audio", "song", "track", "tracks",
+        "original", "official", "mix", "mixes", "remix", "remixes", "edit", "edits",
+        "version", "versions", "ver", "instrumental", "acoustic", "orchestral", "orchestra", "piano", "vocal", "vocals",
+        "arrangement", "arrange", "arrangements", "medley", "suite", "remaster", "remastered", "re-recorded", "recording",
+        "live", "session", "sessions", "take", "battle", "boss", "stage", "character", "credits", "trailer", "teaser",
+        "field", "dungeon", "level", "area", "town", "map", "menu", "cutscene", "cinematic", "event",
+        "turbo", "deluxe", "edition", "extended", "club", "radio", "dub", "bonus", "special", "anniversary",
+        "collection", "collections", "complete", "definitive", "super",
+        "part", "pt", "vol", "volume", "act", "chapter", "movement", "no"
+    };
+    return descriptors.find(w) != descriptors.end();
 }
 
 inline std::string StripMetadataAnnotations(const std::string& str) {
@@ -1360,20 +1410,34 @@ inline int ExtractTrailingOrEmbeddedNumber(const std::string& str) {
     if (str.empty()) return -1;
     std::string clean = StripMetadataAnnotations(str);
 
-    std::vector<std::string> words;
+    struct WordToken {
+        std::string text;
+        size_t start{0};
+        size_t end{0};
+    };
+
+    std::vector<WordToken> tokens;
     std::string curWord;
+    size_t curStart = 0;
     for (size_t i = 0; i < clean.size(); ++i) {
         unsigned char c = (unsigned char)clean[i];
         if (std::isalnum(c) || c == '#' || c >= 0x80) {
+            if (curWord.empty()) curStart = i;
             curWord.push_back((char)c);
         } else {
             if (!curWord.empty()) {
-                words.push_back(curWord);
+                tokens.push_back({curWord, curStart, i});
                 curWord.clear();
             }
         }
     }
-    if (!curWord.empty()) words.push_back(curWord);
+    if (!curWord.empty()) {
+        tokens.push_back({curWord, curStart, clean.size()});
+    }
+
+    std::vector<std::string> words;
+    words.reserve(tokens.size());
+    for (const auto& t : tokens) words.push_back(t.text);
 
     // 1. Check for sequel keywords followed by number or Roman numeral
     for (size_t i = 0; i < words.size(); ++i) {
@@ -1381,7 +1445,8 @@ inline int ExtractTrailingOrEmbeddedNumber(const std::string& str) {
         for (char& c : w) c = (char)::tolower((unsigned char)c);
         bool isKeyword = (w == "part" || w == "pt" || w == "act" || w == "vol" ||
                           w == "volume" || w == "suite" || w == "movement" ||
-                          w == "chapter" || w == "no" || w == "#" || w == "track");
+                          w == "chapter" || w == "no" || w == "#" || w == "track" ||
+                          w == "episode" || w == "ep");
         if (isKeyword && i + 1 < words.size()) {
             const std::string& next = words[i + 1];
             int rn = ParseRomanNumeralWord(next);
@@ -1401,22 +1466,50 @@ inline int ExtractTrailingOrEmbeddedNumber(const std::string& str) {
         }
     }
 
-    // 2. Check for trailing Roman numeral at the end of the cleaned title
-    if (!words.empty()) {
-        const std::string& last = words.back();
-        int rn = ParseRomanNumeralWord(last);
-        if (rn > 1) {
-            return rn;
-        }
-        if (rn == 1 && words.size() >= 2) {
-            std::string prev = words[words.size() - 2];
-            for (char& c : prev) c = (char)::tolower((unsigned char)c);
-            if (prev == "part" || prev == "pt" || prev == "act" || prev == "vol" ||
-                prev == "volume" || prev == "suite" || prev == "no" || prev == "#") {
-                return 1;
+    // 2. Check for Roman numerals (trailing, followed by descriptors, or preceding title delimiters)
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        int rn = ParseRomanNumeralWord(tokens[i].text);
+        if (rn <= 0) continue;
+
+        bool allSubsequentAreDescriptors = true;
+        for (size_t j = i + 1; j < tokens.size(); ++j) {
+            if (!IsTrailingDescriptorWord(tokens[j].text)) {
+                allSubsequentAreDescriptors = false;
+                break;
             }
-        } else if (rn == 1 && words.size() == 1) {
-            return 1;
+        }
+
+        bool followedByTitleDelimiter = false;
+        size_t afterWord = clean.find_first_not_of(" \t", tokens[i].end);
+        if (afterWord != std::string::npos) {
+            char delim = clean[afterWord];
+            if (delim == ':' || delim == '-' || delim == '~' || delim == '/' || delim == '|') {
+                followedByTitleDelimiter = true;
+            }
+        }
+
+        if (allSubsequentAreDescriptors || (followedByTitleDelimiter && rn > 1)) {
+            if (rn > 1) {
+                return rn;
+            }
+            // Safe handling for Roman numeral 1 ("I") to prevent false positives from English pronoun "I"
+            if (rn == 1) {
+                if (tokens.size() == 1) {
+                    return 1;
+                }
+                if (i > 0 && i + 1 < tokens.size() && allSubsequentAreDescriptors) {
+                    return 1;
+                }
+                if (i > 0) {
+                    std::string prev = tokens[i - 1].text;
+                    for (char& c : prev) c = (char)::tolower((unsigned char)c);
+                    if (prev == "part" || prev == "pt" || prev == "act" || prev == "vol" ||
+                        prev == "volume" || prev == "suite" || prev == "no" || prev == "#" ||
+                        prev == "episode" || prev == "ep") {
+                        return 1;
+                    }
+                }
+            }
         }
     }
 

@@ -87,6 +87,12 @@ inline bool AreTrackCandidatesInAgreement(const MetadataCandidate& a, const Meta
 }
 
 inline bool AreAlbumCandidatesInAgreement(const MetadataCandidate& a, const MetadataCandidate& b) {
+    int numA = ExtractTrailingOrEmbeddedNumber(a.album);
+    int numB = ExtractTrailingOrEmbeddedNumber(b.album);
+    if (numA >= 0 && numB >= 0 && numA != numB) {
+        return false;
+    }
+
     double albSim = ComputeStringSimilarity(a.album, b.album);
     if (albSim < 0.85 && NormalizeKey(a.album) != NormalizeKey(b.album)) {
         return false;
@@ -124,10 +130,12 @@ inline int CountDistinctAgreeingProviders(
 
     for (const auto& c : candidates) {
         if (c.providerName.empty()) continue;
+        if (providers.find(c.providerName) != providers.end()) continue;
         bool agrees = isAlbum ? AreAlbumCandidatesInAgreement(target, c)
                               : AreTrackCandidatesInAgreement(target, c);
         if (agrees) {
             providers.insert(c.providerName);
+            if (providers.size() >= 4) break;
         }
     }
     return static_cast<int>(providers.size());
@@ -219,7 +227,7 @@ inline AggregationResult AggregateTrackCandidates(
 
     // Phase 3: Sort descending by confidence, tie-breaking by completeness and provider trust
     std::sort(scoredCandidates.begin(), scoredCandidates.end(), [](const MetadataCandidate& a, const MetadataCandidate& b) {
-        if (std::abs(a.confidence - b.confidence) > 0.0001) {
+        if (a.confidence != b.confidence) {
             return a.confidence > b.confidence;
         }
         int compA = GetMetadataCompletenessScore(a);
@@ -227,7 +235,12 @@ inline AggregationResult AggregateTrackCandidates(
         if (compA != compB) {
             return compA > compB;
         }
-        return GetProviderTrustWeight(a.providerName) > GetProviderTrustWeight(b.providerName);
+        double trustA = GetProviderTrustWeight(a.providerName);
+        double trustB = GetProviderTrustWeight(b.providerName);
+        if (trustA != trustB) {
+            return trustA > trustB;
+        }
+        return a.providerName < b.providerName;
     });
 
     result.allCandidates = scoredCandidates;
@@ -294,30 +307,56 @@ inline AggregationResult AggregateAlbumCandidates(
 
     std::vector<MetadataCandidate> scoredCandidates = rawCandidates;
     bool hasLocalArtist = !IsUnknownArtist(currentArtist);
+    int localAlbumNum = ExtractTrailingOrEmbeddedNumber(currentAlbum);
 
-    // Phase 1: Base guardrail evaluation
+    // Phase 1: Base guardrail evaluation or preserve caller-provided candidate confidence
     for (auto& cand : scoredCandidates) {
-        if (!cand.tracklist.empty()) {
-            auto guard = ValidateAlbumMatch(
-                currentArtist, currentAlbum, localTitles,
-                cand.artist, cand.album, cand.tracklist
-            );
-            cand.confidence = guard.confidence * GetProviderTrustWeight(cand.providerName);
-        } else {
-            double artSim = hasLocalArtist ? ComputeStringSimilarity(currentArtist, cand.artist) : 0.80;
-            double albSim = (!currentAlbum.empty()) ? ComputeStringSimilarity(currentAlbum, cand.album) : 0.50;
+        if (cand.album.empty() && cand.artist.empty()) {
+            cand.confidence = 0.0;
+            continue;
+        }
 
-            if (hasLocalArtist && artSim < 0.60) {
-                cand.confidence = (std::min)(0.25 * artSim, 0.15);
+        if (cand.confidence != 0.0) {
+            cand.confidence = (std::max)(0.0, (std::min)(1.0, cand.confidence));
+
+            if (hasLocalArtist && !IsUnknownArtist(cand.artist)) {
+                double artSim = ComputeStringSimilarity(currentArtist, cand.artist);
+                if (artSim < 0.60) {
+                    cand.confidence = (std::min)(cand.confidence * 0.25, 0.15);
+                }
+            }
+            if (!localTitles.empty() && cand.tracklist.empty()) {
+                cand.confidence = (std::min)(cand.confidence, 0.75);
+            }
+        } else {
+            if (!cand.tracklist.empty()) {
+                auto guard = ValidateAlbumMatch(
+                    currentArtist, currentAlbum, localTitles,
+                    cand.artist, cand.album, cand.tracklist
+                );
+                cand.confidence = guard.confidence * GetProviderTrustWeight(cand.providerName);
             } else {
-                double base = (0.50 * artSim + 0.50 * albSim) * GetProviderTrustWeight(cand.providerName);
-                if (!localTitles.empty()) {
-                    cand.confidence = (std::min)(base, 0.75);
+                double artSim = hasLocalArtist ? ComputeStringSimilarity(currentArtist, cand.artist) : 0.80;
+                double albSim = (!currentAlbum.empty()) ? ComputeStringSimilarity(currentAlbum, cand.album) : 0.50;
+
+                if (hasLocalArtist && artSim < 0.60) {
+                    cand.confidence = (std::min)(0.25 * artSim, 0.15);
                 } else {
-                    cand.confidence = base;
+                    double base = (0.50 * artSim + 0.50 * albSim) * GetProviderTrustWeight(cand.providerName);
+                    if (!localTitles.empty()) {
+                        cand.confidence = (std::min)(base, 0.75);
+                    } else {
+                        cand.confidence = base;
+                    }
                 }
             }
         }
+
+        int candAlbumNum = ExtractTrailingOrEmbeddedNumber(cand.album);
+        if (localAlbumNum >= 0 && candAlbumNum >= 0 && localAlbumNum != candAlbumNum) {
+            cand.confidence = (std::min)(cand.confidence * 0.10, 0.10);
+        }
+
         if (cand.confidence > 1.0) cand.confidence = 1.0;
         if (cand.confidence < 0.0) cand.confidence = 0.0;
     }
@@ -343,7 +382,7 @@ inline AggregationResult AggregateAlbumCandidates(
 
     // Phase 3: Sort descending by confidence
     std::sort(scoredCandidates.begin(), scoredCandidates.end(), [](const MetadataCandidate& a, const MetadataCandidate& b) {
-        if (std::abs(a.confidence - b.confidence) > 0.0001) {
+        if (a.confidence != b.confidence) {
             return a.confidence > b.confidence;
         }
         int compA = GetMetadataCompletenessScore(a);
@@ -351,7 +390,12 @@ inline AggregationResult AggregateAlbumCandidates(
         if (compA != compB) {
             return compA > compB;
         }
-        return GetProviderTrustWeight(a.providerName) > GetProviderTrustWeight(b.providerName);
+        double trustA = GetProviderTrustWeight(a.providerName);
+        double trustB = GetProviderTrustWeight(b.providerName);
+        if (trustA != trustB) {
+            return trustA > trustB;
+        }
+        return a.providerName < b.providerName;
     });
 
     result.allCandidates = scoredCandidates;
