@@ -6,6 +6,8 @@
 #include <atomic>
 #include <chrono>
 #include "AcousticAnalyzer.hpp"
+#include "ConsensusAggregator.hpp"
+#include <mutex>
 
 #define WM_SCAN_PROGRESS     (WM_USER + 101)
 #define WM_SCAN_FINISHED     (WM_USER + 102)
@@ -88,6 +90,14 @@ struct TagReviewItem {
     long long onlineScore = 0;
 
     int selectedCoverChoice = 0; // 0 = Local, 1 = Online
+
+    // Milestone 4: Multi-Provider Candidates & Consensus
+    std::vector<ConsensusAggregator::MetadataCandidate> candidates;
+    bool hasConflict{false};
+    double confidenceScore{0.0};
+    bool isFetchingAll{false};
+    int selectedCandidateIndex{-1};
+    int selectedCandidateIdx{-1};
 };
 
 class AppWindow {
@@ -190,4 +200,12 @@ private:
     void FetchManualThwikiMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
     void FetchManualVocaDbMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
     void FetchManualUtaiteDbMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
+
+    // Milestone 4: Multi-Provider Search & Candidate Assignment
+    void FetchAllProvidersMetadata(size_t trackIndex, bool applyToAllInAlbum);
+    void FetchAllProvidersForTrack(size_t trackIndex);
+    void ApplyCandidateToTrack(size_t trackIndex, const ConsensusAggregator::MetadataCandidate& candidate);
+    void ApplyCandidateToAlbum(size_t referenceIndex, const ConsensusAggregator::MetadataCandidate& candidate);
+
+    std::mutex m_candidatesMutex;
 };

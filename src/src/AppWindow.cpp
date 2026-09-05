@@ -2746,6 +2746,252 @@ void AppWindow::FetchManualUtaiteDbMetadata(const std::string& inputUrl, bool ap
     }).detach();
 }
 
+void AppWindow::ApplyCandidateToTrack(size_t trackIndex, const ConsensusAggregator::MetadataCandidate& candidate) {
+    if (trackIndex >= m_tagItems.size()) return;
+    auto& item = m_tagItems[trackIndex];
+
+    if (!candidate.artist.empty()) strncpy_s(item.artistBuf, candidate.artist.c_str(), sizeof(item.artistBuf) - 1);
+    if (!candidate.album.empty()) strncpy_s(item.albumBuf, candidate.album.c_str(), sizeof(item.albumBuf) - 1);
+    if (!candidate.title.empty()) strncpy_s(item.titleBuf, candidate.title.c_str(), sizeof(item.titleBuf) - 1);
+    if (!candidate.year.empty()) strncpy_s(item.yearBuf, candidate.year.c_str(), sizeof(item.yearBuf) - 1);
+    if (candidate.trackNumber > 0) snprintf(item.trackNoBuf, sizeof(item.trackNoBuf), "%d", candidate.trackNumber);
+
+    item.hasConflict = false;
+    item.confidenceScore = candidate.confidence;
+    item.isMusicBrainzMatched = true;
+
+    if (!candidate.coverUrl.empty() && candidate.coverUrl != item.onlineCoverUrl) {
+        item.onlineCoverUrl = candidate.coverUrl;
+        item.onlineCoverSource = candidate.providerName;
+        std::thread([this, trackIndex, url = candidate.coverUrl, provider = candidate.providerName]() {
+            auto coverBytes = HttpGetBytes(Utf8ToWide(url), g_DiscogsToken);
+            if (!coverBytes.empty() && trackIndex < m_tagItems.size()) {
+                m_tagItems[trackIndex].onlineCoverBytes = std::move(coverBytes);
+                m_tagItems[trackIndex].onlineCoverSource = provider;
+                m_tagItems[trackIndex].selectedCoverChoice = 1;
+                if (m_tagItems[trackIndex].onlineTexture) {
+                    m_tagItems[trackIndex].onlineTexture->Release();
+                    m_tagItems[trackIndex].onlineTexture = NULL;
+                }
+            }
+        }).detach();
+    }
+
+    LOG_INFO("[APPLY CANDIDATE] Applied " + candidate.providerName + " metadata to track: " + item.originalFilename);
+}
+
+void AppWindow::ApplyCandidateToAlbum(size_t referenceIndex, const ConsensusAggregator::MetadataCandidate& candidate) {
+    auto albumIndices = GetAlbumTrackIndices(referenceIndex);
+    for (size_t idx : albumIndices) {
+        if (idx < m_tagItems.size()) {
+            auto& item = m_tagItems[idx];
+            if (!candidate.artist.empty()) strncpy_s(item.artistBuf, candidate.artist.c_str(), sizeof(item.artistBuf) - 1);
+            if (!candidate.album.empty()) strncpy_s(item.albumBuf, candidate.album.c_str(), sizeof(item.albumBuf) - 1);
+            if (!candidate.year.empty()) strncpy_s(item.yearBuf, candidate.year.c_str(), sizeof(item.yearBuf) - 1);
+            item.hasConflict = false;
+            item.confidenceScore = candidate.confidence;
+            item.isMusicBrainzMatched = true;
+
+            if (!candidate.tracklist.empty()) {
+                int trkNum = atoi(item.trackNoBuf);
+                if (trkNum > 0 && trkNum <= static_cast<int>(candidate.tracklist.size())) {
+                    strncpy_s(item.titleBuf, candidate.tracklist[trkNum - 1].c_str(), sizeof(item.titleBuf) - 1);
+                }
+            }
+        }
+    }
+
+    if (!candidate.coverUrl.empty()) {
+        std::thread([this, albumIndices, url = candidate.coverUrl, provider = candidate.providerName]() {
+            auto coverBytes = HttpGetBytes(Utf8ToWide(url), g_DiscogsToken);
+            if (!coverBytes.empty()) {
+                for (size_t idx : albumIndices) {
+                    if (idx < m_tagItems.size()) {
+                        m_tagItems[idx].onlineCoverBytes = coverBytes;
+                        m_tagItems[idx].onlineCoverSource = provider;
+                        m_tagItems[idx].selectedCoverChoice = 1;
+                        if (m_tagItems[idx].onlineTexture) {
+                            m_tagItems[idx].onlineTexture->Release();
+                            m_tagItems[idx].onlineTexture = NULL;
+                        }
+                    }
+                }
+            }
+        }).detach();
+    }
+
+    LOG_INFO("[APPLY CANDIDATE] Applied " + candidate.providerName + " metadata to album (" + std::to_string(albumIndices.size()) + " tracks)");
+}
+
+void AppWindow::FetchAllProvidersMetadata(size_t trackIndex, bool applyToAllInAlbum) {
+    if (m_tagItems.empty() || trackIndex >= m_tagItems.size()) {
+        LOG_WARN("[FETCH ALL] Invalid track index: " + std::to_string(trackIndex));
+        return;
+    }
+
+    if (m_tagItems[trackIndex].isFetchingAll) {
+        LOG_INFO("[FETCH ALL] Fetch already in progress for track: " + std::to_string(trackIndex));
+        return;
+    }
+
+    std::vector<size_t> targetIndices;
+    if (applyToAllInAlbum && !m_tagItems[trackIndex].isSingleTrack) {
+        targetIndices = GetAlbumTrackIndices(trackIndex);
+    } else {
+        targetIndices.push_back(trackIndex);
+    }
+
+    for (size_t idx : targetIndices) {
+        if (idx < m_tagItems.size()) {
+            m_tagItems[idx].isFetchingAll = true;
+        }
+    }
+
+    std::string artist(m_tagItems[trackIndex].artistBuf);
+    std::string album(m_tagItems[trackIndex].albumBuf);
+    std::string title(m_tagItems[trackIndex].titleBuf);
+    bool isSingle = m_tagItems[trackIndex].isSingleTrack || (targetIndices.size() == 1 && album.empty());
+
+    LOG_INFO("[FETCH ALL START] Querying all providers for: " + artist + " - " + (isSingle ? title : album));
+
+    std::thread([this, trackIndex, targetIndices, artist, album, title, isSingle]() {
+        std::vector<ConsensusAggregator::MetadataCandidate> candidates;
+
+        // 1. MusicBrainz Search
+        if (!album.empty() && !isSingle) {
+            std::string mbQuery = (!artist.empty() && artist != "Unknown Artist")
+                ? ("artist:\"" + EscapeLuceneQuery(artist) + "\" AND release:\"" + EscapeLuceneQuery(album) + "\"")
+                : ("release:\"" + EscapeLuceneQuery(album) + "\"");
+            std::string mbRes = HttpGetString(Utf8ToWide("https://musicbrainz.org/ws/2/release-group?query=" + UrlEncode(mbQuery) + "&fmt=json"));
+            auto rgs = ParseMusicBrainzReleaseGroups(mbRes);
+            for (const auto& rg : rgs) {
+                ConsensusAggregator::MetadataCandidate c;
+                c.providerName = "MusicBrainz";
+                c.artist = rg.artistCredit;
+                c.album = rg.title;
+                c.year = rg.firstReleaseDate;
+                c.releaseId = rg.id;
+                auto trks = FetchMusicBrainzReleaseTracks(rg.id);
+                for (const auto& t : trks) c.tracklist.push_back(t.title);
+                candidates.push_back(c);
+            }
+        }
+
+        // 2. Discogs Search
+        if (!album.empty() && !isSingle) {
+            DiscogsReleaseInfo discInfo;
+            if (SearchDiscogsRelease(artist, album, discInfo, g_DiscogsToken)) {
+                ConsensusAggregator::MetadataCandidate c;
+                c.providerName = "Discogs";
+                c.artist = discInfo.artist;
+                c.album = discInfo.title;
+                c.year = discInfo.year;
+                c.coverUrl = discInfo.coverUrl;
+                for (const auto& t : discInfo.tracks) c.tracklist.push_back(t.title);
+                candidates.push_back(c);
+            }
+        }
+
+        // 3. TouhouDB / VocaDB / UtaiteDB Search
+        if (!album.empty() && !isSingle) {
+            VdbReleaseInfo vdbInfo;
+            if (SearchVdbRelease("https://touhoudb.com", "TouhouDB", artist, album, "", vdbInfo) ||
+                SearchVdbRelease("https://vocadb.net", "VocaDB", artist, album, "", vdbInfo) ||
+                SearchVdbRelease("https://utaitedb.net", "UtaiteDB", artist, album, "", vdbInfo)) {
+                ConsensusAggregator::MetadataCandidate c;
+                c.providerName = "TouhouDB";
+                c.artist = PickBestName(vdbInfo.artistRomaji, vdbInfo.artistEnglish, vdbInfo.artistJapanese, artist);
+                c.album = PickBestName(vdbInfo.titleRomaji, vdbInfo.titleEnglish, vdbInfo.titleJapanese, album);
+                c.year = vdbInfo.releaseDate;
+                c.coverUrl = vdbInfo.coverUrl;
+                for (const auto& t : vdbInfo.tracks) c.tracklist.push_back(t.title);
+                candidates.push_back(c);
+            }
+        }
+
+        // 4. Last.fm Query
+        if (!artist.empty() && artist != "Unknown Artist") {
+            if (!album.empty() && !isSingle) {
+                auto lfmAlb = GetLastFmAlbumInfo(artist, album);
+                if (!lfmAlb.album.empty()) {
+                    ConsensusAggregator::MetadataCandidate c;
+                    c.providerName = "Last.fm";
+                    c.artist = lfmAlb.artist;
+                    c.album = lfmAlb.album;
+                    c.year = lfmAlb.releaseDate;
+                    c.coverUrl = lfmAlb.coverUrl;
+                    c.tracklist = lfmAlb.tracklist;
+                    candidates.push_back(c);
+                }
+            } else if (!title.empty()) {
+                auto lfmTracks = SearchLastFmTrack(artist, title);
+                for (const auto& lt : lfmTracks) {
+                    ConsensusAggregator::MetadataCandidate c;
+                    c.providerName = "Last.fm";
+                    c.artist = lt.artist;
+                    c.album = lt.album;
+                    c.title = lt.title;
+                    c.coverUrl = lt.coverUrl;
+                    c.durationSec = lt.durationSec;
+                    candidates.push_back(c);
+                }
+            }
+        }
+
+        // 5. YouTube Music Search
+        std::string ytQuery = (!artist.empty() && artist != "Unknown Artist") ? (artist + " - " + title) : title;
+        if (!ytQuery.empty()) {
+            auto ytTracks = SearchYouTubeMusic(ytQuery);
+            for (const auto& yt : ytTracks) {
+                ConsensusAggregator::MetadataCandidate c;
+                c.providerName = "YouTube Music";
+                c.artist = yt.artist;
+                c.album = yt.album;
+                c.title = yt.title;
+                c.coverUrl = yt.coverUrl;
+                c.durationSec = yt.durationSec;
+                c.releaseId = yt.videoId;
+                candidates.push_back(c);
+            }
+        }
+
+        // Aggregate candidates
+        ConsensusAggregator::AggregationResult aggResult;
+        if (!isSingle && !album.empty()) {
+            std::vector<std::string> localTitles;
+            for (size_t idx : targetIndices) {
+                if (idx < m_tagItems.size()) localTitles.push_back(m_tagItems[idx].titleBuf);
+            }
+            aggResult = ConsensusAggregator::AggregateAlbumCandidates(artist, album, localTitles, candidates);
+        } else {
+            aggResult = ConsensusAggregator::AggregateTrackCandidates(artist, title, candidates);
+        }
+
+        // Safely update target items under mutex
+        {
+            std::lock_guard<std::mutex> lock(m_candidatesMutex);
+            for (size_t idx : targetIndices) {
+                if (idx < m_tagItems.size()) {
+                    auto& itm = m_tagItems[idx];
+                    itm.candidates = aggResult.allCandidates;
+                    itm.hasConflict = aggResult.hasConflict;
+                    itm.confidenceScore = aggResult.confidence;
+                    itm.selectedCandidateIndex = -1;
+                    itm.selectedCandidateIdx = -1;
+                    itm.isFetchingAll = false;
+                }
+            }
+        }
+
+        LOG_INFO("[FETCH ALL COMPLETE] Found " + std::to_string(aggResult.allCandidates.size()) +
+                 " candidates. Confidence: " + std::to_string(static_cast<int>(aggResult.confidence * 100)) + "%");
+    }).detach();
+}
+
+void AppWindow::FetchAllProvidersForTrack(size_t trackIndex) {
+    FetchAllProvidersMetadata(trackIndex, m_manualMbApplyToAlbum);
+}
+
 void AppWindow::RunMessageLoop() {
     bool done = false;
     while (!done) {
@@ -3135,6 +3381,34 @@ void AppWindow::RunMessageLoop() {
                     ImGui::TextColored(ImVec4(0.95f, 0.4f, 0.3f, 1.0f), "[NICHE / LOCAL]");
                 }
 
+                // Milestone 4: Conflict Indicator Badge and Consensus Status
+                if (item.hasConflict) {
+                    ImGui::SameLine();
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.35f, 0.25f, 1.0f));
+                    ImGui::Text("[!] КОНФЛИКТ МЕТАДАННЫХ (%.0f%%)", item.confidenceScore * 100.0);
+                    ImGui::PopStyleColor();
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "Обнаружены разногласия источников или низкая уверенность:");
+                        ImGui::BulletText("Уверенность консенсуса: %.1f%% (порог: >= 80%%)", item.confidenceScore * 100.0);
+                        ImGui::BulletText("Кандидатов от провайдеров: %zu", item.candidates.size());
+                        ImGui::BulletText("Выберите подходящий вариант в выпадающем списке ниже.");
+                        ImGui::EndTooltip();
+                    }
+                } else if (item.confidenceScore >= 0.80 && !item.candidates.empty()) {
+                    ImGui::SameLine();
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.85f, 0.35f, 1.0f));
+                    ImGui::Text("[OK: Консенсус %.0f%%]", item.confidenceScore * 100.0);
+                    ImGui::PopStyleColor();
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.4f, 1.0f), "Метаданные подтверждены консенсусом провайдеров");
+                        ImGui::BulletText("Уверенность: %.1f%%", item.confidenceScore * 100.0);
+                        ImGui::BulletText("Число кандидатов: %zu", item.candidates.size());
+                        ImGui::EndTooltip();
+                    }
+                }
+
                 ImGui::SameLine();
                 ImGui::TextDisabled("| Файл: %s", item.originalFilename.c_str());
                 ImGui::Separator();
@@ -3171,6 +3445,39 @@ void AppWindow::RunMessageLoop() {
                 }
                 ImGui::SameLine();
                 ImGui::Checkbox("Ко всему альбому", &m_manualMbApplyToAlbum);
+
+                // Milestone 4: Fetch from all providers button with async spinner
+                ImGui::SameLine();
+                ImGui::Spacing();
+                ImGui::SameLine();
+
+                if (item.isFetchingAll) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.30f, 0.35f, 0.6f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.30f, 0.35f, 0.6f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.28f, 0.30f, 0.35f, 0.6f));
+
+                    static const char* s_spinnerFrames[] = { "[ | ] Опрос...", "[ / ] Опрос...", "[ - ] Опрос...", "[ \\ ] Опрос..." };
+                    int spinnerIdx = (int)(ImGui::GetTime() / 0.15f) % 4;
+                    ImGui::Button(s_spinnerFrames[spinnerIdx], ImVec2(210, 24));
+                    ImGui::PopStyleColor(3);
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.48f, 0.78f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.58f, 0.88f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.40f, 0.68f, 1.0f));
+
+                    if (ImGui::Button("Искать во всех источниках##FetchAllBtn", ImVec2(210, 24))) {
+                        FetchAllProvidersForTrack(m_currentTagIndex);
+                    }
+                    ImGui::PopStyleColor(3);
+
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Параллельный опрос всех доступных провайдеров:");
+                        ImGui::BulletText("MusicBrainz, Discogs, Last.fm, YouTube Music, TouhouDB/VocaDB");
+                        ImGui::BulletText("Автоматический расчет консенсуса и обновление тегов.");
+                        ImGui::EndTooltip();
+                    }
+                }
                 ImGui::Separator();
 
                 // Main 3-Column Layout: Left Column (Col 0) = Stacked Original & Proposed Tags | Middle (Col 1) = Local Cover | Right (Col 2) = Online Cover
@@ -3209,6 +3516,147 @@ void AppWindow::RunMessageLoop() {
                 ImGui::PopItemWidth();
 
                 ImGui::Dummy(ImVec2(0, 8.0f));
+
+                // Milestone 4: Interactive Candidate Picker (Combo Dropdown & Modal Table)
+                {
+                    std::lock_guard<std::mutex> lock(m_candidatesMutex);
+                    if (!item.candidates.empty()) {
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.9f, 0.85f, 0.3f, 1.0f), "Доступные кандидаты (%zu):", item.candidates.size());
+
+                        std::string previewLabel;
+                        int selIdx = (item.selectedCandidateIndex >= 0) ? item.selectedCandidateIndex : item.selectedCandidateIdx;
+                        if (selIdx >= 0 && selIdx < (int)item.candidates.size()) {
+                            const auto& sel = item.candidates[selIdx];
+                            char pbuf[160];
+                            snprintf(pbuf, sizeof(pbuf), "[%s %.0f%%] %s - %s",
+                                     sel.providerName.c_str(), sel.confidence * 100.0,
+                                     sel.artist.c_str(), sel.title.c_str());
+                            previewLabel = pbuf;
+                        } else {
+                            previewLabel = "Выберите вариант метаданных...";
+                        }
+
+                        ImGui::PushItemWidth(240.0f);
+                        if (ImGui::BeginCombo("##CandidatePickerCombo", previewLabel.c_str(), ImGuiComboFlags_HeightRegular)) {
+                            for (int cIdx = 0; cIdx < (int)item.candidates.size(); ++cIdx) {
+                                const auto& cand = item.candidates[cIdx];
+                                bool isSelected = (selIdx == cIdx);
+
+                                char itemLabel[256];
+                                snprintf(itemLabel, sizeof(itemLabel), "[%s %.0f%%] %s - %s##c_%d",
+                                         cand.providerName.c_str(), cand.confidence * 100.0,
+                                         cand.artist.c_str(), cand.title.c_str(), cIdx);
+
+                                if (cand.confidence >= 0.80) {
+                                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f, 0.95f, 0.40f, 1.0f));
+                                } else if (cand.confidence >= 0.50) {
+                                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.25f, 1.0f));
+                                } else {
+                                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.0f));
+                                }
+
+                                if (ImGui::Selectable(itemLabel, isSelected)) {
+                                    item.selectedCandidateIndex = cIdx;
+                                    item.selectedCandidateIdx = cIdx;
+                                    ApplyCandidateToTrack(m_currentTagIndex, cand);
+                                }
+                                ImGui::PopStyleColor();
+
+                                if (isSelected) {
+                                    ImGui::SetItemDefaultFocus();
+                                }
+
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::BeginTooltip();
+                                    ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Провайдер: %s", cand.providerName.c_str());
+                                    ImGui::Text("Исполнитель: %s", cand.artist.c_str());
+                                    ImGui::Text("Название:     %s", cand.title.c_str());
+                                    ImGui::Text("Альбом:       %s", cand.album.empty() ? "(нет альбома)" : cand.album.c_str());
+                                    ImGui::Text("Год:          %s", cand.year.empty() ? "—" : cand.year.c_str());
+                                    if (cand.trackNumber > 0) ImGui::Text("№ трека:      %d", cand.trackNumber);
+                                    ImGui::Text("Уверенность:  %.1f%%", cand.confidence * 100.0);
+                                    ImGui::Separator();
+                                    ImGui::TextDisabled("Кликните для применения в один клик");
+                                    ImGui::EndTooltip();
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::PopItemWidth();
+
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Таблица...##OpenModal")) {
+                            ImGui::OpenPopup("CandidateCompareModal");
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("Сравнить всех кандидатов в сводной таблице");
+                        }
+
+                        // Modal table for side-by-side comparison
+                        if (ImGui::BeginPopupModal("CandidateCompareModal", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+                            ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Сравнение кандидатов метаданных:");
+                            ImGui::TextDisabled("Файл: %s", item.originalFilename.c_str());
+                            ImGui::Separator();
+                            ImGui::Spacing();
+
+                            if (ImGui::BeginTable("CandModalTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+                                ImGui::TableSetupColumn("Провайдер", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                                ImGui::TableSetupColumn("Уверенность", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                                ImGui::TableSetupColumn("Исполнитель", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+                                ImGui::TableSetupColumn("Название", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+                                ImGui::TableSetupColumn("Альбом", ImGuiTableColumnFlags_WidthFixed, 160.0f);
+                                ImGui::TableSetupColumn("Выбор", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+                                ImGui::TableHeadersRow();
+
+                                for (int cIdx = 0; cIdx < (int)item.candidates.size(); ++cIdx) {
+                                    const auto& c = item.candidates[cIdx];
+                                    ImGui::TableNextRow();
+
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::TextUnformatted(c.providerName.c_str());
+
+                                    ImGui::TableSetColumnIndex(1);
+                                    if (c.confidence >= 0.80) {
+                                        ImGui::TextColored(ImVec4(0.25f, 0.95f, 0.40f, 1.0f), "%.0f%%", c.confidence * 100.0);
+                                    } else if (c.confidence >= 0.50) {
+                                        ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.25f, 1.0f), "%.0f%%", c.confidence * 100.0);
+                                    } else {
+                                        ImGui::TextColored(ImVec4(0.70f, 0.70f, 0.70f, 1.0f), "%.0f%%", c.confidence * 100.0);
+                                    }
+
+                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::TextUnformatted(c.artist.c_str());
+
+                                    ImGui::TableSetColumnIndex(3);
+                                    ImGui::TextUnformatted(c.title.c_str());
+
+                                    ImGui::TableSetColumnIndex(4);
+                                    ImGui::TextUnformatted(c.album.empty() ? "—" : c.album.c_str());
+
+                                    ImGui::TableSetColumnIndex(5);
+                                    char assignBtnId[32];
+                                    snprintf(assignBtnId, sizeof(assignBtnId), "Выбрать##m_%d", cIdx);
+                                    if (ImGui::Button(assignBtnId, ImVec2(85, 22))) {
+                                        item.selectedCandidateIndex = cIdx;
+                                        item.selectedCandidateIdx = cIdx;
+                                        ApplyCandidateToTrack(m_currentTagIndex, c);
+                                        ImGui::CloseCurrentPopup();
+                                    }
+                                }
+                                ImGui::EndTable();
+                            }
+
+                            ImGui::Spacing();
+                            ImGui::Separator();
+                            ImGui::Spacing();
+                            if (ImGui::Button("Закрыть##CloseCandModal", ImVec2(100, 26))) {
+                                ImGui::CloseCurrentPopup();
+                            }
+                            ImGui::EndPopup();
+                        }
+                    }
+                }
 
                 // 2. НИЖНИЙ БЛОК: ПРЕДЛАГАЕМЫЕ ТЕГИ
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.9f, 1.0f), "Предлагаемые теги");
@@ -4494,39 +4942,147 @@ void AppWindow::StartTagScan() {
                         }
                     }
 
-                    // Apply metadata from cacheResult to all tracks in this cluster
+                    // =========================================================================
+                    // Milestone 4: Multi-Provider Candidate Gathering & Consensus Aggregation
+                    // =========================================================================
+                    std::vector<ConsensusAggregator::MetadataCandidate> clusterCandidates;
+
+                    // 1. Existing matched cache result (from MusicBrainz, TouhouDB, Discogs, etc.)
                     if (cacheResult.isMatched) {
+                        ConsensusAggregator::MetadataCandidate c;
+                        c.providerName = GetTierName(cacheResult.matchTier);
                         std::string bestAlb = PickBestName(cacheResult.albumRomaji, cacheResult.albumEnglish, cacheResult.albumJapanese, "");
                         std::string bestArt = PickBestName(cacheResult.artistRomaji, cacheResult.artistEnglish, cacheResult.artistJapanese, "");
+                        c.artist = !bestArt.empty() ? bestArt : artistClean;
+                        c.album = !bestAlb.empty() ? bestAlb : albumClean;
+                        c.year = cacheResult.firstReleaseDate;
+                        c.releaseId = cacheResult.releaseGroupMbId;
+                        c.coverUrl = cacheResult.coverSource;
+                        for (const auto& rt : cacheResult.tracks) {
+                            c.tracklist.push_back(rt.title);
+                        }
+                        clusterCandidates.push_back(c);
+                    }
 
-                        for (size_t idx : indices) {
-                            auto& item = m_tagItems[idx];
-                            item.isMusicBrainzMatched = true;
-                            item.onlineCoverBytes = cacheResult.coverBytes;
-                            item.onlineCoverSource = cacheResult.coverSource;
-                            item.matchTier = cacheResult.matchTier;
-                            item.releaseGroupMbId = cacheResult.releaseGroupMbId;
-                            item.albumRomaji = cacheResult.albumRomaji;
-                            item.albumEnglish = cacheResult.albumEnglish;
-                            item.albumJapanese = cacheResult.albumJapanese;
-                            item.artistRomaji = cacheResult.artistRomaji;
-                            item.artistEnglish = cacheResult.artistEnglish;
-                            item.artistJapanese = cacheResult.artistJapanese;
-
-                            if (!bestAlb.empty()) strncpy_s(item.albumBuf, bestAlb.c_str(), sizeof(item.albumBuf) - 1);
-                            if (!bestArt.empty()) strncpy_s(item.artistBuf, bestArt.c_str(), sizeof(item.artistBuf) - 1);
-                            if (!cacheResult.firstReleaseDate.empty()) {
-                                strncpy_s(item.yearBuf, cacheResult.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
+                    // 2. Last.fm Query
+                    if (!artistClean.empty() && artistClean != "Unknown Artist") {
+                        if (!albumClean.empty() && !leadItem.isSingleTrack) {
+                            auto lfmAlb = GetLastFmAlbumInfo(artistClean, albumClean);
+                            if (!lfmAlb.album.empty()) {
+                                ConsensusAggregator::MetadataCandidate c;
+                                c.providerName = "Last.fm";
+                                c.artist = lfmAlb.artist;
+                                c.album = lfmAlb.album;
+                                c.year = lfmAlb.releaseDate;
+                                c.coverUrl = lfmAlb.coverUrl;
+                                c.tracklist = lfmAlb.tracklist;
+                                clusterCandidates.push_back(c);
                             }
+                        } else if (!titleClean.empty()) {
+                            auto lfmTracks = SearchLastFmTrack(artistClean, titleClean);
+                            for (const auto& lt : lfmTracks) {
+                                ConsensusAggregator::MetadataCandidate c;
+                                c.providerName = "Last.fm";
+                                c.artist = lt.artist;
+                                c.album = lt.album;
+                                c.title = lt.title;
+                                c.coverUrl = lt.coverUrl;
+                                c.durationSec = lt.durationSec;
+                                clusterCandidates.push_back(c);
+                            }
+                        }
+                    }
 
-                            if (!cacheResult.tracks.empty()) {
-                                ApplyTrackMatch(item, cacheResult.tracks);
+                    // 3. YouTube Music Query (for singles or unreleased / niche tracks)
+                    if (leadItem.isSingleTrack || cluster.indices.size() == 1 || clusterCandidates.empty()) {
+                        std::string ytQuery = (!artistClean.empty() && artistClean != "Unknown Artist")
+                            ? (artistClean + " - " + titleClean) : titleClean;
+                        if (!ytQuery.empty()) {
+                            auto ytTracks = SearchYouTubeMusic(ytQuery);
+                            for (const auto& yt : ytTracks) {
+                                ConsensusAggregator::MetadataCandidate c;
+                                c.providerName = "YouTube Music";
+                                c.artist = yt.artist;
+                                c.album = yt.album;
+                                c.title = yt.title;
+                                c.coverUrl = yt.coverUrl;
+                                c.durationSec = yt.durationSec;
+                                c.releaseId = yt.videoId;
+                                clusterCandidates.push_back(c);
+                            }
+                        }
+                    }
+
+                    // 4. Consensus Aggregation
+                    ConsensusAggregator::AggregationResult aggResult;
+                    std::vector<std::string> localTitles;
+                    localTitles.reserve(indices.size());
+                    for (size_t idx : indices) {
+                        std::string tName = m_tagItems[idx].titleBuf;
+                        if (tName.empty()) tName = detail::StripPathAndExtension(m_tagItems[idx].originalFilename);
+                        localTitles.push_back(tName);
+                    }
+
+                    if (!leadItem.isSingleTrack && cluster.indices.size() > 1 && !albumClean.empty()) {
+                        aggResult = ConsensusAggregator::AggregateAlbumCandidates(artistClean, albumClean, localTitles, clusterCandidates);
+                    } else {
+                        aggResult = ConsensusAggregator::AggregateTrackCandidates(artistClean, titleClean, clusterCandidates);
+                    }
+
+                    // Store candidates and consensus status under mutex
+                    {
+                        std::lock_guard<std::mutex> lock(m_candidatesMutex);
+                        for (size_t idx : indices) {
+                            m_tagItems[idx].candidates = aggResult.allCandidates;
+                            m_tagItems[idx].hasConflict = aggResult.hasConflict;
+                            m_tagItems[idx].confidenceScore = aggResult.confidence;
+                            m_tagItems[idx].selectedCandidateIndex = -1;
+                            m_tagItems[idx].selectedCandidateIdx = -1;
+                        }
+                    }
+
+                    if (!aggResult.hasConflict && aggResult.confidence >= 0.80) {
+                        LOG_INFO("[CONSENSUS APPROVED] High confidence (" + std::to_string(static_cast<int>(aggResult.confidence * 100)) + "%) from " +
+                                 aggResult.bestCandidate.providerName + " for cluster: " + artistClean + " - " + albumClean);
+                        if (cacheResult.isMatched) {
+                            std::string bestAlb = PickBestName(cacheResult.albumRomaji, cacheResult.albumEnglish, cacheResult.albumJapanese, "");
+                            std::string bestArt = PickBestName(cacheResult.artistRomaji, cacheResult.artistEnglish, cacheResult.artistJapanese, "");
+
+                            for (size_t idx : indices) {
+                                auto& item = m_tagItems[idx];
+                                item.isMusicBrainzMatched = true;
+                                item.onlineCoverBytes = cacheResult.coverBytes;
+                                item.onlineCoverSource = cacheResult.coverSource;
+                                item.matchTier = cacheResult.matchTier;
+                                item.releaseGroupMbId = cacheResult.releaseGroupMbId;
+                                item.albumRomaji = cacheResult.albumRomaji;
+                                item.albumEnglish = cacheResult.albumEnglish;
+                                item.albumJapanese = cacheResult.albumJapanese;
+                                item.artistRomaji = cacheResult.artistRomaji;
+                                item.artistEnglish = cacheResult.artistEnglish;
+                                item.artistJapanese = cacheResult.artistJapanese;
+
+                                if (!bestAlb.empty()) strncpy_s(item.albumBuf, bestAlb.c_str(), sizeof(item.albumBuf) - 1);
+                                if (!bestArt.empty()) strncpy_s(item.artistBuf, bestArt.c_str(), sizeof(item.artistBuf) - 1);
+                                if (!cacheResult.firstReleaseDate.empty()) {
+                                    strncpy_s(item.yearBuf, cacheResult.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
+                                }
+
+                                if (!cacheResult.tracks.empty()) {
+                                    ApplyTrackMatch(item, cacheResult.tracks);
+                                }
+                            }
+                        } else if (!aggResult.allCandidates.empty()) {
+                            for (size_t idx : indices) {
+                                ApplyCandidateToTrack(idx, aggResult.bestCandidate);
                             }
                         }
                     } else {
+                        LOG_WARN("[CONSENSUS REVIEW NEEDED] " + aggResult.conflictReason + " for cluster: " + artistClean + " - " + albumClean);
                         for (size_t idx : indices) {
                             auto& item = m_tagItems[idx];
                             item.isMusicBrainzMatched = false;
+                            item.hasConflict = true;
                         }
                     }
 
