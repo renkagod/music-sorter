@@ -952,6 +952,30 @@ inline std::string NormalizeKey(const std::string& text) {
             continue;
         }
 
+        // UTF-8 Cyrillic uppercase to lowercase
+        if (c == 0xD0 && i + 1 < text.size()) {
+            unsigned char c2 = (unsigned char)text[i + 1];
+            if (c2 >= 0x90 && c2 <= 0x9F) {
+                // А-П -> а-п (0xD0 0xB0 .. 0xBF)
+                result.push_back((char)0xD0);
+                result.push_back((char)(c2 + 0x20));
+                i++;
+                continue;
+            } else if (c2 >= 0xA0 && c2 <= 0xAF) {
+                // Р-Я -> р-я (0xD1 0x80 .. 0x8F)
+                result.push_back((char)0xD1);
+                result.push_back((char)(c2 - 0x20));
+                i++;
+                continue;
+            } else if (c2 == 0x81) {
+                // Ё -> ё (0xD1 0x91)
+                result.push_back((char)0xD1);
+                result.push_back((char)0x91);
+                i++;
+                continue;
+            }
+        }
+
         if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
         result.push_back((char)c);
     }
@@ -1243,16 +1267,183 @@ inline size_t LevenshteinDistance(const std::string& s1, const std::string& s2) 
     return ComputeLevenshteinDistance(s1, s2);
 }
 
-inline int ExtractTrailingOrEmbeddedNumber(const std::string& str) {
-    int lastNum = -1;
+inline int ParseRomanNumeralWord(const std::string& word) {
+    if (word.empty()) return -1;
+    std::string up = word;
+    for (char& c : up) c = (char)::toupper((unsigned char)c);
+
+    while (!up.empty() && (up.back() == '.' || up.back() == ',' || up.back() == ':' || up.back() == ';')) {
+        up.pop_back();
+    }
+    if (up.empty()) return -1;
+
+    static const std::unordered_map<std::string, int> romanMap = {
+        {"I", 1}, {"II", 2}, {"III", 3}, {"IV", 4}, {"V", 5},
+        {"VI", 6}, {"VII", 7}, {"VIII", 8}, {"IX", 9}, {"X", 10},
+        {"XI", 11}, {"XII", 12}, {"XIII", 13}, {"XIV", 14}, {"XV", 15},
+        {"XVI", 16}, {"XVII", 17}, {"XVIII", 18}, {"XIX", 19}, {"XX", 20},
+        {"XXI", 21}, {"XXII", 22}, {"XXIII", 23}, {"XXIV", 24}, {"XXV", 25}
+    };
+    auto it = romanMap.find(up);
+    if (it != romanMap.end()) return it->second;
+    return -1;
+}
+
+inline std::string StripMetadataAnnotations(const std::string& str) {
+    if (str.empty()) return "";
+    std::string result;
+    result.reserve(str.size());
+
     for (size_t i = 0; i < str.size(); ++i) {
-        if (std::isdigit((unsigned char)str[i])) {
+        char openBracket = str[i];
+        if (openBracket == '(' || openBracket == '[' || openBracket == '{') {
+            char closeBracket = (openBracket == '(') ? ')' : (openBracket == '[') ? ']' : '}';
+            size_t closePos = str.find(closeBracket, i + 1);
+            if (closePos != std::string::npos) {
+                std::string inner = str.substr(i + 1, closePos - (i + 1));
+                std::string lowerInner = inner;
+                for (char& c : lowerInner) c = (char)::tolower((unsigned char)c);
+
+                bool hasSequelKeyword = (lowerInner.find("part") != std::string::npos ||
+                                         lowerInner.find("pt") != std::string::npos ||
+                                         lowerInner.find("act") != std::string::npos ||
+                                         lowerInner.find("vol") != std::string::npos ||
+                                         lowerInner.find("suite") != std::string::npos ||
+                                         lowerInner.find("movement") != std::string::npos ||
+                                         lowerInner.find("chapter") != std::string::npos ||
+                                         lowerInner.find("no.") != std::string::npos ||
+                                         lowerInner.find("no ") != std::string::npos ||
+                                         lowerInner.find("#") != std::string::npos);
+
+                bool isMetadata = (lowerInner.find("remaster") != std::string::npos ||
+                                   lowerInner.find("mix") != std::string::npos ||
+                                   lowerInner.find("edition") != std::string::npos ||
+                                   lowerInner.find("version") != std::string::npos ||
+                                   lowerInner.find("ver.") != std::string::npos ||
+                                   lowerInner.find("bpm") != std::string::npos ||
+                                   lowerInner.find("kbps") != std::string::npos ||
+                                   lowerInner.find("anniversary") != std::string::npos ||
+                                   lowerInner.find("deluxe") != std::string::npos ||
+                                   lowerInner.find("re-recorded") != std::string::npos ||
+                                   lowerInner.find("live") != std::string::npos ||
+                                   lowerInner.find("bonus") != std::string::npos ||
+                                   lowerInner.find("mono") != std::string::npos ||
+                                   lowerInner.find("stereo") != std::string::npos ||
+                                   lowerInner.find("instrumental") != std::string::npos ||
+                                   lowerInner.find("off vocal") != std::string::npos ||
+                                   lowerInner.find("karaoke") != std::string::npos ||
+                                   lowerInner.find("backing track") != std::string::npos);
+
+                if (!isMetadata) {
+                    std::string trimmedInner;
+                    for (char c : lowerInner) if ((unsigned char)c > 32) trimmedInner.push_back(c);
+                    if (trimmedInner.size() == 4 && std::isdigit((unsigned char)trimmedInner[0])) {
+                        try {
+                            int y = std::stoi(trimmedInner);
+                            if (y >= 1900 && y <= 2099) isMetadata = true;
+                        } catch (...) {}
+                    }
+                }
+
+                if (isMetadata && !hasSequelKeyword) {
+                    i = closePos;
+                    continue;
+                }
+            }
+        }
+        result.push_back(str[i]);
+    }
+    return result;
+}
+
+inline int ExtractTrailingOrEmbeddedNumber(const std::string& str) {
+    if (str.empty()) return -1;
+    std::string clean = StripMetadataAnnotations(str);
+
+    std::vector<std::string> words;
+    std::string curWord;
+    for (size_t i = 0; i < clean.size(); ++i) {
+        unsigned char c = (unsigned char)clean[i];
+        if (std::isalnum(c) || c == '#' || c >= 0x80) {
+            curWord.push_back((char)c);
+        } else {
+            if (!curWord.empty()) {
+                words.push_back(curWord);
+                curWord.clear();
+            }
+        }
+    }
+    if (!curWord.empty()) words.push_back(curWord);
+
+    // 1. Check for sequel keywords followed by number or Roman numeral
+    for (size_t i = 0; i < words.size(); ++i) {
+        std::string w = words[i];
+        for (char& c : w) c = (char)::tolower((unsigned char)c);
+        bool isKeyword = (w == "part" || w == "pt" || w == "act" || w == "vol" ||
+                          w == "volume" || w == "suite" || w == "movement" ||
+                          w == "chapter" || w == "no" || w == "#" || w == "track");
+        if (isKeyword && i + 1 < words.size()) {
+            const std::string& next = words[i + 1];
+            int rn = ParseRomanNumeralWord(next);
+            if (rn > 0) return rn;
+            bool isAllDigits = true;
+            for (char c : next) {
+                if (!std::isdigit((unsigned char)c)) { isAllDigits = false; break; }
+            }
+            if (isAllDigits && !next.empty()) {
+                try {
+                    int val = std::stoi(next);
+                    if (!(val >= 1900 && val <= 2099 && next.size() == 4)) {
+                        return val;
+                    }
+                } catch (...) {}
+            }
+        }
+    }
+
+    // 2. Check for trailing Roman numeral at the end of the cleaned title
+    if (!words.empty()) {
+        const std::string& last = words.back();
+        int rn = ParseRomanNumeralWord(last);
+        if (rn > 1) {
+            return rn;
+        }
+        if (rn == 1 && words.size() >= 2) {
+            std::string prev = words[words.size() - 2];
+            for (char& c : prev) c = (char)::tolower((unsigned char)c);
+            if (prev == "part" || prev == "pt" || prev == "act" || prev == "vol" ||
+                prev == "volume" || prev == "suite" || prev == "no" || prev == "#") {
+                return 1;
+            }
+        } else if (rn == 1 && words.size() == 1) {
+            return 1;
+        }
+    }
+
+    // 3. Scan for trailing or embedded Arabic numbers, ignoring 4-digit years (1900-2099)
+    int lastNum = -1;
+    for (size_t i = 0; i < clean.size(); ++i) {
+        if (std::isdigit((unsigned char)clean[i])) {
             size_t start = i;
-            while (i < str.size() && std::isdigit((unsigned char)str[i])) {
+            while (i < clean.size() && std::isdigit((unsigned char)clean[i])) {
                 ++i;
             }
+            std::string numStr = clean.substr(start, i - start);
             try {
-                lastNum = std::stoi(str.substr(start, i - start));
+                int val = std::stoi(numStr);
+                if (val >= 1900 && val <= 2099 && numStr.size() == 4) {
+                    continue;
+                }
+                size_t after = clean.find_first_not_of(" \t", i);
+                if (after != std::string::npos) {
+                    std::string rest = clean.substr(after);
+                    for (char& c : rest) c = (char)::tolower((unsigned char)c);
+                    if (rest.rfind("bpm", 0) == 0 || rest.rfind("kbps", 0) == 0 ||
+                        rest.rfind("khz", 0) == 0 || rest.rfind("hz", 0) == 0) {
+                        continue;
+                    }
+                }
+                lastNum = val;
             } catch (...) {}
         }
     }
@@ -1277,6 +1468,29 @@ inline bool IsUnknownArtist(const std::string& artist) {
         norm == "music" || norm == "media") {
         return true;
     }
+
+    // Generic track labels: "Track", "Track 01", "Track 02", "Track 1", "AudioTrack 01", etc.
+    if (norm.rfind("track", 0) == 0) {
+        bool allDigits = true;
+        for (size_t i = 5; i < norm.size(); ++i) {
+            if (!std::isdigit((unsigned char)norm[i])) {
+                allDigits = false;
+                break;
+            }
+        }
+        if (allDigits) return true;
+    }
+    if (norm.rfind("audiotrack", 0) == 0) {
+        bool allDigits = true;
+        for (size_t i = 10; i < norm.size(); ++i) {
+            if (!std::isdigit((unsigned char)norm[i])) {
+                allDigits = false;
+                break;
+            }
+        }
+        if (allDigits) return true;
+    }
+
     return false;
 }
 
@@ -1340,22 +1554,15 @@ inline double ComputeStringSimilarity(const std::string& s1, const std::string& 
         if (levSim < 0.0) levSim = 0.0;
     }
 
-    double subSim = 0.0;
-    if (!n1.empty() && !n2.empty() && maxLen > 0) {
-        if (n1.find(n2) != std::string::npos || n2.find(n1) != std::string::npos) {
-            subSim = (double)(std::min)(n1.size(), n2.size()) / (double)maxLen;
-        }
-    }
-
     auto tok1 = TokenizeWords(s1);
     auto tok2 = TokenizeWords(s2);
     double tokenSim = 0.0;
     double containmentSim = 0.0;
+    int commonCount = 0;
 
     if (!tok1.empty() && !tok2.empty()) {
         std::unordered_map<std::string, int> countMap;
         for (const auto& t : tok1) countMap[t]++;
-        int commonCount = 0;
         for (const auto& t : tok2) {
             auto it = countMap.find(t);
             if (it != countMap.end() && it->second > 0) {
@@ -1371,16 +1578,40 @@ inline double ComputeStringSimilarity(const std::string& s1, const std::string& 
 
         int minTokens = (int)(std::min)(tok1.size(), tok2.size());
         int maxTokens = (int)(std::max)(tok1.size(), tok2.size());
-        if (minTokens > 0 && commonCount == minTokens) {
+        // Only provide containment bonus if there are at least 2 tokens fully contained
+        // This prevents 1-word stop words/generic words ("The", "One", "Daft", "Run") from inflating similarity
+        if (minTokens >= 2 && commonCount == minTokens) {
             containmentSim = 0.80 + 0.15 * ((double)minTokens / (double)maxTokens);
         }
     }
 
+    // Substring containment for unspaced / CJK strings:
+    // Only apply if the shorter string constitutes at least 70% of the longer string,
+    // and use the raw ratio without an artificial +0.80 baseline.
+    double subSim = 0.0;
     if (!low1.empty() && !low2.empty()) {
         if (low1.find(low2) != std::string::npos || low2.find(low1) != std::string::npos) {
             double rawSubRatio = (double)(std::min)(low1.size(), low2.size()) / (double)(std::max)(low1.size(), low2.size());
-            double rawSubScore = 0.80 + 0.15 * rawSubRatio;
-            if (rawSubScore > containmentSim) containmentSim = rawSubScore;
+            if (rawSubRatio >= 0.70) {
+                subSim = rawSubRatio;
+            }
+        }
+    }
+
+    // When there are NO shared word tokens (commonCount == 0), check word boundaries for Levenshtein:
+    // If a much shorter string (length ratio < 0.60) does NOT align with either prefix or suffix boundary,
+    // scale levSim so incidental internal character matches (e.g. "Cat" in "Sophisticated", "War" in "Software") are discounted.
+    if (commonCount == 0 && levSim > 0.0 && !n1.empty() && !n2.empty()) {
+        const std::string& shorter = (n1.size() <= n2.size()) ? n1 : n2;
+        const std::string& longer = (n1.size() <= n2.size()) ? n2 : n1;
+        double lenRatio = (double)shorter.size() / (double)longer.size();
+        if (lenRatio < 0.60) {
+            bool isPrefix = (longer.rfind(shorter, 0) == 0);
+            bool isSuffix = (longer.size() >= shorter.size() &&
+                             longer.compare(longer.size() - shorter.size(), shorter.size(), shorter) == 0);
+            if (!isPrefix && !isSuffix) {
+                levSim *= 0.85;
+            }
         }
     }
 
@@ -1519,7 +1750,7 @@ inline bool ValidateLyricMatch(
         return false;
     }
 
-    if (IsInstrumentalTitle(trackTitle)) {
+    if (IsInstrumentalTitle(trackTitle) || IsInstrumentalTitle(lyricTitle)) {
         return false;
     }
 

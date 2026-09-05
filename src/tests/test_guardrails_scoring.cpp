@@ -490,3 +490,93 @@ TEST_CASE("Guardrail Scoring", "Real-World Scenario 4: Touhou Circle FELT Stand 
     ASSERT_GE(result.confidence, 0.95);
     ASSERT_NEAR(result.tracklistOverlap, 1.0, 0.001);
 }
+
+// ============================================================================
+// TIER 5: MILESTONE 2 REMEDIATION REGRESSION TESTS
+// ============================================================================
+
+TEST_CASE("Guardrail Scoring", "Regression: Character Substring Inflation Rejected Without Floor") {
+    // Arbitrary substrings must not receive an artificial 0.80 floor
+    double catSim = ComputeStringSimilarity("Cat", "Sophisticated");
+    ASSERT_LT(catSim, 0.40);
+
+    double queenSim = ComputeStringSimilarity("Queen", "Queensryche");
+    ASSERT_LT(queenSim, 0.60);
+
+    double aSim = ComputeStringSimilarity("a", "Daft Punk");
+    ASSERT_LT(aSim, 0.25);
+
+    double warSim = ComputeStringSimilarity("War", "Software");
+    ASSERT_LT(warSim, 0.35);
+
+    double lowSim = ComputeStringSimilarity("Low", "Slow Down");
+    ASSERT_LT(lowSim, 0.40);
+
+    // Lyric matches across near-miss or substring collisions must be rejected
+    ASSERT_FALSE(ValidateLyricMatch("Queen", "Silent Lucidity", "Queensryche", "Silent Lucidity"));
+    ASSERT_FALSE(ValidateLyricMatch("War", "Low", "Software", "Slow Down"));
+    ASSERT_FALSE(ValidateLyricMatch("Metallica", "Master of Puppets", "Metal", "Master of Puppets"));
+    ASSERT_FALSE(ValidateLyricMatch("Metal", "One", "Metallica", "One"));
+    ASSERT_FALSE(ValidateLyricMatch("Daft Punk", "One More Time", "Daft", "One More Time"));
+
+    // Single-token containment must not inflate title similarity
+    ASSERT_FALSE(ValidateLyricMatch("Daft Punk", "One", "Daft Punk", "One More Time"));
+    ASSERT_FALSE(ValidateLyricMatch("Bruce Springsteen", "Run", "Bruce Springsteen", "Born to Run"));
+    ASSERT_FALSE(ValidateLyricMatch("The Beatles", "Yesterday", "The", "Yesterday"));
+    ASSERT_FALSE(ValidateLyricMatch("The Who", "My Generation", "The", "My Generation"));
+}
+
+TEST_CASE("Guardrail Scoring", "Regression: Roman Numeral Sequel Parsing and Remaster Year Handling") {
+    // Roman numeral sequels must be correctly distinguished
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Part I"), 1);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Part II"), 2);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Another Brick in the Wall, Part I"), 1);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Another Brick in the Wall, Part II"), 2);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Act I"), 1);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Act II"), 2);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Nightlight II"), 2);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Suite No. 1"), 1);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Suite No. 2"), 2);
+
+    ASSERT_FALSE(ValidateLyricMatch("Pink Floyd", "Part I", "Pink Floyd", "Part II"));
+    ASSERT_FALSE(ValidateLyricMatch("Pink Floyd", "Another Brick in the Wall, Part I", "Pink Floyd", "Another Brick in the Wall, Part II"));
+    ASSERT_FALSE(ValidateLyricMatch("Artist", "Act I", "Artist", "Act II"));
+    ASSERT_FALSE(ValidateLyricMatch("Bach", "Suite No. 1", "Bach", "Suite No. 2"));
+
+    // Remaster/release years (1900-2099) and technical specs (bpm) must not be treated as sequels
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Hotel California (2013 Remaster)"), -1);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Hotel California (2020 Remaster)"), -1);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Arm Breaker (400 BPM)"), -1);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Track 2 (2024 Remaster)"), 2);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Track 2"), 2);
+    ASSERT_EQ(ExtractTrailingOrEmbeddedNumber("Soulless 3 (380 BPM)"), 3);
+
+    ASSERT_TRUE(ValidateLyricMatch("Eagles", "Hotel California (2013 Remaster)", "Eagles", "Hotel California (2020 Remaster)"));
+    ASSERT_TRUE(ValidateLyricMatch("Artist", "Track 2 (2024 Remaster)", "Artist", "Track 2"));
+    ASSERT_TRUE(ValidateLyricMatch("ExileLord", "Soulless 3 (380 BPM)", "ExileLord", "Soulless 3"));
+}
+
+TEST_CASE("Guardrail Scoring", "Regression: Bilateral Instrumental and Off-Vocal Validation") {
+    // Track title instrumental checks
+    ASSERT_FALSE(ValidateLyricMatch("Hans Zimmer", "Time (Instrumental)", "Hans Zimmer", "Time"));
+    ASSERT_FALSE(ValidateLyricMatch("Artist", "Song [Off Vocal]", "Artist", "Song"));
+
+    // Candidate lyric title instrumental checks (bilateral)
+    ASSERT_FALSE(ValidateLyricMatch("Hans Zimmer", "Time", "Hans Zimmer", "Time (Instrumental)"));
+    ASSERT_FALSE(ValidateLyricMatch("Artist", "Song", "Artist", "Song [Off Vocal]"));
+    ASSERT_FALSE(ValidateLyricMatch("Artist", "Song", "Artist", "Song Karaoke"));
+    ASSERT_FALSE(ValidateLyricMatch("Artist", "Song", "Artist", "Song (Backing Track)"));
+}
+
+TEST_CASE("Guardrail Scoring", "Regression: Generic Track Labels Classified as Unknown Artist") {
+    ASSERT_TRUE(IsUnknownArtist("Track"));
+    ASSERT_TRUE(IsUnknownArtist("Track 01"));
+    ASSERT_TRUE(IsUnknownArtist("Track 02"));
+    ASSERT_TRUE(IsUnknownArtist("Track 1"));
+    ASSERT_TRUE(IsUnknownArtist("AudioTrack 01"));
+
+    ASSERT_FALSE(ValidateLyricMatch("Track 01", "Song Title", "Popular Artist", "Song Title"));
+    ASSERT_FALSE(ValidateLyricMatch("Track 02", "Song Title", "Track 02", "Song Title"));
+    ASSERT_FALSE(ValidateLyricMatch("Track 03", "Song Title", "Artist", "Song Title"));
+}
+
