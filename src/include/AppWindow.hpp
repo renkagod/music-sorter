@@ -68,6 +68,7 @@ struct TagReviewItem {
     bool isFetchCompleted = false;
     bool isProcessed = false;
     bool hasLyrics = false;
+    bool isSingleTrack{false};
     double duration = 0.0;
     MatchTier matchTier = MatchTier::Niche_Local;
     std::string releaseGroupMbId;

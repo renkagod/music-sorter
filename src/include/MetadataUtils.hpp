@@ -191,6 +191,382 @@ inline bool ContainsCJK(const std::string& str) {
     return false;
 }
 
+struct ParsedFilenameInfo {
+    std::string artist;
+    std::string album;
+    std::string title;
+    int trackNumber{0};
+    bool hasArtist{false};
+    bool hasAlbum{false};
+    bool hasTrackNumber{false};
+};
+
+namespace detail {
+
+inline std::string TrimWhitespace(const std::string& str) {
+    if (str.empty()) return "";
+    size_t first = 0;
+    while (first < str.size()) {
+        unsigned char c = (unsigned char)str[first];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f') {
+            first++;
+            continue;
+        }
+        if (c == 0xE3 && first + 2 < str.size() &&
+            (unsigned char)str[first + 1] == 0x80 &&
+            (unsigned char)str[first + 2] == 0x80) {
+            first += 3;
+            continue;
+        }
+        break;
+    }
+    if (first >= str.size()) return "";
+
+    size_t last = str.size() - 1;
+    while (last >= first) {
+        unsigned char c = (unsigned char)str[last];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f') {
+            if (last == 0) break;
+            last--;
+            continue;
+        }
+        if (last >= 2 && (unsigned char)str[last - 2] == 0xE3 &&
+            (unsigned char)str[last - 1] == 0x80 && c == 0x80) {
+            last -= 3;
+            continue;
+        }
+        break;
+    }
+    return str.substr(first, last - first + 1);
+}
+
+inline bool IsAllDigits(const std::string& str) {
+    if (str.empty()) return false;
+    for (char c : str) {
+        if (!std::isdigit((unsigned char)c)) return false;
+    }
+    return true;
+}
+
+inline size_t Utf8CharCount(const std::string& str) {
+    size_t count = 0;
+    for (size_t i = 0; i < str.size(); ) {
+        unsigned char c = (unsigned char)str[i];
+        if (c < 0x80) i += 1;
+        else if ((c & 0xE0) == 0xC0) i += 2;
+        else if ((c & 0xF0) == 0xE0) i += 3;
+        else if ((c & 0xF8) == 0xF0) i += 4;
+        else i += 1;
+        count++;
+    }
+    return count;
+}
+
+inline std::string StripPathAndExtension(const std::string& filepath) {
+    std::string s = filepath;
+    size_t lastSlash = s.find_last_of("/\\");
+    if (lastSlash != std::string::npos) {
+        s = s.substr(lastSlash + 1);
+    }
+
+    size_t dot = s.rfind('.');
+    if (dot != std::string::npos && dot > 0) {
+        std::string ext = s.substr(dot);
+        std::string extLower = ext;
+        std::transform(extLower.begin(), extLower.end(), extLower.begin(), ::tolower);
+        if (extLower == ".mp3" || extLower == ".flac" || extLower == ".wav" ||
+            extLower == ".m4a" || extLower == ".aac" || extLower == ".ogg" ||
+            extLower == ".opus" || extLower == ".wma" || extLower == ".aiff" ||
+            extLower == ".ape") {
+            s = s.substr(0, dot);
+        }
+    }
+    return s;
+}
+
+inline std::string NormalizeDelimiters(const std::string& input) {
+    std::string s = input;
+    if (s.find("_-_") != std::string::npos) {
+        size_t pos = 0;
+        while ((pos = s.find("_-_", pos)) != std::string::npos) {
+            s.replace(pos, 3, " - ");
+            pos += 3;
+        }
+        for (char& c : s) {
+            if (c == '_') c = ' ';
+        }
+    }
+
+    size_t pos = 0;
+    while ((pos = s.find(" -- ", pos)) != std::string::npos) {
+        s.replace(pos, 4, " - ");
+        pos += 3;
+    }
+
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ) {
+        if (i + 2 < s.size() && (unsigned char)s[i] == 0xE3 && (unsigned char)s[i+1] == 0x80 && (unsigned char)s[i+2] == 0x80) {
+            out += ' ';
+            i += 3;
+        } else if (i + 2 < s.size() && (unsigned char)s[i] == 0xE2 && (unsigned char)s[i+1] == 0x80 &&
+            ((unsigned char)s[i+2] == 0x93 || (unsigned char)s[i+2] == 0x94)) {
+            out += " - ";
+            i += 3;
+        } else if (i + 2 < s.size() && (unsigned char)s[i] == 0xEF && (unsigned char)s[i+1] == 0xBC && (unsigned char)s[i+2] == 0x8D) {
+            out += " - ";
+            i += 3;
+        } else {
+            out += s[i];
+            i++;
+        }
+    }
+    return out;
+}
+
+inline std::vector<std::string> SplitByDash(const std::string& str) {
+    std::vector<std::string> tokens;
+    std::string delimiter = " - ";
+    size_t start = 0;
+    size_t end = str.find(delimiter);
+    while (end != std::string::npos) {
+        std::string token = TrimWhitespace(str.substr(start, end - start));
+        if (!token.empty()) tokens.push_back(token);
+        start = end + delimiter.length();
+        end = str.find(delimiter, start);
+    }
+    std::string lastToken = TrimWhitespace(str.substr(start));
+    if (!lastToken.empty()) tokens.push_back(lastToken);
+    return tokens;
+}
+
+} // namespace detail
+
+inline ParsedFilenameInfo ParseFilenameHeuristic(const std::string& input) {
+    ParsedFilenameInfo res;
+    if (input.empty()) return res;
+
+    std::string s = detail::StripPathAndExtension(input);
+    s = detail::NormalizeDelimiters(s);
+    s = detail::TrimWhitespace(s);
+    if (s.empty()) return res;
+
+    // Step 1: Extract leading brackets (e.g. circle, artist, year, event tags)
+    std::string bracketArtist;
+    while (!s.empty() && (s.front() == '[' || s.front() == '(')) {
+        char closeChar = (s.front() == '[') ? ']' : ')';
+        size_t closePos = s.find(closeChar);
+        if (closePos == std::string::npos || closePos <= 1) break;
+
+        std::string content = detail::TrimWhitespace(s.substr(1, closePos - 1));
+        std::string contentLower = content;
+        std::transform(contentLower.begin(), contentLower.end(), contentLower.begin(), ::tolower);
+
+        bool isYear = (content.size() == 4 && detail::IsAllDigits(content));
+        bool isTech = (contentLower == "flac" || contentLower == "320k" || contentLower == "mp3" ||
+                       contentLower == "official video" || contentLower == "official audio" ||
+                       contentLower == "mv" || contentLower == "audio");
+        bool isEvent = (contentLower.find("c7") == 0 || contentLower.find("c8") == 0 ||
+                        contentLower.find("c9") == 0 || contentLower.find("c10") == 0 ||
+                        contentLower.find("m3") != std::string::npos ||
+                        contentLower.find("reitaisai") != std::string::npos ||
+                        contentLower.find("comic market") != std::string::npos);
+        bool isCatalog = (content.size() <= 12 && content.find('-') != std::string::npos &&
+                          !content.empty() && std::isdigit((unsigned char)content.back()));
+
+        if (!isYear && !isTech && !isEvent && !isCatalog && !content.empty()) {
+            if (bracketArtist.empty()) {
+                bracketArtist = content;
+            }
+        }
+        s = detail::TrimWhitespace(s.substr(closePos + 1));
+    }
+
+    if (s.empty()) {
+        if (!bracketArtist.empty()) {
+            res.title = bracketArtist;
+        }
+        res.hasArtist = !res.artist.empty();
+        res.hasAlbum = !res.album.empty();
+        res.hasTrackNumber = (res.trackNumber > 0);
+        return res;
+    }
+
+    // Step 2: Extract leading track number
+    std::regex discTrackRegex(R"(^(\d{1,2})[-.](\d{1,3})\s*[-._\s]\s*(.*)$)");
+    std::smatch match;
+    if (std::regex_match(s, match, discTrackRegex)) {
+        try {
+            res.trackNumber = std::stoi(match.str(2));
+            res.hasTrackNumber = true;
+            s = detail::TrimWhitespace(match.str(3));
+        } catch (...) {}
+    } else {
+        std::regex numPrefixDelimRegex(R"(^(\d{1,3})\s*[\.\-_]\s*(.*)$)");
+        if (std::regex_match(s, match, numPrefixDelimRegex)) {
+            try {
+                res.trackNumber = std::stoi(match.str(1));
+                res.hasTrackNumber = true;
+                s = detail::TrimWhitespace(match.str(2));
+            } catch (...) {}
+        } else {
+            std::regex numSpaceRegex(R"(^(\d{1,3})\s+(.*)$)");
+            if (std::regex_match(s, match, numSpaceRegex)) {
+                std::string numStr = match.str(1);
+                std::string rest = match.str(2);
+                bool hasDash = (rest.find(" - ") != std::string::npos);
+                if (!hasDash || (numStr.size() >= 2 && numStr[0] == '0')) {
+                    try {
+                        res.trackNumber = std::stoi(numStr);
+                        res.hasTrackNumber = true;
+                        s = detail::TrimWhitespace(rest);
+                    } catch (...) {}
+                }
+            }
+        }
+    }
+
+    while (!s.empty() && (s.front() == '-' || s.front() == '.' || s.front() == '_') && s.size() > 1 && s[1] == ' ') {
+        s = detail::TrimWhitespace(s.substr(2));
+    }
+
+    // Step 3: Check trailing track numbers
+    if (!res.hasTrackNumber) {
+        std::regex trailDashTrackRegex(R"(^(.*?)\s*-\s*(\d{1,3})$)");
+        if (std::regex_match(s, match, trailDashTrackRegex)) {
+            try {
+                res.trackNumber = std::stoi(match.str(2));
+                res.hasTrackNumber = true;
+                s = detail::TrimWhitespace(match.str(1));
+            } catch (...) {}
+        } else {
+            std::regex trailParenTrackRegex(R"(^(.*?)\s*[\(\[](\d{1,3})[\)\]]$)");
+            if (std::regex_match(s, match, trailParenTrackRegex)) {
+                try {
+                    res.trackNumber = std::stoi(match.str(2));
+                    res.hasTrackNumber = true;
+                    s = detail::TrimWhitespace(match.str(1));
+                } catch (...) {}
+            }
+        }
+    }
+
+    // Step 4: Tokenize by " - "
+    auto tokens = detail::SplitByDash(s);
+
+    if (tokens.empty()) {
+        if (!bracketArtist.empty()) {
+            res.artist = bracketArtist;
+        }
+        res.title = s;
+    } else if (tokens.size() == 1) {
+        if (!bracketArtist.empty()) {
+            res.artist = bracketArtist;
+        }
+        res.title = tokens[0];
+    } else if (tokens.size() == 2) {
+        if (!res.hasTrackNumber && detail::IsAllDigits(tokens[0])) {
+            try {
+                res.trackNumber = std::stoi(tokens[0]);
+                res.hasTrackNumber = true;
+                res.title = tokens[1];
+                if (!bracketArtist.empty()) {
+                    res.artist = bracketArtist;
+                }
+            } catch (...) {}
+        } else if (!bracketArtist.empty()) {
+            std::string bracketLower = bracketArtist;
+            std::transform(bracketLower.begin(), bracketLower.end(), bracketLower.begin(), ::tolower);
+            bool isLabel = (bracketLower.find("records") != std::string::npos ||
+                            bracketLower.find("record") != std::string::npos ||
+                            bracketLower.find("circle") != std::string::npos ||
+                            bracketLower.find("label") != std::string::npos ||
+                            bracketLower.find("sound") != std::string::npos ||
+                            bracketLower.find("studio") != std::string::npos);
+            if (isLabel) {
+                res.artist = tokens[0];
+                res.title = tokens[1];
+            } else if (detail::Utf8CharCount(tokens[0]) <= 2 && ContainsCJK(tokens[0])) {
+                res.artist = bracketArtist;
+                res.title = tokens[0] + " - " + tokens[1];
+            } else {
+                res.artist = tokens[0];
+                res.title = tokens[1];
+            }
+        } else {
+            res.artist = tokens[0];
+            res.title = tokens[1];
+        }
+    } else if (tokens.size() == 3) {
+        if (!res.hasTrackNumber && detail::IsAllDigits(tokens[0])) {
+            try {
+                res.trackNumber = std::stoi(tokens[0]);
+                res.artist = tokens[1];
+                res.title = tokens[2];
+            } catch (...) {}
+        } else if (detail::IsAllDigits(tokens[1])) {
+            try {
+                res.trackNumber = std::stoi(tokens[1]);
+                res.artist = tokens[0];
+                res.title = tokens[2];
+            } catch (...) {}
+        } else if (!res.hasTrackNumber && detail::IsAllDigits(tokens[2])) {
+            try {
+                res.trackNumber = std::stoi(tokens[2]);
+                res.artist = tokens[0];
+                res.title = tokens[1];
+            } catch (...) {}
+        } else {
+            res.artist = tokens[0];
+            res.title = tokens[1] + " - " + tokens[2];
+        }
+    } else if (tokens.size() == 4) {
+        if (detail::IsAllDigits(tokens[2])) {
+            try {
+                res.artist = tokens[0];
+                res.album = tokens[1];
+                res.trackNumber = std::stoi(tokens[2]);
+                res.title = tokens[3];
+            } catch (...) {}
+        } else if (!res.hasTrackNumber && detail::IsAllDigits(tokens[0])) {
+            try {
+                res.trackNumber = std::stoi(tokens[0]);
+                res.artist = tokens[1];
+                res.album = tokens[2];
+                res.title = tokens[3];
+            } catch (...) {}
+        } else {
+            res.artist = tokens[0];
+            res.title = tokens[1] + " - " + tokens[2] + " - " + tokens[3];
+        }
+    } else {
+        if (detail::IsAllDigits(tokens[2])) {
+            try {
+                res.artist = tokens[0];
+                res.album = tokens[1];
+                res.trackNumber = std::stoi(tokens[2]);
+                std::string remTitle = tokens[3];
+                for (size_t i = 4; i < tokens.size(); ++i) {
+                    remTitle += " - " + tokens[i];
+                }
+                res.title = remTitle;
+            } catch (...) {}
+        } else {
+            res.artist = tokens[0];
+            std::string remTitle = tokens[1];
+            for (size_t i = 2; i < tokens.size(); ++i) {
+                remTitle += " - " + tokens[i];
+            }
+            res.title = remTitle;
+        }
+    }
+
+    res.hasArtist = !res.artist.empty();
+    res.hasAlbum = !res.album.empty();
+    res.hasTrackNumber = (res.trackNumber > 0);
+    return res;
+}
+
 inline std::string Base64Decode(const std::string& in) {
     std::string out;
     std::vector<int> T(256, -1);

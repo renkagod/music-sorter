@@ -1420,20 +1420,38 @@ std::vector<size_t> AppWindow::GetAlbumTrackIndices(size_t referenceIndex) const
     if (referenceIndex >= m_tagItems.size()) return result;
 
     const auto& ref = m_tagItems[referenceIndex];
+    if (ref.isSingleTrack) {
+        return { referenceIndex };
+    }
+
     std::string refFolder = fs::path(ref.filePath).parent_path().string();
+    std::string refParentName = fs::path(ref.filePath).parent_path().filename().string();
+    std::string refParentKey = NormalizeKey(refParentName);
+    std::string refGrandParentName = fs::path(ref.filePath).parent_path().parent_path().filename().string();
+    std::string refGrandParentKey = NormalizeKey(refGrandParentName);
+
+    bool isStagingFolder = (refParentKey.empty() || refParentKey == "tosort" || refParentKey == "music" || refParentKey == "media" || refParentKey == "singles" || refParentKey == "downloads" ||
+                            refGrandParentKey == "tosort" || refGrandParentKey == "music" || refGrandParentKey == "media" || refGrandParentKey == "singles" || refGrandParentKey == "downloads");
+
     std::string refAlbumKey = NormalizeKey(ref.albumBuf);
     std::string refMbId = ref.releaseGroupMbId;
 
     for (size_t i = 0; i < m_tagItems.size(); ++i) {
         const auto& item = m_tagItems[i];
         if (item.isProcessed) continue;
+        if (item.isSingleTrack) {
+            if (i == referenceIndex) {
+                result.push_back(i);
+            }
+            continue;
+        }
 
         bool match = false;
-        if (!refFolder.empty() && fs::path(item.filePath).parent_path().string() == refFolder) {
+        if (!isStagingFolder && !refFolder.empty() && fs::path(item.filePath).parent_path().string() == refFolder) {
             match = true;
         } else if (!refMbId.empty() && item.releaseGroupMbId == refMbId) {
             match = true;
-        } else if (!refAlbumKey.empty() && refAlbumKey != "unknown" && refAlbumKey != "tosort" && refAlbumKey != "music" && refAlbumKey != "media") {
+        } else if (!refAlbumKey.empty() && refAlbumKey != "unknown" && refAlbumKey != "tosort" && refAlbumKey != "music" && refAlbumKey != "media" && refAlbumKey != "singles" && refAlbumKey != "downloads") {
             std::string itemAlbumKey = NormalizeKey(item.albumBuf);
             if (itemAlbumKey == refAlbumKey) {
                 match = true;
@@ -1748,7 +1766,9 @@ void AppWindow::RenderReleaseSummaryTable() {
 
         std::string albumClean(itm.albumBuf);
         std::string albumKey = NormalizeKey(albumClean);
-        if (albumKey.empty() || albumKey == "unknown" || albumKey == "tosort" || albumKey == "music" || albumKey == "media") {
+        if (itm.isSingleTrack) {
+            albumKey = "__single_track_" + std::to_string(i);
+        } else if (albumKey.empty() || albumKey == "unknown" || albumKey == "tosort" || albumKey == "music" || albumKey == "media") {
             albumKey = NormalizeKey(fs::path(itm.filePath).parent_path().string());
         }
 
@@ -2129,11 +2149,7 @@ void AppWindow::FetchManualMusicBrainzMetadata(const std::string& inputUrl, bool
 
         std::vector<size_t> targetIndices;
         if (applyToAllInAlbum) {
-            for (size_t i = 0; i < m_tagItems.size(); ++i) {
-                if (fs::path(m_tagItems[i].filePath).parent_path().string() == targetFolder) {
-                    targetIndices.push_back(i);
-                }
-            }
+            targetIndices = GetAlbumTrackIndices(m_currentTagIndex);
         } else {
             targetIndices.push_back(m_currentTagIndex);
         }
@@ -2259,11 +2275,7 @@ void AppWindow::FetchManualDiscogsMetadata(const std::string& inputUrl, bool app
 
         std::vector<size_t> targetIndices;
         if (applyToAllInAlbum) {
-            for (size_t i = 0; i < m_tagItems.size(); ++i) {
-                if (fs::path(m_tagItems[i].filePath).parent_path().string() == targetFolder) {
-                    targetIndices.push_back(i);
-                }
-            }
+            targetIndices = GetAlbumTrackIndices(m_currentTagIndex);
         } else {
             targetIndices.push_back(m_currentTagIndex);
         }
@@ -3939,25 +3951,55 @@ void AppWindow::StartTagScan() {
             std::string albumRaw = fs::path(files[i]).parent_path().filename().string();
             std::string yearStr = ExtractYearFromString(files[i]);
 
-            size_t dotPos = fn.find(". ");
-            if (dotPos == std::string::npos) dotPos = fn.find("- ");
-            if (dotPos == std::string::npos) dotPos = fn.find("_");
-            if (dotPos != std::string::npos && dotPos <= 4 && std::isdigit((unsigned char)fn[0])) {
-                trackNo = fn.substr(0, dotPos);
-                while (!trackNo.empty() && !std::isdigit((unsigned char)trackNo.back())) trackNo.pop_back();
-                if (trackNo.length() == 1) trackNo = "0" + trackNo;
-                title = fn.substr(dotPos + 1);
-                size_t first = title.find_first_not_of(" \t.-_");
-                if (first != std::string::npos) title = title.substr(first);
+            ParsedFilenameInfo parsed = ParseFilenameHeuristic(files[i]);
+
+            if (parsed.hasTrackNumber && parsed.trackNumber > 0) {
+                trackNo = (parsed.trackNumber < 10) ? ("0" + std::to_string(parsed.trackNumber)) : std::to_string(parsed.trackNumber);
+            }
+            if (!parsed.title.empty()) {
+                title = parsed.title;
             }
 
             std::string artistClean = CleanMetadataString(artistRaw);
-            if (artistClean.empty() || artistClean == "TO SORT" || artistClean == "media" || artistClean == "music") {
-                artistClean = ExtractArtistFromFilename(item.originalFilename);
-                if (artistClean.empty()) artistClean = "Unknown Artist";
+            std::string artistCleanKey = NormalizeKey(artistClean);
+            if (artistClean.empty() || artistCleanKey == "tosort" || artistCleanKey == "media" || artistCleanKey == "music" || artistCleanKey == "singles" || artistCleanKey == "downloads") {
+                if (parsed.hasArtist && !parsed.artist.empty()) {
+                    artistClean = parsed.artist;
+                } else {
+                    artistClean = ExtractArtistFromFilename(item.originalFilename);
+                    if (artistClean.empty()) artistClean = "Unknown Artist";
+                }
+            } else if (parsed.hasArtist && !parsed.artist.empty()) {
+                artistClean = parsed.artist;
             }
+
             std::string albumClean = CleanAlbumTitle(albumRaw);
             if (albumClean.empty()) albumClean = CleanMetadataString(albumRaw);
+            if (parsed.hasAlbum && !parsed.album.empty()) {
+                albumClean = parsed.album;
+            }
+
+            // Sanitize generic/staging folder names (albumClean must be cleared if it matches "TO SORT", "music", "media", "singles", "downloads", "tosort")
+            std::string albumCleanKey = NormalizeKey(albumClean);
+            if (albumCleanKey == "tosort" || albumCleanKey == "music" || albumCleanKey == "media" || albumCleanKey == "singles" || albumCleanKey == "downloads") {
+                albumClean = "";
+            }
+
+            // If folder name equals the artist name and filename had no album, this is an artist folder of singles
+            if (!parsed.hasAlbum && NormalizeKey(albumClean) == NormalizeKey(artistClean)) {
+                albumClean = "";
+            }
+
+            // If in a staging folder hierarchy and the filename did not specify an album, clear albumClean
+            std::string parentName = fs::path(files[i]).parent_path().filename().string();
+            std::string grandParentName = fs::path(files[i]).parent_path().parent_path().filename().string();
+            std::string parentKey = NormalizeKey(parentName);
+            std::string grandParentKey = NormalizeKey(grandParentName);
+            bool inStaging = (parentKey == "tosort" || parentKey == "music" || parentKey == "media" || parentKey == "singles" || parentKey == "downloads" ||
+                              grandParentKey == "tosort" || grandParentKey == "music" || grandParentKey == "media" || grandParentKey == "singles" || grandParentKey == "downloads");
+            if (inStaging && !parsed.hasAlbum) {
+                albumClean = "";
+            }
 
             item.embeddedArtist = artistClean;
             item.embeddedAlbum = albumClean;
@@ -4030,10 +4072,32 @@ void AppWindow::StartTagScan() {
         std::unordered_map<std::string, size_t> keyToClusterIdx;
 
         for (size_t i = 0; i < files.size(); ++i) {
-            std::string albumClean(m_tagItems[i].albumBuf);
+            auto& item = m_tagItems[i];
+            std::string albumClean(item.albumBuf);
             std::string albumKey = NormalizeKey(albumClean);
-            if (albumKey.empty() || albumKey == "unknown" || albumKey == "tosort" || albumKey == "music" || albumKey == "media") {
-                albumKey = NormalizeKey(fs::path(files[i]).parent_path().string());
+
+            std::string parentName = fs::path(files[i]).parent_path().filename().string();
+            std::string grandParentName = fs::path(files[i]).parent_path().parent_path().filename().string();
+            std::string parentKey = NormalizeKey(parentName);
+            std::string grandParentKey = NormalizeKey(grandParentName);
+            bool inStaging = (parentKey.empty() || parentKey == "tosort" || parentKey == "music" || parentKey == "media" || parentKey == "singles" || parentKey == "downloads" ||
+                              grandParentKey == "tosort" || grandParentKey == "music" || grandParentKey == "media" || grandParentKey == "singles" || grandParentKey == "downloads");
+
+            bool isLoose = false;
+            if (inStaging) {
+                // In staging directories, tracks without an explicit common album are loose tracks
+                if (albumKey.empty() || albumKey == "unknown" || albumKey == "tosort" || albumKey == "music" || albumKey == "media" || albumKey == "singles" || albumKey == "downloads" || item.embeddedAlbum.empty()) {
+                    isLoose = true;
+                }
+            } else if (albumKey.empty() || albumKey == "unknown") {
+                isLoose = true;
+            }
+
+            if (isLoose) {
+                item.isSingleTrack = true;
+                std::string singleKey = "__single_track_" + std::to_string(i);
+                clusters.push_back({ singleKey, files[i], { i } });
+                continue;
             }
 
             auto it = keyToClusterIdx.find(albumKey);
