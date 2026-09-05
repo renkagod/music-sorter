@@ -4436,6 +4436,49 @@ void AppWindow::StartTagScan() {
                             }
                         }
 
+                        if (isMatched) {
+                            std::vector<std::string> localTitles;
+                            localTitles.reserve(indices.size());
+                            for (size_t idx : indices) {
+                                std::string tName = m_tagItems[idx].titleBuf;
+                                if (tName.empty()) {
+                                    tName = detail::StripPathAndExtension(m_tagItems[idx].originalFilename);
+                                }
+                                localTitles.push_back(tName);
+                            }
+
+                            std::vector<std::string> candidateTracklist;
+                            candidateTracklist.reserve(resolvedTracks.size());
+                            for (const auto& rt : resolvedTracks) {
+                                candidateTracklist.push_back(rt.title);
+                            }
+
+                            std::string candArtist = PickBestName(artRomaji, artEnglish, artJapanese, "");
+                            if (candArtist.empty() && !resolvedTracks.empty()) candArtist = resolvedTracks[0].artist;
+                            std::string candAlbum = PickBestName(albRomaji, albEnglish, albJapanese, "");
+
+                            auto guardResult = ValidateAlbumMatch(
+                                artistClean,
+                                albumClean,
+                                localTitles,
+                                candArtist,
+                                candAlbum,
+                                candidateTracklist
+                            );
+
+                            if (!guardResult.passed) {
+                                LOG_WARN("[GUARDRAIL REJECTED] " + guardResult.reason + " for cluster: " + artistClean + " - " + albumClean);
+                                isMatched = false;
+                                releaseGroupMbId.clear();
+                                resolvedTracks.clear();
+                                coverData.clear();
+                                coverSource.clear();
+                                detectedTier = MatchTier::Niche_Local;
+                            } else {
+                                LOG_INFO("[GUARDRAIL APPROVED] " + guardResult.reason + " for cluster: " + artistClean + " - " + albumClean);
+                            }
+                        }
+
                         cacheResult = {
                             releaseGroupMbId, firstReleaseDate, coverData, coverSource,
                             resolvedTracks, albRomaji, albEnglish, albJapanese,
@@ -4452,31 +4495,38 @@ void AppWindow::StartTagScan() {
                     }
 
                     // Apply metadata from cacheResult to all tracks in this cluster
-                    std::string bestAlb = PickBestName(cacheResult.albumRomaji, cacheResult.albumEnglish, cacheResult.albumJapanese, "");
-                    std::string bestArt = PickBestName(cacheResult.artistRomaji, cacheResult.artistEnglish, cacheResult.artistJapanese, "");
+                    if (cacheResult.isMatched) {
+                        std::string bestAlb = PickBestName(cacheResult.albumRomaji, cacheResult.albumEnglish, cacheResult.albumJapanese, "");
+                        std::string bestArt = PickBestName(cacheResult.artistRomaji, cacheResult.artistEnglish, cacheResult.artistJapanese, "");
 
-                    for (size_t idx : indices) {
-                        auto& item = m_tagItems[idx];
-                        item.isMusicBrainzMatched = cacheResult.isMatched;
-                        item.onlineCoverBytes = cacheResult.coverBytes;
-                        item.onlineCoverSource = cacheResult.coverSource;
-                        item.matchTier = cacheResult.matchTier;
-                        item.releaseGroupMbId = cacheResult.releaseGroupMbId;
-                        item.albumRomaji = cacheResult.albumRomaji;
-                        item.albumEnglish = cacheResult.albumEnglish;
-                        item.albumJapanese = cacheResult.albumJapanese;
-                        item.artistRomaji = cacheResult.artistRomaji;
-                        item.artistEnglish = cacheResult.artistEnglish;
-                        item.artistJapanese = cacheResult.artistJapanese;
+                        for (size_t idx : indices) {
+                            auto& item = m_tagItems[idx];
+                            item.isMusicBrainzMatched = true;
+                            item.onlineCoverBytes = cacheResult.coverBytes;
+                            item.onlineCoverSource = cacheResult.coverSource;
+                            item.matchTier = cacheResult.matchTier;
+                            item.releaseGroupMbId = cacheResult.releaseGroupMbId;
+                            item.albumRomaji = cacheResult.albumRomaji;
+                            item.albumEnglish = cacheResult.albumEnglish;
+                            item.albumJapanese = cacheResult.albumJapanese;
+                            item.artistRomaji = cacheResult.artistRomaji;
+                            item.artistEnglish = cacheResult.artistEnglish;
+                            item.artistJapanese = cacheResult.artistJapanese;
 
-                        if (!bestAlb.empty()) strncpy_s(item.albumBuf, bestAlb.c_str(), sizeof(item.albumBuf) - 1);
-                        if (!bestArt.empty()) strncpy_s(item.artistBuf, bestArt.c_str(), sizeof(item.artistBuf) - 1);
-                        if (!cacheResult.firstReleaseDate.empty()) {
-                            strncpy_s(item.yearBuf, cacheResult.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
+                            if (!bestAlb.empty()) strncpy_s(item.albumBuf, bestAlb.c_str(), sizeof(item.albumBuf) - 1);
+                            if (!bestArt.empty()) strncpy_s(item.artistBuf, bestArt.c_str(), sizeof(item.artistBuf) - 1);
+                            if (!cacheResult.firstReleaseDate.empty()) {
+                                strncpy_s(item.yearBuf, cacheResult.firstReleaseDate.c_str(), sizeof(item.yearBuf) - 1);
+                            }
+
+                            if (!cacheResult.tracks.empty()) {
+                                ApplyTrackMatch(item, cacheResult.tracks);
+                            }
                         }
-
-                        if (!cacheResult.tracks.empty()) {
-                            ApplyTrackMatch(item, cacheResult.tracks);
+                    } else {
+                        for (size_t idx : indices) {
+                            auto& item = m_tagItems[idx];
+                            item.isMusicBrainzMatched = false;
                         }
                     }
 
@@ -4492,7 +4542,7 @@ void AppWindow::StartTagScan() {
                             if (!item.lyricsOriginal.empty() && item.lyricsOriginal.find("http") == 0) {
                                 lrcLyrics = FetchThwikiLrc(item.lyricsOriginal);
                             }
-                            if (lrcLyrics.empty()) {
+                            if (lrcLyrics.empty() && !IsUnknownArtist(trackArtist) && !IsInstrumentalTitle(trackTitle)) {
                                 lrcLyrics = FetchSyncedLyricsWithFallback(trackArtist, trackTitle, trackAlbum);
                             }
                             if (!lrcLyrics.empty()) {
@@ -4503,7 +4553,7 @@ void AppWindow::StartTagScan() {
                                     item.lyricsOriginal = lrcLyrics;
                                     item.lyricsRomaji = RomanizeJapaneseLyrics(lrcLyrics);
                                 }
-                            } else if (item.lyricsBuf[0] == '\0') {
+                            } else if (item.lyricsBuf[0] == '\0' && !IsUnknownArtist(trackArtist) && !IsInstrumentalTitle(trackTitle)) {
                                 std::string bestFallback = PickBestLyrics(item.lyricsRomaji, item.lyricsEnglish, item.lyricsOriginal);
                                 if (!bestFallback.empty()) {
                                     item.hasLyrics = true;

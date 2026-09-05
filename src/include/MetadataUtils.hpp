@@ -1208,3 +1208,338 @@ inline long long CalculateImageQualityScore(const unsigned char* data, size_t si
 
     return score;
 }
+
+// ============================================================================
+// GUARDRAILS & STRING SIMILARITY ENGINE (Milestone 2)
+// ============================================================================
+
+inline size_t ComputeLevenshteinDistance(const std::string& s1, const std::string& s2) {
+    const size_t m = s1.size();
+    const size_t n = s2.size();
+    if (m == 0) return n;
+    if (n == 0) return m;
+
+    std::vector<size_t> prev(n + 1);
+    std::vector<size_t> curr(n + 1);
+
+    for (size_t j = 0; j <= n; ++j) prev[j] = j;
+
+    for (size_t i = 1; i <= m; ++i) {
+        curr[0] = i;
+        for (size_t j = 1; j <= n; ++j) {
+            size_t cost = (s1[i - 1] == s2[j - 1]) ? 0 : 1;
+            curr[j] = (std::min)({
+                prev[j] + 1,
+                curr[j - 1] + 1,
+                prev[j - 1] + cost
+            });
+        }
+        prev = curr;
+    }
+    return prev[n];
+}
+
+inline size_t LevenshteinDistance(const std::string& s1, const std::string& s2) {
+    return ComputeLevenshteinDistance(s1, s2);
+}
+
+inline int ExtractTrailingOrEmbeddedNumber(const std::string& str) {
+    int lastNum = -1;
+    for (size_t i = 0; i < str.size(); ++i) {
+        if (std::isdigit((unsigned char)str[i])) {
+            size_t start = i;
+            while (i < str.size() && std::isdigit((unsigned char)str[i])) {
+                ++i;
+            }
+            try {
+                lastNum = std::stoi(str.substr(start, i - start));
+            } catch (...) {}
+        }
+    }
+    return lastNum;
+}
+
+inline bool IsUnknownArtist(const std::string& artist) {
+    if (artist.empty()) return true;
+    std::string trimmed;
+    for (char c : artist) {
+        if ((unsigned char)c > 32) trimmed.push_back(c);
+    }
+    if (trimmed.empty() || trimmed == "?" || trimmed == "-" || trimmed == "..." || trimmed == "/") return true;
+
+    std::string norm = NormalizeKey(artist);
+    if (norm.empty()) return true;
+    if (norm == "unknownartist" || norm == "unknown" ||
+        norm == "variousartists" || norm == "various" ||
+        norm == "va" || norm == "none" || norm == "na" ||
+        norm == "untitled" || norm == "tosort" ||
+        norm == "singles" || norm == "downloads" ||
+        norm == "music" || norm == "media") {
+        return true;
+    }
+    return false;
+}
+
+inline bool IsInstrumentalTitle(const std::string& title) {
+    if (title.empty()) return false;
+    std::string lower = title;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return (char)::tolower(c); });
+
+    return (lower.find("instrumental") != std::string::npos ||
+            lower.find("off vocal") != std::string::npos ||
+            lower.find("karaoke") != std::string::npos ||
+            lower.find("backing track") != std::string::npos ||
+            lower.find("without vocal") != std::string::npos ||
+            lower.find("minus one") != std::string::npos ||
+            lower.find("no vocal") != std::string::npos ||
+            lower.find("(inst)") != std::string::npos ||
+            lower.find("[inst]") != std::string::npos ||
+            lower.find("(inst.)") != std::string::npos ||
+            lower.find("[inst.]") != std::string::npos);
+}
+
+inline std::vector<std::string> TokenizeWords(const std::string& str) {
+    std::vector<std::string> tokens;
+    std::string current;
+    for (size_t i = 0; i < str.size(); ++i) {
+        unsigned char c = (unsigned char)str[i];
+        if (std::isalnum(c) || c >= 0x80) {
+            if (std::isupper(c)) c = (unsigned char)std::tolower(c);
+            current.push_back((char)c);
+        } else {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+        }
+    }
+    if (!current.empty()) tokens.push_back(current);
+    return tokens;
+}
+
+inline double ComputeStringSimilarity(const std::string& s1, const std::string& s2) {
+    if (s1.empty() && s2.empty()) return 1.0;
+    if (s1.empty() || s2.empty()) return 0.0;
+    if (s1 == s2) return 1.0;
+
+    std::string n1 = NormalizeKey(s1);
+    std::string n2 = NormalizeKey(s2);
+
+    if (n1 == n2 && !n1.empty()) return 1.0;
+
+    std::string low1 = s1;
+    std::transform(low1.begin(), low1.end(), low1.begin(), [](unsigned char c) { return (char)::tolower(c); });
+    std::string low2 = s2;
+    std::transform(low2.begin(), low2.end(), low2.begin(), [](unsigned char c) { return (char)::tolower(c); });
+
+    size_t maxLen = (std::max)(n1.size(), n2.size());
+    double levSim = 0.0;
+    if (maxLen > 0) {
+        size_t dist = ComputeLevenshteinDistance(n1, n2);
+        levSim = 1.0 - (double)dist / (double)maxLen;
+        if (levSim < 0.0) levSim = 0.0;
+    }
+
+    double subSim = 0.0;
+    if (!n1.empty() && !n2.empty() && maxLen > 0) {
+        if (n1.find(n2) != std::string::npos || n2.find(n1) != std::string::npos) {
+            subSim = (double)(std::min)(n1.size(), n2.size()) / (double)maxLen;
+        }
+    }
+
+    auto tok1 = TokenizeWords(s1);
+    auto tok2 = TokenizeWords(s2);
+    double tokenSim = 0.0;
+    double containmentSim = 0.0;
+
+    if (!tok1.empty() && !tok2.empty()) {
+        std::unordered_map<std::string, int> countMap;
+        for (const auto& t : tok1) countMap[t]++;
+        int commonCount = 0;
+        for (const auto& t : tok2) {
+            auto it = countMap.find(t);
+            if (it != countMap.end() && it->second > 0) {
+                commonCount++;
+                it->second--;
+            }
+        }
+
+        int totalTokens = (int)(tok1.size() + tok2.size() - commonCount);
+        if (totalTokens > 0) {
+            tokenSim = (double)commonCount / (double)totalTokens;
+        }
+
+        int minTokens = (int)(std::min)(tok1.size(), tok2.size());
+        int maxTokens = (int)(std::max)(tok1.size(), tok2.size());
+        if (minTokens > 0 && commonCount == minTokens) {
+            containmentSim = 0.80 + 0.15 * ((double)minTokens / (double)maxTokens);
+        }
+    }
+
+    if (!low1.empty() && !low2.empty()) {
+        if (low1.find(low2) != std::string::npos || low2.find(low1) != std::string::npos) {
+            double rawSubRatio = (double)(std::min)(low1.size(), low2.size()) / (double)(std::max)(low1.size(), low2.size());
+            double rawSubScore = 0.80 + 0.15 * rawSubRatio;
+            if (rawSubScore > containmentSim) containmentSim = rawSubScore;
+        }
+    }
+
+    double best = (std::max)({levSim, subSim, tokenSim, containmentSim});
+    if (best > 1.0) best = 1.0;
+    if (best < 0.0) best = 0.0;
+    return best;
+}
+
+struct GuardrailValidationResult {
+    bool passed{false};
+    double confidence{0.0};       // 0.0 to 1.0
+    double artistSimilarity{0.0};
+    double tracklistOverlap{0.0};
+    std::string reason;
+};
+
+inline GuardrailValidationResult ValidateAlbumMatch(
+    const std::string& queryArtist,
+    const std::string& queryAlbum,
+    const std::vector<std::string>& localTitles,
+    const std::string& candidateArtist,
+    const std::string& candidateAlbum,
+    const std::vector<std::string>& candidateTracklist
+) {
+    GuardrailValidationResult res;
+
+    if (localTitles.empty() && candidateTracklist.empty()) {
+        res.passed = false;
+        res.confidence = 0.0;
+        res.artistSimilarity = 0.0;
+        res.tracklistOverlap = 0.0;
+        res.reason = "Rejected: empty inputs";
+        return res;
+    }
+
+    if (IsUnknownArtist(queryArtist) || IsUnknownArtist(candidateArtist)) {
+        res.artistSimilarity = 0.0;
+    } else {
+        res.artistSimilarity = ComputeStringSimilarity(queryArtist, candidateArtist);
+    }
+
+    size_t N = localTitles.size();
+    size_t M = candidateTracklist.size();
+
+    size_t matchedCount = 0;
+    if (N == 0 || M == 0) {
+        res.tracklistOverlap = 0.0;
+    } else {
+        for (const auto& loc : localTitles) {
+            int numLoc = ExtractTrailingOrEmbeddedNumber(loc);
+            double bestSim = 0.0;
+            for (const auto& cand : candidateTracklist) {
+                int numCand = ExtractTrailingOrEmbeddedNumber(cand);
+                if (numLoc >= 0 && numCand >= 0 && numLoc != numCand) {
+                    continue;
+                }
+                double sim = ComputeStringSimilarity(loc, cand);
+                if (sim > bestSim) bestSim = sim;
+            }
+            if (bestSim >= 0.70) {
+                matchedCount++;
+            }
+        }
+
+        double R_title = (double)matchedCount / (double)N;
+        double R_count = 0.0;
+        if (N == 1) {
+            R_count = (matchedCount == 1) ? 1.0 : 0.0;
+        } else {
+            R_count = (double)(std::min)(N, M) / (double)(std::max)(N, M);
+        }
+
+        if (matchedCount == 0) {
+            res.tracklistOverlap = 0.0;
+        } else {
+            res.tracklistOverlap = R_title * (0.70 + 0.30 * R_count);
+        }
+    }
+
+    bool hasValidAlbum = !IsUnknownArtist(queryAlbum) && !queryAlbum.empty();
+    double rawConfidence = 0.0;
+    if (hasValidAlbum) {
+        double albumSim = ComputeStringSimilarity(queryAlbum, candidateAlbum);
+        rawConfidence = 0.40 * res.artistSimilarity + 0.40 * res.tracklistOverlap + 0.20 * albumSim;
+    } else {
+        rawConfidence = 0.50 * res.artistSimilarity + 0.50 * res.tracklistOverlap;
+    }
+
+    if (res.artistSimilarity < 0.60) {
+        res.confidence = (std::min)(rawConfidence * 0.25, 0.15);
+    } else if (N >= 2 && res.tracklistOverlap < 0.40) {
+        res.confidence = (std::min)(rawConfidence, 0.35);
+    } else {
+        res.confidence = rawConfidence;
+    }
+
+    if (res.confidence > 1.0) res.confidence = 1.0;
+    if (res.confidence < 0.0) res.confidence = 0.0;
+
+    res.passed = (res.confidence >= 0.80);
+
+    if (res.passed) {
+        res.reason = "Approved: confidence " + std::to_string((int)(res.confidence * 100)) +
+                     "% >= 80% (artist: " + std::to_string((int)(res.artistSimilarity * 100)) +
+                     "%, tracklist: " + std::to_string((int)(res.tracklistOverlap * 100)) + "%)";
+    } else {
+        if (res.artistSimilarity < 0.60) {
+            res.reason = "Rejected: divergent artist similarity (" +
+                         std::to_string((int)(res.artistSimilarity * 100)) + "% < 80%) ['" +
+                         queryArtist + "' vs '" + candidateArtist + "']";
+        } else if (N >= 2 && res.tracklistOverlap < 0.40) {
+            res.reason = "Rejected: tracklist overlap too low (" +
+                         std::to_string((int)(res.tracklistOverlap * 100)) + "% < 80%) [" +
+                         std::to_string(matchedCount) + "/" + std::to_string(N) + " tracks matched]";
+        } else {
+            res.reason = "Rejected: combined confidence " +
+                         std::to_string((int)(res.confidence * 100)) + "% < 80%";
+        }
+    }
+
+    return res;
+}
+
+inline bool ValidateLyricMatch(
+    const std::string& trackArtist,
+    const std::string& trackTitle,
+    const std::string& lyricArtist,
+    const std::string& lyricTitle
+) {
+    if (IsUnknownArtist(trackArtist) || IsUnknownArtist(lyricArtist)) {
+        return false;
+    }
+
+    if (NormalizeKey(trackTitle).empty() || NormalizeKey(lyricTitle).empty()) {
+        return false;
+    }
+
+    if (IsInstrumentalTitle(trackTitle)) {
+        return false;
+    }
+
+    int trackNum = ExtractTrailingOrEmbeddedNumber(trackTitle);
+    int lyricNum = ExtractTrailingOrEmbeddedNumber(lyricTitle);
+    if (trackNum >= 0 && lyricNum >= 0 && trackNum != lyricNum) {
+        return false;
+    }
+
+    double artistSim = ComputeStringSimilarity(trackArtist, lyricArtist);
+    if (artistSim < 0.75) {
+        return false;
+    }
+
+    double titleSim = ComputeStringSimilarity(trackTitle, lyricTitle);
+    if (titleSim < 0.70) {
+        return false;
+    }
+
+    double confidence = 0.60 * artistSim + 0.40 * titleSim;
+    return confidence >= 0.75;
+}
+

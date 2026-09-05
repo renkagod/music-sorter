@@ -655,7 +655,7 @@ inline bool FetchDiscogsReleaseDetails(const std::string& releaseId, bool isMast
 inline bool SearchDiscogsRelease(const std::string& artist, const std::string& album, DiscogsReleaseInfo& outInfo, const std::string& discogsToken = "") {
     if (album.empty()) return false;
 
-    bool isArtistUnknown = (artist.empty() || artist == "Unknown Artist" || artist == "Various Artists" || artist == "V.A." || artist == "VA");
+    bool isArtistUnknown = IsUnknownArtist(artist);
 
     std::string queryUrl = "https://api.discogs.com/database/search?release_title=" + UrlEncode(album);
     if (!isArtistUnknown) {
@@ -694,6 +694,7 @@ inline bool SearchDiscogsRelease(const std::string& artist, const std::string& a
     bool isMasterPicked = false;
 
     std::string albNorm = NormalizeKey(album);
+    std::string artNorm = NormalizeKey(artist);
 
     for (size_t i = 0; i < results.arrVal.size(); ++i) {
         const auto& r = results.get(i);
@@ -714,6 +715,10 @@ inline bool SearchDiscogsRelease(const std::string& artist, const std::string& a
 
         int score = 0;
         if (titleMatch) score += 100;
+        if (!isArtistUnknown && !artNorm.empty()) {
+            if (rTitleNorm.find(artNorm) != std::string::npos) score += 50;
+            else if (!titleMatch) score -= 100;
+        }
         if (!rYear.empty() && rYear != "0") score += 30;
         if (!rCover.empty()) score += 20;
 
@@ -735,9 +740,18 @@ inline bool SearchDiscogsRelease(const std::string& artist, const std::string& a
             }
         }
 
-        double haveCount = r.get("community").get("have").numVal;
-        double wantCount = r.get("community").get("want").numVal;
-        score += (int)((haveCount + wantCount) / 2.0);
+        // Capped community popularity tie-breaker, gated strictly by title match
+        if (titleMatch) {
+            double haveCount = r.get("community").get("have").numVal;
+            double wantCount = r.get("community").get("want").numVal;
+            double totalPop = (std::max)(0.0, haveCount) + (std::max)(0.0, wantCount);
+            if (totalPop > 0.0) {
+                int popBonus = (int)(totalPop / 50.0);
+                if (popBonus <= 0) popBonus = 1;
+                if (popBonus > 10) popBonus = 10;
+                score += popBonus;
+            }
+        }
 
         if (score > bestScore) {
             bestScore = score;
@@ -749,7 +763,7 @@ inline bool SearchDiscogsRelease(const std::string& artist, const std::string& a
         }
     }
 
-    if (pickedId.empty()) return false;
+    if (pickedId.empty() || bestScore < 50) return false;
 
     LOG_INFO("[DISCOGS MATCHED] Selected release ID: " + pickedId + " (" + pickedTitle + ", Score: " + std::to_string(bestScore) + "). Fetching details...");
     bool ok = FetchDiscogsReleaseDetails(pickedId, isMasterPicked, outInfo, discogsToken);
@@ -1106,12 +1120,27 @@ inline bool SearchVdbRelease(const std::string& baseUrl, const std::string& serv
     return false;
 }
 
-inline std::string ParseLrcLibLyricsJson(const std::string& json) {
+inline std::string ParseLrcLibLyricsJson(const std::string& json, const std::string& targetArtist = "", const std::string& targetTitle = "") {
     if (json.empty()) return "";
 
     size_t p = 0;
     JsonVal doc = ParseJsonSimple(json, p);
     if (doc.type != JsonVal::Object) return "";
+
+    if (doc.get("instrumental").boolVal) {
+        return "";
+    }
+
+    if (!targetArtist.empty() && !targetTitle.empty()) {
+        std::string retArtist = doc.get("artistName").strVal;
+        std::string retTitle = doc.get("trackName").strVal;
+        if (retTitle.empty()) retTitle = doc.get("name").strVal;
+        if (!retArtist.empty() && !retTitle.empty()) {
+            if (!ValidateLyricMatch(targetArtist, targetTitle, retArtist, retTitle)) {
+                return "";
+            }
+        }
+    }
 
     std::string synced = doc.get("syncedLyrics").strVal;
     if (!synced.empty() && synced != "null") {
@@ -1126,13 +1155,13 @@ inline std::string ParseLrcLibLyricsJson(const std::string& json) {
     return "";
 }
 
-inline std::string FetchLrcLibSyncedLyrics(const std::string& artist, const std::string& title, const std::string& album) {
-    if (artist.empty() || title.empty()) return "";
+inline std::string FetchLrcLibSyncedLyrics(const std::string& artist, const std::string& title, const std::string& album = "") {
+    if (IsUnknownArtist(artist) || title.empty() || IsInstrumentalTitle(title)) return "";
     std::string url = "https://lrclib.net/api/get?artist_name=" + UrlEncode(artist) + "&track_name=" + UrlEncode(title);
     if (!album.empty()) url += "&album_name=" + UrlEncode(album);
 
     std::string json = HttpGetString(Utf8ToWide(url));
-    return ParseLrcLibLyricsJson(json);
+    return ParseLrcLibLyricsJson(json, artist, title);
 }
 
 inline std::string ParseQQMusicSearchJson(const std::string& resJson, const std::string& targetArtist = "", const std::string& targetTitle = "") {
@@ -1150,15 +1179,13 @@ inline std::string ParseQQMusicSearchJson(const std::string& resJson, const std:
     std::string normTargetArtist = NormalizeKey(targetArtist);
     std::string normTargetTitle = NormalizeKey(targetTitle);
 
-    std::string fallbackMid;
-    int bestScore = -1;
+    std::string bestMid;
+    int bestScore = 0;
 
     for (size_t i = 0; i < list.arrVal.size(); ++i) {
         const auto& item = list.get(i);
         std::string songmid = item.get("songmid").strVal;
         if (songmid.empty()) continue;
-
-        if (fallbackMid.empty()) fallbackMid = songmid;
 
         std::string songname = item.get("songname").strVal;
         std::string singerStr;
@@ -1173,17 +1200,24 @@ inline std::string ParseQQMusicSearchJson(const std::string& resJson, const std:
         std::string normSongName = NormalizeKey(songname);
         std::string normSinger = NormalizeKey(singerStr);
 
+        if (!targetArtist.empty() && !targetTitle.empty()) {
+            if (!ValidateLyricMatch(targetArtist, targetTitle, singerStr, songname)) {
+                continue;
+            }
+        }
+
         int score = 0;
-        if (!normTargetTitle.empty() && normSongName.find(normTargetTitle) != std::string::npos) score += 50;
-        if (!normTargetArtist.empty() && normSinger.find(normTargetArtist) != std::string::npos) score += 50;
+        if (!normTargetTitle.empty() && (normSongName.find(normTargetTitle) != std::string::npos || normTargetTitle.find(normSongName) != std::string::npos)) score += 50;
+        if (!normTargetArtist.empty() && (normSinger.find(normTargetArtist) != std::string::npos || normTargetArtist.find(normSinger) != std::string::npos)) score += 50;
 
         if (score > bestScore) {
             bestScore = score;
-            fallbackMid = songmid;
+            bestMid = songmid;
         }
     }
 
-    return fallbackMid;
+    if (bestScore <= 0) return "";
+    return bestMid;
 }
 
 inline std::string ParseQQMusicLyricJson(const std::string& resJson) {
@@ -1201,9 +1235,9 @@ inline std::string ParseQQMusicLyricJson(const std::string& resJson) {
 }
 
 inline std::string FetchQQMusicLyrics(const std::string& artist, const std::string& title, const std::string& album = "") {
-    if (artist.empty() && title.empty()) return "";
+    if (IsUnknownArtist(artist) || title.empty() || IsInstrumentalTitle(title)) return "";
     
-    std::string query = artist.empty() ? title : (artist + " " + title);
+    std::string query = artist + " " + title;
     std::string searchUrl = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?p=1&n=5&w=" + UrlEncode(query) + "&format=json";
     
     std::string searchJson = HttpGetString(Utf8ToWide(searchUrl));
@@ -1217,6 +1251,8 @@ inline std::string FetchQQMusicLyrics(const std::string& artist, const std::stri
 }
 
 inline std::string FetchSyncedLyricsWithFallback(const std::string& artist, const std::string& title, const std::string& album = "") {
+    if (IsUnknownArtist(artist) || title.empty() || IsInstrumentalTitle(title)) return "";
+
     std::string lyrics = FetchLrcLibSyncedLyrics(artist, title, album);
     if (!lyrics.empty()) {
         return lyrics;
