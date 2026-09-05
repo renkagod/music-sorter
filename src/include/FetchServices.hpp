@@ -316,6 +316,10 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
     for (int attempt = 0; attempt < maxRetries; ++attempt) {
         HINTERNET hNet = InternetOpenW(L"MusicSorter/2.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (hNet) {
+            DWORD timeoutMs = 8000;
+            InternetSetOptionW(hNet, INTERNET_OPTION_CONNECT_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
+            InternetSetOptionW(hNet, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
+            InternetSetOptionW(hNet, INTERNET_OPTION_SEND_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
             DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
             std::wstring customHeaders;
             if (isDiscogs && !discogsToken.empty()) {
@@ -446,6 +450,10 @@ inline std::string HttpPost(
     for (int attempt = 0; attempt < maxRetries; ++attempt) {
         HINTERNET hNet = InternetOpenW(L"MusicSorter/2.0 (https://github.com/renkagod/music-sorter)", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hNet) continue;
+        DWORD timeoutMs = 8000;
+        InternetSetOptionW(hNet, INTERNET_OPTION_CONNECT_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
+        InternetSetOptionW(hNet, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
+        InternetSetOptionW(hNet, INTERNET_OPTION_SEND_TIMEOUT, &timeoutMs, sizeof(timeoutMs));
 
         HINTERNET hConnect = InternetConnectW(hNet, hostName, port, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
         if (hConnect) {
