@@ -54,8 +54,8 @@ MusicSorter is a native Windows C++20 desktop application built with DirectX 11 
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
 | M1 | Heuristic Filename Parsing & Loose Tracks Support | Implement `ParseFilenameHeuristic`, update `StartTagScan`, isolate loose single tracks in `AppWindow.cpp`. | None | DONE |
-| M2 | Strict Match Guardrails & Anti-False-Positive Filtering | Implement `ValidateAlbumMatch`, `ValidateLyricMatch`, cap Discogs popularity, enforce 80% confidence threshold. | M1 | PLANNED |
-| M3 | Standalone C++ Multi-Provider Fetchers | Implement native WinINet Last.fm API and YouTube Music Innertube fetchers in `FetchServices.hpp`. | None | PLANNED |
+| M2 | Strict Match Guardrails & Anti-False-Positive Filtering | Implement `ValidateAlbumMatch`, `ValidateLyricMatch`, cap Discogs popularity, enforce 80% confidence threshold. | M1 | DONE |
+| M3 | Standalone C++ Multi-Provider Fetchers | Implement native WinINet Last.fm API and YouTube Music Innertube fetchers in `FetchServices.hpp`. | None | READY_FOR_IMPLEMENTATION |
 | M4 | Aggregator, Consensus Logic & ImGui Inspection UI | Implement `MetadataCandidate`, consensus scoring, conflict badge, candidate dropdown/modal, and "Fetch from all" button. | M2, M3 | PLANNED |
 | M5 | E2E Testing Suite & Full Verification | Automated unit tests covering Tiers 1-4, CTest verification, and live scan verification on `D:\media\music\TO SORT`. | M1, M2, M3, M4 | PLANNED |
 
