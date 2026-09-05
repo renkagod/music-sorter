@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Архитектура и пайплайн Music Sorter</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --card-bg: #161b22;
+            --border-color: #30363d;
+            --text-main: #c9d1d9;
+            --text-heading: #58a6ff;
+            --accent: #238636;
+            --accent-hover: #2ea043;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 24px;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 16px;
+            margin-bottom: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+        h1 {
+            color: var(--text-heading);
+            margin: 0 0 8px 0;
+            font-size: 26px;
+        }
+        p.subtitle {
+            margin: 0;
+            color: #8b949e;
+            font-size: 14px;
+        }
+        .btn {
+            background-color: var(--accent);
+            color: #fff;
+            border: 1px solid rgba(240, 246, 252, 0.1);
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+        .btn:hover {
+            background-color: var(--accent-hover);
+        }
+        .diagram-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 24px;
+            overflow-x: auto;
+            margin-bottom: 32px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 20px;
+        }
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .card h3 {
+            margin-top: 0;
+            color: #79c0ff;
+            font-size: 18px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+        .card ul {
+            padding-left: 20px;
+            margin: 0;
+        }
+        .card li {
+            margin-bottom: 8px;
+        }
+        code {
+            background-color: rgba(110, 118, 129, 0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #ff7b72;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>Music Sorter: Архитектура и пайплайн обработки</h1>
+                <p class="subtitle">Техническая схема работы системы: от сырого звука до каталогизации</p>
+            </div>
+            <div>
+                <button class="btn" onclick="window.print()">Печать / Сохранить в PDF</button>
+            </div>
+        </header>
+
+        <div class="diagram-card" id="diagram-container">
+            <div class="mermaid">
+flowchart TD
+    %% ----------------------------------------------------
+    %% ВХОДЯЩИЙ ПОТОК
+    %% ----------------------------------------------------
+    subgraph S0["Входной поток"]
+        InputFolder["Папка входящих аудиофайлов: TO SORT"]
+    end
+
+    %% ----------------------------------------------------
+    %% ЭТАП 1: АКУСТИЧЕСКИЙ АНАЛИЗ
+    %% ----------------------------------------------------
+    subgraph S1["Этап 1: Акустическая дедупликация (Chromaprint / miniaudio)"]
+        FpCalc["fpcalc.exe: извлечение спектрограмм и расчет отпечатков Chromaprint"]
+        InputFolder --> FpCalc
+
+        CrossCorr["Скользящая кросс-корреляция (Cross-Correlation):
+        Сдвиг временного окна, расчет фазового сдвига кадров и % схожести звука"]
+        FpCalc --> CrossCorr
+
+        DupGate{"Сходство выше порога?"}
+        CrossCorr --> DupGate
+
+        Player["Аудиоплеер miniaudio: мгновенное переключение дорожек A/B на лету (Tab / S)"]
+        DupGate -->|"Да: обнаружен дубликат"| Player
+
+        UserSelect{"Выбор лучшей дорожки"}
+        Player --> UserSelect
+
+        Trash["Перемещение худшей копии в папку delete/"]
+        UserSelect -->|"Удалить трек"| Trash
+    end
+
+    %% ----------------------------------------------------
+    %% ЭТАП 2: СБОР МЕТАДАННЫХ И КОНСЕНСУС
+    %% ----------------------------------------------------
+    subgraph S2["Этап 2: Сбор метаданных и многофакторный консенсус"]
+        CleanTrack["Уникальный аудиофайл"]
+        DupGate -->|"Дубликатов нет"| CleanTrack
+        UserSelect -->|"Выбранный трек"| CleanTrack
+
+        subgraph MultiQuery["Параллельный опрос баз данных (FetchServices)"]
+            MB["MusicBrainz + AcoustID (rate-limit: 1100 ms)"]
+            Discogs["Discogs API (токен авторизации)"]
+            EastDB["TouhouDB / VocaDB / UtaiteDB (REST JSON)"]
+            THW["THBWiki API (alb, треклисты, связи с темами ZUN)"]
+            LastFm["Last.fm API + YouTube Music Innertube API"]
+            Lyrics["Тексты: LRCLIB (LRC с таймингами), QQ Music, VDB"]
+        end
+
+        CleanTrack --> MultiQuery
+
+        subgraph Consensus["Движок консенсуса (ConsensusAggregator)"]
+            Weights["Взвешивание доверия баз: MB/VDB = 1.0, Discogs = 0.96, LastFM = 0.94"]
+            LevDist["Расчет сходства строк через расстояние Левенштейна"]
+            Bonus["Бонус согласия: +10% за 2 базы, +18% за 3, +25% за 4+ источника"]
+            ScoreGate{"Уверенность >= 80% и нет споров?"}
+        end
+
+        MultiQuery --> Weights
+        Weights --> LevDist
+        LevDist --> Bonus
+        Bonus --> ScoreGate
+
+        ManualPick["Флаг конфликта: ручной выбор из интерактивной таблицы вариантов"]
+        ScoreGate -->|"Конфликт источников"| ManualPick
+
+        LangSwitcher["Инспектор тегов: переключение языка в 1 клик [RO] Ромадзи / [EN] Английский / [JP] Оригинал"]
+        ScoreGate -->|"Полный консенсус"| LangSwitcher
+        ManualPick --> LangSwitcher
+    end
+
+    %% ----------------------------------------------------
+    %% ЭТАП 3: ОЦЕНКА ОБЛОЖЕК
+    %% ----------------------------------------------------
+    subgraph S3["Этап 3: Математический анализ качества обложек"]
+        CoverInput["Сравнение: Встроенная локальная обложка vs Онлайн-картинка"]
+        LangSwitcher --> CoverInput
+
+        subgraph MathInspect["Алгоритм оценки резкости (CalculateImageQualityScore)"]
+            GeomScore["Анализ пропорций: штраф за неквадратность (aspect = min/max >= 0.95)"]
+            ResScore["Оценка площади и разрешения (пороги 400, 600, 900, 1400+ px)"]
+            LaplacianVar["Дисперсия дискретного оператора Лапласа (2D Laplacian Variance):
+            Попиксельный расчет карты градиентов по яркости (-4*C + N + S + E + W).
+            Отсечение искусственного апскейла (фейкового высокого разрешения)"]
+        end
+
+        CoverInput --> GeomScore
+        GeomScore --> ResScore
+        ResScore --> LaplacianVar
+
+        AutoCover["Автовыбор обложки с максимальным суммарным баллом резкости"]
+        LaplacianVar --> AutoCover
+    end
+
+    %% ----------------------------------------------------
+    %% ЭТАП 4: ЗАПИСЬ В КОНТЕЙНЕРЫ БЕЗ ПЕРЕЖАТИЯ
+    %% ----------------------------------------------------
+    subgraph S4["Этап 4: Нативная запись метаданных (Zero-Reencode)"]
+        SyncAlb["Синхронизация тегов: кнопка 'Применить ко всему альбому'"]
+        AutoCover --> SyncAlb
+
+        FormatChoice{"Формат файла"}
+        SyncAlb --> FormatChoice
+
+        FlacPack["FLAC: парсинг и пересборка блоков Vorbis Comment (Type 4) и PICTURE (Type 6).
+        Бинарный аудиопоток переносится без перекодирования (0% потерь качества)"]
+
+        Mp3Pack["MP3: прямая генерация фреймов ID3v2.3 (TIT2, TPE1, TALB, APIC обложка, USLT тексты).
+        Синхронизация без пережатия фреймов MP3"]
+
+        FormatChoice -->|"FLAC"| FlacPack
+        FormatChoice -->|"MP3"| Mp3Pack
+    end
+
+    %% ----------------------------------------------------
+    %% ЭТАП 5: ЗЕРКАЛИРОВАНИЕ И БАЗА
+    %% ----------------------------------------------------
+    subgraph S5["Этап 5: Зеркалирование и каталогизация"]
+        FlacLib["flac/ (Основная коллекция)"]
+        Mp3Lib["mp3/ (Портативная коллекция)"]
+
+        FlacPack --> FlacLib
+        Mp3Pack --> Mp3Lib
+
+        FfmpegTrans["FFmpeg: многопоточная конвертация FLAC в MP3 (320 kbps) + зеркало cover.jpg"]
+        FlacLib --> FfmpegTrans
+        FfmpegTrans --> Mp3Lib
+
+        CleanOrphans["Очистка пустых подпапок в TO SORT"]
+        Mp3Lib --> CleanOrphans
+
+        SqliteSync[("База данных SQLite 3: music_database.db")]
+        FlacLib --> SqliteSync
+        Mp3Lib --> SqliteSync
+
+        TracklistDoc["Сверка с чек-листом tracklist.md: статусы [x] Скачано / [ ] Отсутствует"]
+        SqliteSync --> TracklistDoc
+    end
+            </div>
+        </div>
+
+        <div class="details-grid">
+            <div class="card">
+                <h3>1. Акустический анализ звука</h3>
+                <ul>
+                    <li><strong>Chromaprint (fpcalc):</strong> генерирует математические отпечатки спектра аудиодорожки.</li>
+                    <li><strong>Кросс-корреляция:</strong> находит одинаковые треки даже при несовпадении названий, разном битрейте или сдвиге тишины в начале.</li>
+                    <li><strong>A/B плеер на miniaudio:</strong> воспроизводит треки в двух независимых каналах с мгновенным переключением (хоткей <code>Tab</code> или <code>S</code>) для проверки на слух.</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h3>2. Консенсус метаданных</h3>
+                <ul>
+                    <li><strong>Опрос баз:</strong> MusicBrainz, Discogs, TouhouDB, VocaDB, THBWiki, Last.fm, YouTube Music.</li>
+                    <li><strong>Дистанция Левенштейна:</strong> нормализует и сравнивает названия, номера позиций и имена авторов.</li>
+                    <li><strong>Бонусы консенсуса:</strong> совпадение данных в нескольких независимых базах повышает показатель уверенности до 100%. При разногласиях выставляется флаг конфликта.</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h3>3. Математика оценки обложек</h3>
+                <ul>
+                    <li><strong>Дисперсия оператора Лапласа:</strong> программный расчет резкости по матрице <code>[-4*C + N + S + E + W]</code>. Вычисляет реальную четкость деталей.</li>
+                    <li><strong>Защита от фейкового разрешения:</strong> размытый апскейл 300x300, растянутый до 1200x1200, дает околонулевую дисперсию Лапласа и бракуется в пользу резкого оригинала.</li>
+                    <li><strong>Штраф за пропорции:</strong> альбомные обложки должны быть квадратными (штраф, если <code>min / max < 0.95</code>).</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h3>4. Нативная запись и зеркало</h3>
+                <ul>
+                    <li><strong>Zero-Reencode:</strong> FLAC (Vorbis Comments + METADATA_BLOCK_PICTURE) и MP3 (ID3v2.3) пересобираются на уровне контейнеров без пережатия PCM/аудиоданных.</li>
+                    <li><strong>Зеркалирование:</strong> автоматическая генерация MP3 320 kbps через FFmpeg с переносом <code>cover.jpg</code>.</li>
+                    <li><strong>Учет:</strong> SQLite фиксирует путь каждого файла и проставляет отметки в <code>tracklist.md</code>.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'dark',
+            flowchart: {
+                curve: 'basis',
+                useMaxWidth: true,
+                htmlLabels: true
+            }
+        });
+    </script>
+</body>
+</html>
