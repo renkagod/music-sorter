@@ -4390,16 +4390,19 @@ void AppWindow::StartTagScan() {
             }
 
             std::string artistClean = CleanMetadataString(artistRaw);
+            std::regex trackPrefixRegex(R"(^\s*([A-Za-z]?\d{1,2}[.\-_]\s*|\d{1,2}\s+-\s+))");
+            artistClean = std::regex_replace(artistClean, trackPrefixRegex, "");
             std::string artistCleanKey = NormalizeKey(artistClean);
             if (artistClean.empty() || artistCleanKey == "tosort" || artistCleanKey == "media" || artistCleanKey == "music" || artistCleanKey == "singles" || artistCleanKey == "downloads") {
                 if (parsed.hasArtist && !parsed.artist.empty()) {
-                    artistClean = parsed.artist;
+                    artistClean = std::regex_replace(parsed.artist, trackPrefixRegex, "");
                 } else {
                     artistClean = ExtractArtistFromFilename(item.originalFilename);
                     if (artistClean.empty()) artistClean = "Unknown Artist";
+                    else artistClean = std::regex_replace(artistClean, trackPrefixRegex, "");
                 }
             } else if (parsed.hasArtist && !parsed.artist.empty()) {
-                artistClean = parsed.artist;
+                artistClean = std::regex_replace(parsed.artist, trackPrefixRegex, "");
             }
 
             std::string albumClean = CleanAlbumTitle(albumRaw);
@@ -4419,13 +4422,10 @@ void AppWindow::StartTagScan() {
                 albumClean = "";
             }
 
-            // If in a staging folder hierarchy and the filename did not specify an album, clear albumClean
+            // If in a staging folder directly and the filename did not specify an album, clear albumClean
             std::string parentName = fs::path(files[i]).parent_path().filename().string();
-            std::string grandParentName = fs::path(files[i]).parent_path().parent_path().filename().string();
             std::string parentKey = NormalizeKey(parentName);
-            std::string grandParentKey = NormalizeKey(grandParentName);
-            bool inStaging = (parentKey == "tosort" || parentKey == "music" || parentKey == "media" || parentKey == "singles" || parentKey == "downloads" ||
-                              grandParentKey == "tosort" || grandParentKey == "music" || grandParentKey == "media" || grandParentKey == "singles" || grandParentKey == "downloads");
+            bool inStaging = (parentKey == "tosort" || parentKey == "music" || parentKey == "media" || parentKey == "singles" || parentKey == "downloads");
             if (inStaging && !parsed.hasAlbum) {
                 albumClean = "";
             }
@@ -4506,11 +4506,8 @@ void AppWindow::StartTagScan() {
             std::string albumKey = NormalizeKey(albumClean);
 
             std::string parentName = fs::path(files[i]).parent_path().filename().string();
-            std::string grandParentName = fs::path(files[i]).parent_path().parent_path().filename().string();
             std::string parentKey = NormalizeKey(parentName);
-            std::string grandParentKey = NormalizeKey(grandParentName);
-            bool inStaging = (parentKey.empty() || parentKey == "tosort" || parentKey == "music" || parentKey == "media" || parentKey == "singles" || parentKey == "downloads" ||
-                              grandParentKey == "tosort" || grandParentKey == "music" || grandParentKey == "media" || grandParentKey == "singles" || grandParentKey == "downloads");
+            bool inStaging = (parentKey.empty() || parentKey == "tosort" || parentKey == "music" || parentKey == "media" || parentKey == "singles" || parentKey == "downloads");
 
             bool isLoose = false;
             if (inStaging) {
@@ -4898,10 +4895,6 @@ void AppWindow::StartTagScan() {
                             if (!guardResult.passed) {
                                 LOG_WARN("[GUARDRAIL REJECTED] " + guardResult.reason + " for cluster: " + artistClean + " - " + albumClean);
                                 isMatched = false;
-                                releaseGroupMbId.clear();
-                                resolvedTracks.clear();
-                                coverData.clear();
-                                coverSource.clear();
                                 detectedTier = MatchTier::Niche_Local;
                             } else {
                                 LOG_INFO("[GUARDRAIL APPROVED] " + guardResult.reason + " for cluster: " + artistClean + " - " + albumClean);
@@ -4929,9 +4922,12 @@ void AppWindow::StartTagScan() {
                     std::vector<ConsensusAggregator::MetadataCandidate> clusterCandidates;
 
                     // 1. Existing matched cache result (from MusicBrainz, TouhouDB, Discogs, etc.)
-                    if (cacheResult.isMatched) {
+                    if (cacheResult.isMatched || !cacheResult.releaseGroupMbId.empty() || !cacheResult.tracks.empty()) {
                         ConsensusAggregator::MetadataCandidate c;
                         c.providerName = GetTierName(cacheResult.matchTier);
+                        if (c.providerName.empty() || c.providerName == "Niche (Локальные теги)") {
+                            c.providerName = "MusicBrainz";
+                        }
                         std::string bestAlb = PickBestName(cacheResult.albumRomaji, cacheResult.albumEnglish, cacheResult.albumJapanese, "");
                         std::string bestArt = PickBestName(cacheResult.artistRomaji, cacheResult.artistEnglish, cacheResult.artistJapanese, "");
                         c.artist = !bestArt.empty() ? bestArt : artistClean;

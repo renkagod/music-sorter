@@ -1659,6 +1659,44 @@ inline std::vector<std::string> TokenizeWords(const std::string& str) {
     return tokens;
 }
 
+inline bool CheckAcronymMatch(const std::string& s1, const std::string& s2) {
+    if (s1.empty() || s2.empty()) return false;
+
+    auto checkOne = [](const std::string& shortStr, const std::string& longStr) -> bool {
+        std::string acr;
+        for (unsigned char c : shortStr) {
+            if (std::isalnum(c)) acr.push_back((char)std::tolower(c));
+        }
+        if (acr.size() < 2 || acr.size() > 8) return false;
+
+        auto tokens = TokenizeWords(longStr);
+        if (tokens.size() < 2) return false;
+
+        // 1. All initials
+        std::string allInitials;
+        for (const auto& t : tokens) {
+            if (!t.empty()) allInitials.push_back(t[0]);
+        }
+        if (acr == allInitials) return true;
+
+        // 2. Non-stopword initials
+        std::string nonStopInitials;
+        for (const auto& t : tokens) {
+            if (t.empty()) continue;
+            if (t == "the" || t == "and" || t == "of" || t == "a" || t == "an" ||
+                t == "in" || t == "on" || t == "at" || t == "to" || t == "for" || t == "with") {
+                continue;
+            }
+            nonStopInitials.push_back(t[0]);
+        }
+        if (!nonStopInitials.empty() && acr == nonStopInitials) return true;
+
+        return false;
+    };
+
+    return checkOne(s1, s2) || checkOne(s2, s1);
+}
+
 inline double ComputeStringSimilarity(const std::string& s1, const std::string& s2) {
     if (s1.empty() && s2.empty()) return 1.0;
     if (s1.empty() || s2.empty()) return 0.0;
@@ -1743,7 +1781,9 @@ inline double ComputeStringSimilarity(const std::string& s1, const std::string& 
         }
     }
 
-    double best = (std::max)({levSim, subSim, tokenSim, containmentSim});
+    double acronymSim = CheckAcronymMatch(s1, s2) ? 0.95 : 0.0;
+
+    double best = (std::max)({levSim, subSim, tokenSim, containmentSim, acronymSim});
     if (best > 1.0) best = 1.0;
     if (best < 0.0) best = 0.0;
     return best;

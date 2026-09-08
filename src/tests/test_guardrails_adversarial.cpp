@@ -94,6 +94,15 @@ TEST_CASE("Guardrails Adversarial", "Artist Variations: Cyrillic Alignment and T
     ASSERT_GE(ComputeStringSimilarity("Алиса", "алиса"), 0.80);
 }
 
+TEST_CASE("Guardrails Adversarial", "Artist Variations: Acronyms and Initialisms (GYBE, RHCP, QOTSA)") {
+    ASSERT_GE(ComputeStringSimilarity("GYBE", "Godspeed You! Black Emperor"), 0.90);
+    ASSERT_GE(ComputeStringSimilarity("Godspeed You Black Emperor!", "GYBE"), 0.90);
+    ASSERT_GE(ComputeStringSimilarity("RHCP", "Red Hot Chili Peppers"), 0.90);
+    ASSERT_GE(ComputeStringSimilarity("QOTSA", "Queens of the Stone Age"), 0.90);
+    ASSERT_GE(ComputeStringSimilarity("ELO", "Electric Light Orchestra"), 0.90);
+    ASSERT_GE(ComputeStringSimilarity("BOC", "Boards of Canada"), 0.90);
+}
+
 // ============================================================================
 // ADVERSARIAL SUITE 3: MASSIVE CANDIDATE TRACKLISTS (BOX SETS VS EPS)
 // ============================================================================
