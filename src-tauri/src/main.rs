@@ -112,54 +112,29 @@ fn main() {
         log_file("Core executable not found");
     }
 
-    log_file("Building Tauri app...");
-    let app = match tauri::Builder::default()
+    log_file("Starting Tauri application...");
+    tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(CoreProcess(child_clone))
         .setup(|_app| {
             log_file("Tauri setup hook executed cleanly.");
             Ok(())
         })
-        .build(tauri::generate_context!())
-    {
-        Ok(a) => {
-            log_file("Tauri app built successfully!");
-            a
-        }
-        Err(e) => {
-            log_file(&format!("Tauri build error: {:?}", e));
-            panic!("Tauri build error: {:?}", e);
-        }
-    };
+        .on_window_event(move |_window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                log_file("Window destroyed, shutting down core...");
+                let _ = Command::new("curl.exe")
+                    .args(["-s", "-X", "POST", "http://127.0.0.1:8765/api/shutdown"])
+                    .output();
 
-    log_file("Calling app.run()...");
-    app.run(move |_app_handle, event| {
-        match &event {
-            RunEvent::ExitRequested { code, .. } => {
-                log_file(&format!("RunEvent::ExitRequested code={:?}", code));
-            }
-            RunEvent::Exit => {
-                log_file("RunEvent::Exit");
-            }
-            RunEvent::WindowEvent { label, event, .. } => {
-                log_file(&format!("WindowEvent '{}': {:?}", label, event));
-            }
-            _ => {}
-        }
-
-        if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
-            // Attempt graceful shutdown via HTTP
-            let _ = Command::new("curl.exe")
-                .args(["-s", "-X", "POST", "http://127.0.0.1:8765/api/shutdown"])
-                .output();
-
-            if let Ok(mut lock) = core_child.lock() {
-                if let Some(mut child) = lock.take() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    log_file("Headless core process terminated cleanly.");
+                if let Ok(mut lock) = core_child.lock() {
+                    if let Some(mut child) = lock.take() {
+                        let _ = child.kill();
+                        log_file("Headless core process terminated cleanly.");
+                    }
                 }
             }
-        }
-    });
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
