@@ -81,10 +81,7 @@ fn main() {
     log_file("=== App starting ===");
 
     #[cfg(windows)]
-    std::env::set_var(
-        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-        "--proxy-bypass-list=<-loopback>;<local>;localhost;127.0.0.1;*.localhost;tauri.localhost",
-    );
+    std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
 
     let core_child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let child_clone = core_child.clone();
@@ -119,13 +116,8 @@ fn main() {
     let app = match tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(CoreProcess(child_clone))
-        .setup(|app| {
-            log_file("Tauri setup hook called!");
-            let windows = app.webview_windows();
-            log_file(&format!("Total windows: {}", windows.len()));
-            for (label, win) in windows {
-                log_file(&format!("Window '{}' visible: {:?}", label, win.is_visible()));
-            }
+        .setup(|_app| {
+            log_file("Tauri setup hook executed cleanly.");
             Ok(())
         })
         .build(tauri::generate_context!())
