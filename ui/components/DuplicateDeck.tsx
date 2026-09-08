@@ -41,8 +41,6 @@ export const DuplicateDeck: React.FC = () => {
     return () => clearInterval(interval);
   }, [fetchDuplicates]);
 
-  const currentPair = duplicatePairs[activePairIndex];
-
   const formatTime = (sec: number) => {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
@@ -77,6 +75,9 @@ export const DuplicateDeck: React.FC = () => {
       </div>
     );
   }
+
+  const safeIndex = Math.min(activePairIndex, Math.max(0, duplicatePairs.length - 1));
+  const currentPair = duplicatePairs[safeIndex];
 
   const currentPercent =
     audioStatus.duration > 0

@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 use tauri::RunEvent;
@@ -7,28 +8,71 @@ use tauri::RunEvent;
 #[allow(dead_code)]
 struct CoreProcess(Arc<Mutex<Option<Child>>>);
 
-fn main() {
-    let core_child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
-    let child_clone = core_child.clone();
-
-    // Check if music-sorter-core.exe exists
-    let mut exe_path = std::env::current_dir()
-        .unwrap_or_default()
-        .join("music-sorter-core.exe");
-
-    if !exe_path.exists() {
-        if let Ok(parent) = std::env::current_exe() {
-            let p_exe = parent.parent().unwrap_or(&parent).join("music-sorter-core.exe");
-            if p_exe.exists() {
-                exe_path = p_exe;
+fn find_core_executable() -> Option<PathBuf> {
+    // 1. Current working directory
+    if let Ok(cwd) = std::env::current_dir() {
+        let p = cwd.join("music-sorter-core.exe");
+        if p.exists() {
+            return Some(p);
+        }
+        if let Some(parent) = cwd.parent() {
+            let p = parent.join("music-sorter-core.exe");
+            if p.exists() {
+                return Some(p);
             }
         }
     }
 
-    if exe_path.exists() {
-        match Command::new(&exe_path).spawn() {
+    // 2. Executable parent directory (installed / packaged bundle)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let p = parent.join("music-sorter-core.exe");
+            if p.exists() {
+                return Some(p);
+            }
+            // Cargo target/debug or target/release
+            if let Some(p2) = parent.parent() {
+                if let Some(p3) = p2.parent() {
+                    let p = p3.join("music-sorter-core.exe");
+                    if p.exists() {
+                        return Some(p);
+                    }
+                    if let Some(p4) = p3.parent() {
+                        let p = p4.join("music-sorter-core.exe");
+                        if p.exists() {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Fallback to known development root
+    let dev_root = PathBuf::from(r"d:\Coding\Projects\music-sorter\music-sorter-core.exe");
+    if dev_root.exists() {
+        return Some(dev_root);
+    }
+
+    None
+}
+
+fn main() {
+    let core_child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
+    let child_clone = core_child.clone();
+
+    let exe_path = find_core_executable();
+    if let Some(ref path) = exe_path {
+        let working_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let my_pid = std::process::id();
+        match Command::new(path)
+            .current_dir(working_dir)
+            .arg("--parent-pid")
+            .arg(my_pid.to_string())
+            .spawn()
+        {
             Ok(child) => {
-                println!("[TAURI] Launched headless core: {:?}", exe_path);
+                println!("[TAURI] Launched headless core (PID {}): {:?}", child.id(), path);
                 *core_child.lock().unwrap() = Some(child);
             }
             Err(e) => {
@@ -36,7 +80,7 @@ fn main() {
             }
         }
     } else {
-        println!("[TAURI] Core executable not found at {:?}, expecting standalone daemon", exe_path);
+        println!("[TAURI] Core executable not found, expecting standalone daemon on 127.0.0.1:8765");
     }
 
     let app = tauri::Builder::default()
@@ -46,7 +90,12 @@ fn main() {
         .expect("error while building tauri application");
 
     app.run(move |_app_handle, event| {
-        if let RunEvent::ExitRequested { .. } = event {
+        if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
+            // Attempt graceful shutdown via HTTP
+            let _ = Command::new("curl.exe")
+                .args(["-s", "-X", "POST", "http://127.0.0.1:8765/api/shutdown"])
+                .output();
+
             if let Ok(mut lock) = core_child.lock() {
                 if let Some(mut child) = lock.take() {
                     let _ = child.kill();

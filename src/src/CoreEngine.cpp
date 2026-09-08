@@ -1094,6 +1094,7 @@ TagReviewItem CoreEngine::GetTagItem(size_t index) {
 }
 
 std::vector<size_t> CoreEngine::GetAlbumTrackIndices(size_t referenceIndex) const {
+    std::lock_guard<std::mutex> lock(m_tagMutex);
     std::vector<size_t> indices;
     if (referenceIndex >= m_tagItems.size()) return indices;
 
@@ -1287,9 +1288,33 @@ void CoreEngine::ApplyCandidateToTrack(size_t trackIndex, int candidateIndex) {
 }
 
 void CoreEngine::ApplyCandidateToAlbum(size_t referenceTrackIndex, int candidateIndex) {
-    std::vector<size_t> indices = GetAlbumTrackIndices(referenceTrackIndex);
-    for (size_t idx : indices) {
-        ApplyCandidateToTrack(idx, candidateIndex);
+    std::lock_guard<std::mutex> lock(m_tagMutex);
+    if (referenceTrackIndex >= m_tagItems.size()) return;
+    const auto& refItem = m_tagItems[referenceTrackIndex];
+    if (candidateIndex < 0 || (size_t)candidateIndex >= refItem.candidates.size()) return;
+    const auto& c = refItem.candidates[candidateIndex];
+
+    std::string refAlbum(refItem.albumBuf);
+    std::string refKey = NormalizeKey(refAlbum);
+    std::vector<size_t> indices;
+    for (size_t i = 0; i < m_tagItems.size(); ++i) {
+        if (NormalizeKey(m_tagItems[i].albumBuf) == refKey) {
+            indices.push_back(i);
+        }
+    }
+
+    for (size_t t = 0; t < indices.size(); ++t) {
+        size_t idx = indices[t];
+        auto& it = m_tagItems[idx];
+        if (!c.artist.empty()) strncpy_s(it.artistBuf, c.artist.c_str(), sizeof(it.artistBuf) - 1);
+        if (!c.album.empty()) strncpy_s(it.albumBuf, c.album.c_str(), sizeof(it.albumBuf) - 1);
+        if (!c.year.empty()) strncpy_s(it.yearBuf, c.year.c_str(), sizeof(it.yearBuf) - 1);
+        if (t < c.tracklist.size() && !c.tracklist[t].empty()) {
+            strncpy_s(it.titleBuf, c.tracklist[t].c_str(), sizeof(it.titleBuf) - 1);
+        } else if (indices.size() == 1 && !c.title.empty()) {
+            strncpy_s(it.titleBuf, c.title.c_str(), sizeof(it.titleBuf) - 1);
+        }
+        it.selectedCandidateIndex = candidateIndex;
     }
 }
 
@@ -1422,9 +1447,10 @@ void CoreEngine::FetchManualDiscogs(const std::string& inputUrl, size_t referenc
         DiscogsReleaseInfo discInfo;
         if (!FetchDiscogsReleaseDetails(relId, isMaster, discInfo, m_discogsToken)) return;
 
-        std::string title = discInfo.title;
-        std::string year = discInfo.year;
-        std::string artist = discInfo.artist;
+        std::vector<unsigned char> coverData;
+        if (!discInfo.coverUrl.empty()) {
+            coverData = HttpGetBytes(Utf8ToWide(discInfo.coverUrl), m_discogsToken);
+        }
 
         std::vector<size_t> targetIndices = applyToAlbum ? GetAlbumTrackIndices(referenceTrackIndex) : std::vector<size_t>{ referenceTrackIndex };
 
@@ -1432,28 +1458,195 @@ void CoreEngine::FetchManualDiscogs(const std::string& inputUrl, size_t referenc
         for (size_t idx : targetIndices) {
             if (idx >= m_tagItems.size()) continue;
             auto& it = m_tagItems[idx];
-            if (!title.empty()) strncpy_s(it.albumBuf, title.c_str(), sizeof(it.albumBuf) - 1);
-            if (!artist.empty()) strncpy_s(it.artistBuf, artist.c_str(), sizeof(it.artistBuf) - 1);
-            if (year != "0") strncpy_s(it.yearBuf, year.c_str(), sizeof(it.yearBuf) - 1);
+            if (!discInfo.title.empty()) strncpy_s(it.albumBuf, discInfo.title.c_str(), sizeof(it.albumBuf) - 1);
+            if (!discInfo.artist.empty()) strncpy_s(it.artistBuf, discInfo.artist.c_str(), sizeof(it.artistBuf) - 1);
+            if (!discInfo.year.empty() && discInfo.year != "0") strncpy_s(it.yearBuf, discInfo.year.c_str(), sizeof(it.yearBuf) - 1);
+            if (!discInfo.tracks.empty()) ApplyTrackMatch(it, discInfo.tracks);
+            if (!coverData.empty()) {
+                it.onlineCoverBytes = coverData;
+                it.onlineCoverSource = "Discogs";
+                it.selectedCoverChoice = 1;
+            }
             it.matchTier = MatchTier::Discogs;
+            it.isFetchCompleted = true;
         }
+        LOG_INFO("[MANUAL DISCOGS MATCHED] Loaded release: " + discInfo.title);
     }).detach();
 }
 
 void CoreEngine::FetchManualTouhouDb(const std::string& inputUrl, size_t referenceTrackIndex, bool applyToAlbum) {
-    LOG_INFO("[MANUAL] TouhouDB fetch requested: " + inputUrl);
+    int albumId = 0;
+    std::regex idRegex(R"((\d{1,8}))");
+    std::smatch match;
+    if (std::regex_search(inputUrl, match, idRegex)) {
+        try { albumId = std::stoi(match.str(1)); } catch (...) {}
+    }
+    if (albumId <= 0) return;
+
+    std::thread([this, albumId, referenceTrackIndex, applyToAlbum]() {
+        VdbReleaseInfo info;
+        if (!FetchVdbAlbumDetails("https://touhoudb.com", "TouhouDB", albumId, info)) return;
+
+        std::vector<unsigned char> coverData;
+        if (!info.coverUrl.empty()) {
+            coverData = HttpGetBytes(Utf8ToWide(info.coverUrl));
+        }
+
+        std::vector<size_t> targetIndices = applyToAlbum ? GetAlbumTrackIndices(referenceTrackIndex) : std::vector<size_t>{ referenceTrackIndex };
+
+        std::lock_guard<std::mutex> lock(m_tagMutex);
+        for (size_t idx : targetIndices) {
+            if (idx >= m_tagItems.size()) continue;
+            auto& it = m_tagItems[idx];
+            if (!info.artist.empty()) strncpy_s(it.artistBuf, info.artist.c_str(), sizeof(it.artistBuf) - 1);
+            if (!info.title.empty()) strncpy_s(it.albumBuf, info.title.c_str(), sizeof(it.albumBuf) - 1);
+            if (!info.releaseDate.empty()) {
+                std::string yr = ExtractYearFromString(info.releaseDate);
+                strncpy_s(it.yearBuf, yr.c_str(), sizeof(it.yearBuf) - 1);
+            }
+            if (!info.tracks.empty()) ApplyTrackMatch(it, info.tracks);
+            if (!coverData.empty()) {
+                it.onlineCoverBytes = coverData;
+                it.onlineCoverSource = "TouhouDB";
+                it.selectedCoverChoice = 1;
+            }
+            it.matchTier = MatchTier::TouhouDB;
+            it.isFetchCompleted = true;
+        }
+        LOG_INFO("[MANUAL TOUHOUDB MATCHED] Loaded release: " + info.title);
+    }).detach();
 }
 
 void CoreEngine::FetchManualThwiki(const std::string& inputUrl, size_t referenceTrackIndex, bool applyToAlbum) {
-    LOG_INFO("[MANUAL] THBWiki fetch requested: " + inputUrl);
+    int albumId = ExtractThwikiId(inputUrl);
+    std::string customTitle;
+    if (albumId <= 0) {
+        std::string cleaned = CleanMetadataString(inputUrl);
+        if (!cleaned.empty() && cleaned.find("http") == std::string::npos) {
+            customTitle = cleaned;
+        }
+    }
+    if (albumId <= 0 && customTitle.empty()) return;
+
+    std::thread([this, albumId, customTitle, referenceTrackIndex, applyToAlbum]() {
+        ThwikiReleaseInfo info;
+        bool ok = (albumId > 0) ? FetchThwikiAlbumDetails(albumId, info) : FetchThwikiAlbumDetailsByTitle(customTitle, info);
+        if (!ok) return;
+
+        std::vector<unsigned char> coverData;
+        if (!info.coverUrl.empty()) {
+            coverData = HttpGetBytes(Utf8ToWide(info.coverUrl));
+        }
+
+        std::vector<size_t> targetIndices = applyToAlbum ? GetAlbumTrackIndices(referenceTrackIndex) : std::vector<size_t>{ referenceTrackIndex };
+
+        std::lock_guard<std::mutex> lock(m_tagMutex);
+        for (size_t idx : targetIndices) {
+            if (idx >= m_tagItems.size()) continue;
+            auto& it = m_tagItems[idx];
+            if (!info.circle.empty()) strncpy_s(it.artistBuf, info.circle.c_str(), sizeof(it.artistBuf) - 1);
+            if (!info.title.empty()) strncpy_s(it.albumBuf, info.title.c_str(), sizeof(it.albumBuf) - 1);
+            if (!info.releaseDate.empty()) {
+                std::string yr = ExtractYearFromString(info.releaseDate);
+                strncpy_s(it.yearBuf, yr.c_str(), sizeof(it.yearBuf) - 1);
+            }
+            if (!info.tracks.empty()) ApplyTrackMatch(it, info.tracks);
+            if (!coverData.empty()) {
+                it.onlineCoverBytes = coverData;
+                it.onlineCoverSource = "THBWiki";
+                it.selectedCoverChoice = 1;
+            }
+            it.matchTier = MatchTier::THBWiki;
+            it.isFetchCompleted = true;
+        }
+        LOG_INFO("[MANUAL THBWIKI MATCHED] Loaded release: " + info.title);
+    }).detach();
 }
 
 void CoreEngine::FetchManualVocaDb(const std::string& inputUrl, size_t referenceTrackIndex, bool applyToAlbum) {
-    LOG_INFO("[MANUAL] VocaDB fetch requested: " + inputUrl);
+    int albumId = 0;
+    std::regex idRegex(R"((\d{1,8}))");
+    std::smatch match;
+    if (std::regex_search(inputUrl, match, idRegex)) {
+        try { albumId = std::stoi(match.str(1)); } catch (...) {}
+    }
+    if (albumId <= 0) return;
+
+    std::thread([this, albumId, referenceTrackIndex, applyToAlbum]() {
+        VdbReleaseInfo info;
+        if (!FetchVdbAlbumDetails("https://vocadb.net", "VocaDB", albumId, info)) return;
+
+        std::vector<unsigned char> coverData;
+        if (!info.coverUrl.empty()) {
+            coverData = HttpGetBytes(Utf8ToWide(info.coverUrl));
+        }
+
+        std::vector<size_t> targetIndices = applyToAlbum ? GetAlbumTrackIndices(referenceTrackIndex) : std::vector<size_t>{ referenceTrackIndex };
+
+        std::lock_guard<std::mutex> lock(m_tagMutex);
+        for (size_t idx : targetIndices) {
+            if (idx >= m_tagItems.size()) continue;
+            auto& it = m_tagItems[idx];
+            if (!info.artist.empty()) strncpy_s(it.artistBuf, info.artist.c_str(), sizeof(it.artistBuf) - 1);
+            if (!info.title.empty()) strncpy_s(it.albumBuf, info.title.c_str(), sizeof(it.albumBuf) - 1);
+            if (!info.releaseDate.empty()) {
+                std::string yr = ExtractYearFromString(info.releaseDate);
+                strncpy_s(it.yearBuf, yr.c_str(), sizeof(it.yearBuf) - 1);
+            }
+            if (!info.tracks.empty()) ApplyTrackMatch(it, info.tracks);
+            if (!coverData.empty()) {
+                it.onlineCoverBytes = coverData;
+                it.onlineCoverSource = "VocaDB";
+                it.selectedCoverChoice = 1;
+            }
+            it.matchTier = MatchTier::VocaDB;
+            it.isFetchCompleted = true;
+        }
+        LOG_INFO("[MANUAL VOCADB MATCHED] Loaded release: " + info.title);
+    }).detach();
 }
 
 void CoreEngine::FetchManualUtaiteDb(const std::string& inputUrl, size_t referenceTrackIndex, bool applyToAlbum) {
-    LOG_INFO("[MANUAL] UtaiteDB fetch requested: " + inputUrl);
+    int albumId = 0;
+    std::regex idRegex(R"((\d{1,8}))");
+    std::smatch match;
+    if (std::regex_search(inputUrl, match, idRegex)) {
+        try { albumId = std::stoi(match.str(1)); } catch (...) {}
+    }
+    if (albumId <= 0) return;
+
+    std::thread([this, albumId, referenceTrackIndex, applyToAlbum]() {
+        VdbReleaseInfo info;
+        if (!FetchVdbAlbumDetails("https://utaitedb.net", "UtaiteDB", albumId, info)) return;
+
+        std::vector<unsigned char> coverData;
+        if (!info.coverUrl.empty()) {
+            coverData = HttpGetBytes(Utf8ToWide(info.coverUrl));
+        }
+
+        std::vector<size_t> targetIndices = applyToAlbum ? GetAlbumTrackIndices(referenceTrackIndex) : std::vector<size_t>{ referenceTrackIndex };
+
+        std::lock_guard<std::mutex> lock(m_tagMutex);
+        for (size_t idx : targetIndices) {
+            if (idx >= m_tagItems.size()) continue;
+            auto& it = m_tagItems[idx];
+            if (!info.artist.empty()) strncpy_s(it.artistBuf, info.artist.c_str(), sizeof(it.artistBuf) - 1);
+            if (!info.title.empty()) strncpy_s(it.albumBuf, info.title.c_str(), sizeof(it.albumBuf) - 1);
+            if (!info.releaseDate.empty()) {
+                std::string yr = ExtractYearFromString(info.releaseDate);
+                strncpy_s(it.yearBuf, yr.c_str(), sizeof(it.yearBuf) - 1);
+            }
+            if (!info.tracks.empty()) ApplyTrackMatch(it, info.tracks);
+            if (!coverData.empty()) {
+                it.onlineCoverBytes = coverData;
+                it.onlineCoverSource = "UtaiteDB";
+                it.selectedCoverChoice = 1;
+            }
+            it.matchTier = MatchTier::UtaiteDB;
+            it.isFetchCompleted = true;
+        }
+        LOG_INFO("[MANUAL UTAITEDB MATCHED] Loaded release: " + info.title);
+    }).detach();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1630,7 +1823,7 @@ std::vector<float> CoreEngine::GetWaveformPeaks(const std::string& filePath, int
     if (peakCount <= 0) peakCount = 100;
     std::vector<float> peaks(peakCount, 0.2f);
 
-    std::ifstream file(filePath, std::ios::binary | std::ios::ate);
+    std::ifstream file(fs::path(Utf8ToWide(filePath)), std::ios::binary | std::ios::ate);
     if (!file.is_open()) return peaks;
 
     std::streamsize size = file.tellg();

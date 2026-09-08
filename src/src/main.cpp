@@ -42,12 +42,15 @@ int main(int argc, char* argv[]) {
     std::string baseDir = p.parent_path().string();
 
     int port = 8765;
+    DWORD parentPid = 0;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
             try { port = std::stoi(argv[++i]); } catch (...) {}
         } else if (arg == "--dir" && i + 1 < argc) {
             baseDir = argv[++i];
+        } else if (arg == "--parent-pid" && i + 1 < argc) {
+            try { parentPid = (DWORD)std::stoul(argv[++i]); } catch (...) {}
         }
     }
 
@@ -62,6 +65,9 @@ int main(int argc, char* argv[]) {
     LOG_INFO("=== Starting MusicSorter Headless C++ Core ===");
     LOG_INFO("Base Directory: " + baseDir);
     LOG_INFO("HTTP REST Port: " + std::to_string(port));
+    if (parentPid > 0) {
+        LOG_INFO("Parent Watchdog attached to PID: " + std::to_string(parentPid));
+    }
 
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
@@ -82,6 +88,19 @@ int main(int argc, char* argv[]) {
     }
 
     LOG_INFO("[READY] MusicSorter Core Engine ready for Tauri frontend.");
+
+    if (parentPid > 0) {
+        std::thread([parentPid, &server]() {
+            HANDLE hParent = OpenProcess(SYNCHRONIZE, FALSE, parentPid);
+            if (hParent != NULL) {
+                WaitForSingleObject(hParent, INFINITE);
+                CloseHandle(hParent);
+                LOG_INFO("[SYSTEM] Parent process exited. Initiating headless core shutdown...");
+                g_keepRunning = false;
+                server.Stop();
+            }
+        }).detach();
+    }
 
     while (g_keepRunning && server.IsRunning()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

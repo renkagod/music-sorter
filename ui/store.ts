@@ -147,10 +147,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       const res = await fetch(`${API_BASE}/duplicates`);
       if (res.ok) {
         const list: DuplicatePair[] = await res.json();
-        set({ duplicatePairs: list });
+        const safeIdx = Math.min(get().activePairIndex, Math.max(0, list.length - 1));
+        set({ duplicatePairs: list, activePairIndex: safeIdx });
         if (list.length > 0) {
-          const pair = list[get().activePairIndex] || list[0];
+          const pair = list[safeIdx];
           get().loadWaveforms(pair);
+          fetch(`${API_BASE}/audio/load`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pathA: pair.trackA_path,
+              pathB: pair.trackB_path,
+            }),
+          }).catch(console.error);
         }
       }
     } catch (e) {
@@ -191,6 +200,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         body: JSON.stringify({ index, action }),
       });
       if (res.ok) {
+        const curList = get().duplicatePairs;
+        const nextIndex = Math.min(index, Math.max(0, curList.length - 2));
+        set({ activePairIndex: nextIndex });
         await get().fetchDuplicates();
         get().checkStatus();
       }
@@ -344,6 +356,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         body: JSON.stringify({ referenceIndex }),
       });
       await get().fetchAlbums();
+      const albums = get().albums;
+      const nextUnprocessed = albums.find((a) => a.tracks.some((t) => !t.isProcessed));
+      if (nextUnprocessed) {
+        set({ selectedAlbumKey: nextUnprocessed.albumKey });
+      }
       get().checkStatus();
     } catch (e) {
       console.error(e);
@@ -358,6 +375,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         body: JSON.stringify({ trackIndex, isAlbum }),
       });
       await get().fetchAlbums();
+      if (isAlbum) {
+        const albums = get().albums;
+        const nextUnprocessed = albums.find((a) => a.tracks.some((t) => !t.isProcessed));
+        if (nextUnprocessed) {
+          set({ selectedAlbumKey: nextUnprocessed.albumKey });
+        }
+      }
       get().checkStatus();
     } catch (e) {
       console.error(e);

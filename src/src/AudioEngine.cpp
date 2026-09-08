@@ -114,20 +114,34 @@ void AudioEngine::SetMasterVolume(float volume) {
 
 void AudioEngine::SeekToPercentage(double percent) {
     std::lock_guard<std::mutex> lock(m_mutex);
+    double frac = (percent > 1.0) ? (percent / 100.0) : percent;
+    if (frac < 0.0) frac = 0.0;
+    if (frac > 1.0) frac = 1.0;
+
     if (m_soundALoaded) {
-        ma_uint64 length;
+        ma_uint64 length = 0;
         ma_sound_get_length_in_pcm_frames(&m_soundA, &length);
-        ma_uint64 target = (ma_uint64)(length * (percent / 100.0));
+        ma_uint64 target = (ma_uint64)(length * frac);
         ma_sound_seek_to_pcm_frame(&m_soundA, target);
         if (m_soundBLoaded) ma_sound_seek_to_pcm_frame(&m_soundB, target);
+    } else if (m_soundBLoaded) {
+        ma_uint64 length = 0;
+        ma_sound_get_length_in_pcm_frames(&m_soundB, &length);
+        ma_uint64 target = (ma_uint64)(length * frac);
+        ma_sound_seek_to_pcm_frame(&m_soundB, target);
     }
 }
 
 double AudioEngine::GetCurrentPositionSeconds() {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_soundALoaded) {
-        ma_uint64 cursor;
+        ma_uint64 cursor = 0;
         ma_sound_get_cursor_in_pcm_frames(&m_soundA, &cursor);
+        ma_uint32 sampleRate = ma_engine_get_sample_rate(&m_engine);
+        if (sampleRate > 0) return (double)cursor / (double)sampleRate;
+    } else if (m_soundBLoaded) {
+        ma_uint64 cursor = 0;
+        ma_sound_get_cursor_in_pcm_frames(&m_soundB, &cursor);
         ma_uint32 sampleRate = ma_engine_get_sample_rate(&m_engine);
         if (sampleRate > 0) return (double)cursor / (double)sampleRate;
     }
@@ -137,8 +151,13 @@ double AudioEngine::GetCurrentPositionSeconds() {
 double AudioEngine::GetDurationSeconds() {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_soundALoaded) {
-        ma_uint64 length;
+        ma_uint64 length = 0;
         ma_sound_get_length_in_pcm_frames(&m_soundA, &length);
+        ma_uint32 sampleRate = ma_engine_get_sample_rate(&m_engine);
+        if (sampleRate > 0) return (double)length / (double)sampleRate;
+    } else if (m_soundBLoaded) {
+        ma_uint64 length = 0;
+        ma_sound_get_length_in_pcm_frames(&m_soundB, &length);
         ma_uint32 sampleRate = ma_engine_get_sample_rate(&m_engine);
         if (sampleRate > 0) return (double)length / (double)sampleRate;
     }

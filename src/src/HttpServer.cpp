@@ -480,7 +480,11 @@ void HttpServer::HandleClient(uintptr_t clientSocket) {
             statusCode = 404;
             respBody = "{\"error\":\"Cover image not found\"}";
         } else {
-            contentType = "image/jpeg";
+            if (binaryBody.size() >= 4 && binaryBody[0] == 0x89 && binaryBody[1] == 'P' && binaryBody[2] == 'N' && binaryBody[3] == 'G') {
+                contentType = "image/png";
+            } else {
+                contentType = "image/jpeg";
+            }
         }
     }
     else if (path == "/api/tags/approve-track" && method == "POST") {

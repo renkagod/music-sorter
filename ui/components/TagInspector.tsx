@@ -73,6 +73,12 @@ export const TagInspector: React.FC = () => {
     return true;
   });
 
+  useEffect(() => {
+    if (filteredAlbums.length > 0 && !filteredAlbums.some((a) => a.albumKey === selectedAlbumKey)) {
+      setSelectedAlbumKey(filteredAlbums[0].albumKey);
+    }
+  }, [filteredAlbums, selectedAlbumKey, setSelectedAlbumKey]);
+
   const handleStartEdit = (t: TrackItem) => {
     setEditingTrackIndex(t.index);
     setEditFields({
@@ -199,7 +205,7 @@ export const TagInspector: React.FC = () => {
                     {alb.hasOnlineCover || alb.hasLocalCover ? (
                       <img
                         src={`http://127.0.0.1:8765/api/tags/cover?trackIndex=${alb.referenceIndex}&type=${
-                          alb.selectedCoverChoice === 1 ? "online" : "local"
+                          (alb.selectedCoverChoice === 1 && alb.hasOnlineCover) || !alb.hasLocalCover ? "online" : "local"
                         }`}
                         alt="cover"
                         className="w-full h-full object-cover"
