@@ -5,6 +5,12 @@ use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 use tauri::RunEvent;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[allow(dead_code)]
 struct CoreProcess(Arc<Mutex<Option<Child>>>);
 
@@ -58,6 +64,12 @@ fn find_core_executable() -> Option<PathBuf> {
 }
 
 fn main() {
+    #[cfg(windows)]
+    std::env::set_var(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "--proxy-bypass-list=<-loopback>;<local>;localhost;127.0.0.1;*.localhost;tauri.localhost",
+    );
+
     let core_child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let child_clone = core_child.clone();
 
@@ -65,12 +77,15 @@ fn main() {
     if let Some(ref path) = exe_path {
         let working_dir = path.parent().unwrap_or_else(|| Path::new("."));
         let my_pid = std::process::id();
-        match Command::new(path)
-            .current_dir(working_dir)
+        let mut cmd = Command::new(path);
+        cmd.current_dir(working_dir)
             .arg("--parent-pid")
-            .arg(my_pid.to_string())
-            .spawn()
-        {
+            .arg(my_pid.to_string());
+
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        match cmd.spawn() {
             Ok(child) => {
                 println!("[TAURI] Launched headless core (PID {}): {:?}", child.id(), path);
                 *core_child.lock().unwrap() = Some(child);
