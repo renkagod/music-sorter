@@ -39,3 +39,12 @@ logs_*.txt
 *.db
 PROJECT.md
 TEST_INFRA.md
+
+# Frontend & Node
+node_modules/
+dist/
+inc.txt
+
+# Rust / Tauri target
+src-tauri/target/
+!src-tauri/icons/**

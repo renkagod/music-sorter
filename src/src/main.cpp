@@ -1,65 +1,96 @@
-#include "../include/AppWindow.hpp"
+#include "../include/HttpServer.hpp"
+#include "../include/CoreEngine.hpp"
 #include "../include/AudioEngine.hpp"
-#include "../include/AcousticAnalyzer.hpp"
 #include "../include/Logger.hpp"
 
 #include <windows.h>
 #include <filesystem>
 #include <iostream>
+#include <csignal>
+#include <atomic>
 
 namespace fs = std::filesystem;
 
-std::string g_BaseDir;
-std::string g_ToSortDir;
-std::string g_DeleteDir;
-std::string g_OutputDir;
-std::string g_FlacDir;
-std::string g_Mp3Dir;
-std::string g_AcoustIdKey;
-std::string g_DiscogsToken;
+static std::atomic<bool> g_keepRunning{true};
+static HttpServer* g_httpServer = nullptr;
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    char exe_path[MAX_PATH];
-    GetModuleFileNameA(NULL, exe_path, MAX_PATH);
+BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
+    switch (ctrlType) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+        case CTRL_CLOSE_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            LOG_INFO("[SYSTEM] Received termination signal, shutting down gracefully...");
+            g_keepRunning = false;
+            if (g_httpServer) {
+                g_httpServer->Stop();
+            }
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
 
-    fs::path p(exe_path);
-    g_BaseDir = p.parent_path().string();
+int main(int argc, char* argv[]) {
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
 
-    std::string fpcalcBin = (p.parent_path() / "fpcalc.exe").string();
-    if (!fs::exists(fpcalcBin)) {
-        fpcalcBin = (p.parent_path().parent_path() / "fpcalc.exe").string();
-        if (fs::exists(fpcalcBin)) g_BaseDir = p.parent_path().parent_path().string();
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+
+    fs::path p(exePath);
+    std::string baseDir = p.parent_path().string();
+
+    int port = 8765;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--port" && i + 1 < argc) {
+            try { port = std::stoi(argv[++i]); } catch (...) {}
+        } else if (arg == "--dir" && i + 1 < argc) {
+            baseDir = argv[++i];
+        }
     }
 
-    g_OutputDir = g_BaseDir;
-    g_ToSortDir = (fs::path(g_BaseDir) / "TO SORT").string();
-    g_DeleteDir = (fs::path(g_BaseDir) / "delete").string();
-    g_FlacDir = (fs::path(g_OutputDir) / "flac").string();
-    g_Mp3Dir = (fs::path(g_OutputDir) / "mp3").string();
-    LOG_INFO("=== Starting MusicSorter Native ImGui C++ Studio ===");
-    LOG_INFO("Base Directory: " + g_BaseDir);
-    LOG_INFO("Output Directory: " + g_OutputDir);
-    LOG_INFO("TO SORT Directory: " + g_ToSortDir);
-    LOG_INFO("FLAC Output: " + g_FlacDir);
-    LOG_INFO("MP3 Output: " + g_Mp3Dir);
-    LOG_INFO("fpcalc Binary: " + fpcalcBin);
+    std::string fpcalcBin = (fs::path(baseDir) / "fpcalc.exe").string();
+    if (!fs::exists(fpcalcBin)) {
+        fpcalcBin = (fs::path(baseDir).parent_path() / "fpcalc.exe").string();
+        if (fs::exists(fpcalcBin)) {
+            baseDir = fs::path(baseDir).parent_path().string();
+        }
+    }
 
-    AcousticAnalyzer::Instance().SetFpcalcPath(fpcalcBin);
+    LOG_INFO("=== Starting MusicSorter Headless C++ Core ===");
+    LOG_INFO("Base Directory: " + baseDir);
+    LOG_INFO("HTTP REST Port: " + std::to_string(port));
+
+    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
     if (!AudioEngine::Instance().Initialize()) {
-        MessageBoxA(NULL, "Failed to initialize Miniaudio engine!", "MusicSorter Error", MB_ICONERROR);
+        LOG_WARN("[WARN] Failed to initialize Miniaudio engine (running in audio-disabled mode)");
+    }
+
+    CoreEngine::Instance().Initialize(baseDir);
+
+    HttpServer server(port);
+    g_httpServer = &server;
+
+    if (!server.Start()) {
+        LOG_ERROR("[ERROR] Failed to start HTTP server on port " + std::to_string(port));
+        AudioEngine::Instance().Shutdown();
+        CoreEngine::Instance().Shutdown();
         return 1;
     }
 
-    if (!AppWindow::Instance().Initialize(hInstance, nCmdShow)) {
-        MessageBoxA(NULL, "Failed to initialize ImGui DirectX 11 AppWindow!", "MusicSorter Error", MB_ICONERROR);
-        return 1;
+    LOG_INFO("[READY] MusicSorter Core Engine ready for Tauri frontend.");
+
+    while (g_keepRunning && server.IsRunning()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
-    AppWindow::Instance().RunMessageLoop();
-
-    AppWindow::Instance().Cleanup();
+    server.Stop();
     AudioEngine::Instance().Shutdown();
-    LOG_INFO("=== MusicSorter Native C++ Application Exited Cleanly ===");
+    CoreEngine::Instance().Shutdown();
+
+    LOG_INFO("=== MusicSorter Headless Core Exited Cleanly ===");
     return 0;
 }

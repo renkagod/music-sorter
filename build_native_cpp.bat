@@ -8,15 +8,15 @@ cd /d "%~dp0"
 if not exist build mkdir build
 cd build
 
-echo Configuring CMake for native C++ MusicSorterApp...
+echo Configuring CMake for headless C++ music-sorter-core...
 %CMAKE% -G "Ninja" -DCMAKE_MAKE_PROGRAM=%NINJA% ..\src
 
-echo Building native C++ MusicSorterApp.exe with MSVC 2022 and Ninja...
-%CMAKE% --build .
+echo Building headless C++ music-sorter-core.exe with MSVC 2022 and Ninja...
+%CMAKE% --build . --target music-sorter-core
 
 if %ERRORLEVEL% EQU 0 (
     echo ==================================================
-    echo SUCCESS: Native C++ MusicSorterApp.exe compiled!
+    echo SUCCESS: Headless C++ music-sorter-core.exe compiled!
     echo ==================================================
 ) else (
     echo ERROR: Build failed.

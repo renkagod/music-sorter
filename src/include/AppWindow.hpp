@@ -1,105 +1,8 @@
 #pragma once
-#include <windows.h>
-#include <d3d11.h>
-#include <string>
-#include <vector>
-#include <atomic>
-#include <chrono>
-#include "AcousticAnalyzer.hpp"
-#include "ConsensusAggregator.hpp"
-#include <mutex>
 
-#define WM_SCAN_PROGRESS     (WM_USER + 101)
-#define WM_SCAN_FINISHED     (WM_USER + 102)
-#define WM_TAG_SCAN_FINISHED (WM_USER + 103)
-#define WM_BROWSE_RESULT     (WM_USER + 104)
+#include "CoreEngine.hpp"
 
-enum class MatchTier {
-    AcoustId,
-    TierA,
-    TierB_Verified,
-    TierB_Fallback,
-    TierB_Katakana,
-    TierC_Loose,
-    TouhouDB,
-    THBWiki,
-    VocaDB,
-    UtaiteDB,
-    Discogs,
-    Niche_Local
-};
-
-struct TagReviewItem {
-    std::string filePath;
-    std::string relPath;
-    std::string originalFilename;
-
-    std::string embeddedArtist;
-    std::string embeddedAlbum;
-    std::string embeddedTitle;
-    std::string embeddedTrackNo;
-    std::string embeddedYear;
-
-    char artistBuf[256] = {0};
-    char albumBuf[256] = {0};
-    char titleBuf[256] = {0};
-    char trackNoBuf[32] = {0};
-    char yearBuf[32] = {0};
-    char lyricsBuf[16384] = {0};
-
-    // Multi-language metadata variants (Romaji, English, Japanese)
-    std::string titleRomaji;
-    std::string titleEnglish;
-    std::string titleJapanese;
-
-    std::string artistRomaji;
-    std::string artistEnglish;
-    std::string artistJapanese;
-
-    std::string albumRomaji;
-    std::string albumEnglish;
-    std::string albumJapanese;
-
-    // Unsynced lyrics fallback variants (Original, Romaji, English)
-    std::string lyricsOriginal;
-    std::string lyricsRomaji;
-    std::string lyricsEnglish;
-    bool hasSyncedLyrics = false;
-
-    bool isMusicBrainzMatched = false;
-    bool isFetchCompleted = false;
-    bool isProcessed = false;
-    bool hasLyrics = false;
-    bool isSingleTrack{false};
-    double duration = 0.0;
-    MatchTier matchTier = MatchTier::Niche_Local;
-    std::string releaseGroupMbId;
-
-    std::string localCoverPath;
-    std::string onlineCoverUrl;
-    std::string onlineCoverSource;
-    std::vector<unsigned char> localCoverBytes;
-    std::vector<unsigned char> onlineCoverBytes;
-
-    ID3D11ShaderResourceView* localTexture = NULL;
-    ID3D11ShaderResourceView* onlineTexture = NULL;
-    int localWidth = 0, localHeight = 0;
-    int onlineWidth = 0, onlineHeight = 0;
-
-    long long localScore = 0;
-    long long onlineScore = 0;
-
-    int selectedCoverChoice = 0; // 0 = Local, 1 = Online
-
-    // Milestone 4: Multi-Provider Candidates & Consensus
-    std::vector<ConsensusAggregator::MetadataCandidate> candidates;
-    bool hasConflict{false};
-    double confidenceScore{0.0};
-    bool isFetchingAll{false};
-    int selectedCandidateIndex{-1};
-    int selectedCandidateIdx{-1};
-};
-
+// AppWindow compatibility layer for tests and existing modules
 class AppWindow {
 public:
     static AppWindow& Instance() {
@@ -107,105 +10,23 @@ public:
         return instance;
     }
 
-    bool Initialize(HINSTANCE hInstance, int nCmdShow);
-    void RunMessageLoop();
-    void Cleanup();
+    std::vector<size_t> GetAlbumTrackIndices(size_t referenceIndex) const {
+        return CoreEngine::Instance().GetAlbumTrackIndices(referenceIndex);
+    }
 
-    HWND GetHWND() const { return m_hWnd; }
-    void HandleScanFinished();
-    void HandleTagScanFinished();
-    void StartTagScan();
-    void RenderTagScanProgressBar(bool compact = false);
+    void ApproveTracks(const std::vector<size_t>& indices) {
+        for (size_t idx : indices) {
+            CoreEngine::Instance().ApproveTrack(idx);
+        }
+    }
 
-    std::vector<size_t> GetAlbumTrackIndices(size_t referenceIndex) const;
-    void ApproveTracks(const std::vector<size_t>& indices);
-    void SkipTracks(const std::vector<size_t>& indices);
-    void AdvanceToNextUnprocessedTrack();
+    void SkipTracks(const std::vector<size_t>& indices) {
+        for (size_t idx : indices) {
+            CoreEngine::Instance().SkipTrack(idx);
+        }
+    }
 
-private:
-    AppWindow() = default;
-    ~AppWindow() = default;
-
-    bool CreateDeviceD3D(HWND hWnd);
-    void CleanupDeviceD3D();
-    void CreateRenderTarget();
-    void CleanupRenderTarget();
-
-    static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    static LRESULT CALLBACK SummaryWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-
-    void OpenSummaryWindow();
-    void CloseSummaryWindow();
-    void CreateSummaryRenderTarget();
-    void CleanupSummaryRenderTarget();
-    void ResizeSummaryRenderTarget(UINT width, UINT height);
-    void RenderReleaseSummaryTable();
-
-    HINSTANCE m_hInstance = NULL;
-    HWND m_hWnd = NULL;
-    HWND m_hSummaryWnd = NULL;
-
-    // ImGui Contexts
-    struct ImGuiContext* m_mainImGuiContext = NULL;
-    struct ImGuiContext* m_summaryImGuiContext = NULL;
-
-    // DirectX 11 Data
-    ID3D11Device* m_pd3dDevice = NULL;
-    ID3D11DeviceContext* m_pd3dDeviceContext = NULL;
-    IDXGISwapChain* m_pSwapChain = NULL;
-    ID3D11RenderTargetView* m_mainRenderTargetView = NULL;
-
-    // Secondary Window DirectX 11 Data
-    IDXGISwapChain* m_pSummarySwapChain = NULL;
-    ID3D11RenderTargetView* m_summaryRenderTargetView = NULL;
-
-    std::vector<ABCandidatePair> m_candidates;
-    std::vector<std::string> m_autoDelete;
-    size_t m_currentCandidateIndex = 0;
-    bool m_isScanning = false;
-
-    // Step 2 Tag & Cover Inspection
-    std::vector<TagReviewItem> m_tagItems;
-    size_t m_currentTagIndex = 0;
-    std::atomic<bool> m_isTagScanning{false};
-    std::atomic<size_t> m_fetchedCount{0};
-    std::atomic<size_t> m_tagScanTotal{0};
-    std::chrono::steady_clock::time_point m_tagScanStartTime{};
-    std::chrono::steady_clock::time_point m_tagScanEndTime{};
-
-    // Active Stage Tab (0 = Step 1 Duplicates, 1 = Step 2 Inspector, 2 = Step 3 Mirror, 3 = Step 4 Tracklist)
-    int m_activeStageTab = 0;
-
-    // Release Summary Filter State
-    int m_releaseSummaryTierFilter = 0;
-
-    // Console Log Auto-Scroll State
-    bool m_logAutoScroll = true;
-
-    // Folder Settings Buffers
-    char m_toSortBuf[512] = {0};
-    char m_outputBuf[512] = {0};
-    char m_flacBuf[512] = {0};
-    char m_mp3Buf[512] = {0};
-    char m_acoustIdKeyBuf[64] = {0};
-    char m_discogsTokenBuf[128] = {0};
-    bool m_foldersInited = false;
-
-    // Manual MusicBrainz / Discogs / TouhouDB / THBWiki / VocaDB / UtaiteDB Release URL / ID Input
-    char m_manualMbUrlBuf[512] = {0};
-    bool m_manualMbApplyToAlbum = true;
-    void FetchManualMusicBrainzMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
-    void FetchManualDiscogsMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
-    void FetchManualTouhouDbMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
-    void FetchManualThwikiMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
-    void FetchManualVocaDbMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
-    void FetchManualUtaiteDbMetadata(const std::string& inputUrl, bool applyToAllInAlbum);
-
-    // Milestone 4: Multi-Provider Search & Candidate Assignment
-    void FetchAllProvidersMetadata(size_t trackIndex, bool applyToAllInAlbum);
-    void FetchAllProvidersForTrack(size_t trackIndex);
-    void ApplyCandidateToTrack(size_t trackIndex, const ConsensusAggregator::MetadataCandidate& candidate);
-    void ApplyCandidateToAlbum(size_t referenceIndex, const ConsensusAggregator::MetadataCandidate& candidate);
-
-    std::mutex m_candidatesMutex;
+    void StartTagScan() {
+        CoreEngine::Instance().StartTagScan();
+    }
 };
