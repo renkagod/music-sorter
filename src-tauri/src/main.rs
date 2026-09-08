@@ -3,13 +3,24 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
-use tauri::RunEvent;
+use tauri::{Manager, RunEvent};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn log_file(msg: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(r"d:\Coding\Projects\music-sorter\tauri_startup.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "{}", msg);
+    }
+}
 
 #[allow(dead_code)]
 struct CoreProcess(Arc<Mutex<Option<Child>>>);
@@ -64,6 +75,11 @@ fn find_core_executable() -> Option<PathBuf> {
 }
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        log_file(&format!("PANIC: {}", info));
+    }));
+    log_file("=== App starting ===");
+
     #[cfg(windows)]
     std::env::set_var(
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
@@ -77,6 +93,7 @@ fn main() {
     if let Some(ref path) = exe_path {
         let working_dir = path.parent().unwrap_or_else(|| Path::new("."));
         let my_pid = std::process::id();
+        log_file(&format!("Spawning core at {:?}", path));
         let mut cmd = Command::new(path);
         cmd.current_dir(working_dir)
             .arg("--parent-pid")
@@ -87,24 +104,57 @@ fn main() {
 
         match cmd.spawn() {
             Ok(child) => {
-                println!("[TAURI] Launched headless core (PID {}): {:?}", child.id(), path);
+                log_file(&format!("Core spawned PID {}", child.id()));
                 *core_child.lock().unwrap() = Some(child);
             }
             Err(e) => {
-                eprintln!("[TAURI ERROR] Failed to start core process: {:?}", e);
+                log_file(&format!("Failed to start core: {:?}", e));
             }
         }
     } else {
-        println!("[TAURI] Core executable not found, expecting standalone daemon on 127.0.0.1:8765");
+        log_file("Core executable not found");
     }
 
-    let app = tauri::Builder::default()
+    log_file("Building Tauri app...");
+    let app = match tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(CoreProcess(child_clone))
+        .setup(|app| {
+            log_file("Tauri setup hook called!");
+            let windows = app.webview_windows();
+            log_file(&format!("Total windows: {}", windows.len()));
+            for (label, win) in windows {
+                log_file(&format!("Window '{}' visible: {:?}", label, win.is_visible()));
+            }
+            Ok(())
+        })
         .build(tauri::generate_context!())
-        .expect("error while building tauri application");
+    {
+        Ok(a) => {
+            log_file("Tauri app built successfully!");
+            a
+        }
+        Err(e) => {
+            log_file(&format!("Tauri build error: {:?}", e));
+            panic!("Tauri build error: {:?}", e);
+        }
+    };
 
+    log_file("Calling app.run()...");
     app.run(move |_app_handle, event| {
+        match &event {
+            RunEvent::ExitRequested { code, .. } => {
+                log_file(&format!("RunEvent::ExitRequested code={:?}", code));
+            }
+            RunEvent::Exit => {
+                log_file("RunEvent::Exit");
+            }
+            RunEvent::WindowEvent { label, event, .. } => {
+                log_file(&format!("WindowEvent '{}': {:?}", label, event));
+            }
+            _ => {}
+        }
+
         if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
             // Attempt graceful shutdown via HTTP
             let _ = Command::new("curl.exe")
@@ -115,7 +165,7 @@ fn main() {
                 if let Some(mut child) = lock.take() {
                     let _ = child.kill();
                     let _ = child.wait();
-                    println!("[TAURI] Headless core process terminated cleanly.");
+                    log_file("Headless core process terminated cleanly.");
                 }
             }
         }
