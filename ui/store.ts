@@ -115,7 +115,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   activeTab: "duplicates",
-  setActiveTab: (tab) => set({ activeTab: tab }),
+  setActiveTab: (tab) => {
+    set({ activeTab: tab });
+    if (tab === "inspector") {
+      get().fetchAlbums();
+    } else if (tab === "duplicates") {
+      get().fetchDuplicates();
+    } else if (tab === "database") {
+      get().queryDatabase();
+    }
+  },
 
   coreConnected: false,
   systemStats: {
@@ -333,7 +342,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const res = await fetch(`${API_BASE}/tags/progress`);
       if (res.ok) {
         const prog = await res.json();
+        const wasScanning = get().tagProgress.isScanning;
         set({ tagProgress: prog });
+        if (wasScanning && !prog.isScanning) {
+          get().fetchAlbums();
+          get().checkStatus();
+        }
       }
     } catch {}
   },
@@ -344,8 +358,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (res.ok) {
         const list: AlbumGroup[] = await res.json();
         set({ albums: list });
-        if (list.length > 0 && !get().selectedAlbumKey) {
-          set({ selectedAlbumKey: list[0].albumKey });
+        if (list.length > 0) {
+          const curKey = get().selectedAlbumKey;
+          if (!curKey || !list.some((a) => a.albumKey === curKey)) {
+            set({ selectedAlbumKey: list[0].albumKey });
+          }
         }
       }
     } catch (e) {

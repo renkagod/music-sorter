@@ -51,6 +51,9 @@ export const TagInspector: React.FC = () => {
     fetchAlbums();
     const interval = setInterval(() => {
       fetchTagProgress();
+      if (useAppStore.getState().albums.length === 0) {
+        fetchAlbums();
+      }
     }, 1000);
     return () => clearInterval(interval);
   }, [fetchAlbums, fetchTagProgress]);
@@ -186,7 +189,9 @@ export const TagInspector: React.FC = () => {
         <div className="flex-1 overflow-y-auto divide-y divide-[#262626]">
           {filteredAlbums.length === 0 ? (
             <div className="p-6 text-center text-xs text-[#898781]">
-              Альбомы не найдены. Нажмите кнопку сканирования рядом с поиском.
+              {albums.length === 0
+                ? "Альбомы не найдены. Нажмите кнопку сканирования рядом с поиском."
+                : "Нет альбомов, подходящих под выбранный фильтр."}
             </div>
           ) : (
             filteredAlbums.map((alb) => {
