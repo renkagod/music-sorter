@@ -927,14 +927,23 @@ void CoreEngine::StartTagScan() {
                                 }
                             }
 
-                            // Fetch cover art archive
+                            // Fetch cover art archive (release first, then release-group fallback)
                             std::string caUrl = "https://coverartarchive.org/release/" + relId + "/front";
                             coverData = HttpGetBytes(Utf8ToWide(caUrl));
+                            if (coverData.empty() && !releaseGroupMbId.empty()) {
+                                coverData = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front"));
+                            }
                             if (coverData.empty()) {
                                 coverData = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release/" + relId + "/front-500"));
                             }
+                            if (coverData.empty() && !releaseGroupMbId.empty()) {
+                                coverData = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-500"));
+                            }
                             if (coverData.empty()) {
                                 coverData = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release/" + relId + "/front-250"));
+                            }
+                            if (coverData.empty() && !releaseGroupMbId.empty()) {
+                                coverData = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release-group/" + releaseGroupMbId + "/front-250"));
                             }
                             if (!coverData.empty() && IsValidImageData(coverData)) {
                                 coverSource = "CoverArtArchive";
@@ -1422,11 +1431,20 @@ void CoreEngine::FetchManualMusicBrainz(const std::string& inputUrl, size_t refe
 
         std::string caUrl = "https://coverartarchive.org/release/" + releaseMbId + "/front";
         std::vector<unsigned char> coverBytes = HttpGetBytes(Utf8ToWide(caUrl));
+        if (coverBytes.empty() && !mbid.empty()) {
+            coverBytes = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release-group/" + mbid + "/front"));
+        }
         if (coverBytes.empty()) {
             coverBytes = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release/" + releaseMbId + "/front-500"));
         }
+        if (coverBytes.empty() && !mbid.empty()) {
+            coverBytes = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release-group/" + mbid + "/front-500"));
+        }
         if (coverBytes.empty()) {
             coverBytes = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release/" + releaseMbId + "/front-250"));
+        }
+        if (coverBytes.empty() && !mbid.empty()) {
+            coverBytes = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release-group/" + mbid + "/front-250"));
         }
         if (!coverBytes.empty() && !IsValidImageData(coverBytes)) {
             coverBytes.clear();
