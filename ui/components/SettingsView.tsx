@@ -29,10 +29,10 @@ export const SettingsView: React.FC = () => {
       <div>
         <h1 className="text-xl font-bold text-white flex items-center space-x-2">
           <SettingsIcon className="w-5 h-5 text-[#D97757]" />
-          <span>Настройки приложения</span>
+          <span>Настройки</span>
         </h1>
         <p className="text-xs text-[#898781] mt-0.5">
-          Пути к рабочим папкам и ключи внешних API-провайдеров. Сохраняются в folders.cfg.
+          Пути к рабочим папкам и ключи внешних сервисов. Сохраняются в файле folders.cfg.
         </p>
       </div>
 
@@ -40,13 +40,13 @@ export const SettingsView: React.FC = () => {
       <div className="p-6 bg-[#1c1c1c] rounded-2xl border border-[#333230] space-y-4">
         <h2 className="text-sm font-semibold text-white flex items-center space-x-2">
           <Folder className="w-4 h-4 text-[#D97757]" />
-          <span>Рабочие директории</span>
+          <span>Рабочие папки</span>
         </h2>
 
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-[#c3c2b7] mb-1">
-              Папка для разбора (TO SORT)
+              Папка для разбора
             </label>
             <input
               type="text"
@@ -58,7 +58,7 @@ export const SettingsView: React.FC = () => {
 
           <div>
             <label className="block text-xs font-medium text-[#c3c2b7] mb-1">
-              Выходная папка (Базовая)
+              Основная выходная папка
             </label>
             <input
               type="text"
@@ -71,7 +71,7 @@ export const SettingsView: React.FC = () => {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-[#c3c2b7] mb-1">
-                Выход FLAC коллекции
+                Папка для FLAC
               </label>
               <input
                 type="text"
@@ -83,7 +83,7 @@ export const SettingsView: React.FC = () => {
 
             <div>
               <label className="block text-xs font-medium text-[#c3c2b7] mb-1">
-                Выход MP3 коллекции
+                Папка для MP3
               </label>
               <input
                 type="text"
@@ -100,13 +100,13 @@ export const SettingsView: React.FC = () => {
       <div className="p-6 bg-[#1c1c1c] rounded-2xl border border-[#333230] space-y-4">
         <h2 className="text-sm font-semibold text-white flex items-center space-x-2">
           <Key className="w-4 h-4 text-[#6da7ec]" />
-          <span>API Ключи и токены</span>
+          <span>Ключи сервисов</span>
         </h2>
 
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-[#c3c2b7] mb-1">
-              AcoustID Application Key
+              Ключ AcoustID
             </label>
             <input
               type="text"
@@ -116,13 +116,13 @@ export const SettingsView: React.FC = () => {
               className="w-full bg-[#151515] border border-[#333230] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97757]"
             />
             <p className="text-[11px] text-[#898781] mt-1">
-              Ключ приложения с acoustid.org для онлайн-распознавания аудиоотпечатков.
+              Ключ приложения с acoustid.org для распознавания треков по аудиоотпечаткам.
             </p>
           </div>
 
           <div>
             <label className="block text-xs font-medium text-[#c3c2b7] mb-1">
-              Discogs Personal Access Token
+              Токен Discogs
             </label>
             <input
               type="text"
@@ -132,7 +132,7 @@ export const SettingsView: React.FC = () => {
               className="w-full bg-[#151515] border border-[#333230] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97757]"
             />
             <p className="text-[11px] text-[#898781] mt-1">
-              Персональный токен из профиля Discogs Developer Settings для доступа к базе релизов.
+              Персональный токен из настроек профиля Discogs для поиска релизов.
             </p>
           </div>
         </div>
@@ -145,7 +145,7 @@ export const SettingsView: React.FC = () => {
           className="flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-[#D97757] hover:bg-[#e58a6d] text-white text-xs font-semibold transition-all shadow-lg"
         >
           {saved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-          <span>{saved ? "Сохранено!" : "Сохранить настройки"}</span>
+          <span>{saved ? "Сохранено" : "Сохранить настройки"}</span>
         </button>
       </div>
     </div>

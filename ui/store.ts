@@ -92,9 +92,28 @@ interface AppState {
   isLogsOpen: boolean;
   toggleLogs: () => void;
   fetchLogs: () => Promise<void>;
+
+  // Sidebar State
+  isSidebarCollapsed: boolean;
+  toggleSidebar: () => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
+  isSidebarCollapsed: (() => {
+    try {
+      return localStorage.getItem("musicsorter_sidebar_collapsed") === "true";
+    } catch {
+      return false;
+    }
+  })(),
+  toggleSidebar: () => {
+    const next = !get().isSidebarCollapsed;
+    try {
+      localStorage.setItem("musicsorter_sidebar_collapsed", String(next));
+    } catch {}
+    set({ isSidebarCollapsed: next });
+  },
+
   activeTab: "duplicates",
   setActiveTab: (tab) => set({ activeTab: tab }),
 

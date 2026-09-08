@@ -930,7 +930,17 @@ void CoreEngine::StartTagScan() {
                             // Fetch cover art archive
                             std::string caUrl = "https://coverartarchive.org/release/" + relId + "/front";
                             coverData = HttpGetBytes(Utf8ToWide(caUrl));
-                            if (!coverData.empty()) coverSource = "CoverArtArchive";
+                            if (coverData.empty()) {
+                                coverData = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release/" + relId + "/front-500"));
+                            }
+                            if (coverData.empty()) {
+                                coverData = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release/" + relId + "/front-250"));
+                            }
+                            if (!coverData.empty() && IsValidImageData(coverData)) {
+                                coverSource = "CoverArtArchive";
+                            } else {
+                                coverData.clear();
+                            }
                         }
                     }
 
@@ -1412,6 +1422,15 @@ void CoreEngine::FetchManualMusicBrainz(const std::string& inputUrl, size_t refe
 
         std::string caUrl = "https://coverartarchive.org/release/" + releaseMbId + "/front";
         std::vector<unsigned char> coverBytes = HttpGetBytes(Utf8ToWide(caUrl));
+        if (coverBytes.empty()) {
+            coverBytes = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release/" + releaseMbId + "/front-500"));
+        }
+        if (coverBytes.empty()) {
+            coverBytes = HttpGetBytes(Utf8ToWide("https://coverartarchive.org/release/" + releaseMbId + "/front-250"));
+        }
+        if (!coverBytes.empty() && !IsValidImageData(coverBytes)) {
+            coverBytes.clear();
+        }
 
         std::vector<size_t> targetIndices = applyToAlbum ? GetAlbumTrackIndices(referenceTrackIndex) : std::vector<size_t>{ referenceTrackIndex };
 

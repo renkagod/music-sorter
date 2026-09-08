@@ -397,8 +397,12 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
                 }
                 InternetCloseHandle(hFile);
                 
-                if (statusCode != 200 && statusCode != 0) {
-                    LOG_INFO("[HTTP RESP " + std::to_string(statusCode) + "] Received " + std::to_string(result.size()) + " bytes from " + narrowUrl);
+                if (statusCode >= 400) {
+                    LOG_INFO("[HTTP RESP " + std::to_string(statusCode) + "] Error response (" + std::to_string(result.size()) + " bytes) from " + narrowUrl);
+                    result.clear();
+                } else {
+                    InternetCloseHandle(hNet);
+                    return result;
                 }
             } else {
                 DWORD err = GetLastError();
@@ -408,6 +412,21 @@ inline std::vector<unsigned char> HttpGetBytes(const std::wstring& url, const st
         }
     }
     return result;
+}
+
+inline bool IsValidImageData(const std::vector<unsigned char>& data) {
+    if (data.size() < 16) return false;
+    // JPEG
+    if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true;
+    // PNG
+    if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return true;
+    // WebP
+    if (data.size() >= 12 &&
+        data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' &&
+        data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P') return true;
+    // GIF
+    if (data[0] == 'G' && data[1] == 'I' && data[2] == 'F' && data[3] == '8') return true;
+    return false;
 }
 
 inline std::string HttpGetString(const std::wstring& url, const std::string& discogsToken = "") {

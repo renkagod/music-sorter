@@ -670,12 +670,23 @@ void HttpServer::HandleClient(uintptr_t clientSocket) {
                  << "Connection: close\r\n\r\n";
 
     std::string responseHeader = headerStream.str();
-    send(s, responseHeader.c_str(), (int)responseHeader.length(), 0);
+
+    auto sendAll = [s](const char* data, size_t total) {
+        size_t sent = 0;
+        while (sent < total) {
+            int chunk = (int)std::min<size_t>(total - sent, 65536);
+            int res = send(s, data + sent, chunk, 0);
+            if (res <= 0) break;
+            sent += res;
+        }
+    };
+
+    sendAll(responseHeader.c_str(), responseHeader.length());
 
     if (binaryBody.empty()) {
-        send(s, respBody.c_str(), (int)respBody.length(), 0);
+        sendAll(respBody.c_str(), respBody.length());
     } else {
-        send(s, (const char*)binaryBody.data(), (int)binaryBody.size(), 0);
+        sendAll((const char*)binaryBody.data(), binaryBody.size());
     }
 
     closesocket(s);

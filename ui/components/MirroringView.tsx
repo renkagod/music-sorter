@@ -29,10 +29,10 @@ export const MirroringView: React.FC = () => {
       <div>
         <h1 className="text-xl font-bold text-white flex items-center space-x-2">
           <CopyCheck className="w-5 h-5 text-[#D97757]" />
-          <span>Зеркалирование коллекций (FLAC ↔ MP3)</span>
+          <span>Синхронизация FLAC и MP3</span>
         </h1>
         <p className="text-xs text-[#898781] mt-1">
-          Автоматическая синхронизация: многопоточная конвертация FLAC в MP3 320kbps с копированием обложек cover.jpg и обратный перенос MP3-фоллбэков.
+          Конвертирует треки FLAC в MP3 с битрейтом 320 кбит/с, копирует обложки и переносит недостающие MP3 в коллекцию FLAC.
         </p>
       </div>
 
@@ -41,26 +41,26 @@ export const MirroringView: React.FC = () => {
         <div className="p-5 rounded-2xl bg-[#1c1c1c] border border-[#333230] space-y-2">
           <div className="flex items-center space-x-2 text-xs font-semibold text-[#D97757]">
             <HardDrive className="w-4 h-4" />
-            <span>Мастер-коллекция (FLAC)</span>
+            <span>Оригиналы (FLAC)</span>
           </div>
           <div className="text-xs font-mono text-white bg-[#151515] p-2.5 rounded-lg border border-[#2a2a2a] break-all">
             {settings.flacDir || "Не настроено"}
           </div>
           <div className="text-[11px] text-[#898781]">
-            Исходные Hi-Res треки с несжатыми тегами VorbisComment и Front Cover.
+            Файлы без потерь качества с тегами и обложками.
           </div>
         </div>
 
         <div className="p-5 rounded-2xl bg-[#1c1c1c] border border-[#333230] space-y-2">
           <div className="flex items-center space-x-2 text-xs font-semibold text-[#6da7ec]">
             <HardDrive className="w-4 h-4" />
-            <span>Зеркало для плееров (MP3 320k)</span>
+            <span>Копии для плеера (MP3)</span>
           </div>
           <div className="text-xs font-mono text-white bg-[#151515] p-2.5 rounded-lg border border-[#2a2a2a] break-all">
             {settings.mp3Dir || "Не настроено"}
           </div>
           <div className="text-[11px] text-[#898781]">
-            Конвертированные 320kbps MP3 с ID3v2.3 тегами и встроенными APIC изображениями.
+            Сжатые файлы MP3 320 кбит/с с тегами ID3v2.3 и встроенными обложками.
           </div>
         </div>
       </div>
@@ -72,8 +72,8 @@ export const MirroringView: React.FC = () => {
             <h2 className="text-sm font-semibold text-white">Статус синхронизации</h2>
             <div className="text-xs text-[#898781]">
               {mirrorProgress.isRunning
-                ? "Выполняется конвертация и синхронизация в фоне..."
-                : "Готово к запуску или синхронизировано."}
+                ? "Идет конвертация и копирование файлов..."
+                : "Файлы синхронизированы или готовы к запуску."}
             </div>
           </div>
 
@@ -83,14 +83,14 @@ export const MirroringView: React.FC = () => {
             className="flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-[#D97757] hover:bg-[#e58a6d] text-white font-semibold text-xs transition-all shadow-lg disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${mirrorProgress.isRunning ? "animate-spin" : ""}`} />
-            <span>{mirrorProgress.isRunning ? "Синхронизация..." : "Запустить зеркалирование"}</span>
+            <span>{mirrorProgress.isRunning ? "Синхронизация..." : "Запустить синхронизацию"}</span>
           </button>
         </div>
 
         {/* Progress Bar */}
         <div className="space-y-2">
           <div className="flex justify-between text-xs text-[#c3c2b7]">
-            <span>Прогресс: {mirrorProgress.completedTasks} / {mirrorProgress.totalTasks} файлов</span>
+            <span>Прогресс: {mirrorProgress.completedTasks} из {mirrorProgress.totalTasks} файлов</span>
             <span className="font-semibold text-white">{pct.toFixed(1)}%</span>
           </div>
           <div className="w-full h-2.5 bg-[#151515] rounded-full overflow-hidden border border-[#2e2e2e]">
@@ -109,11 +109,11 @@ export const MirroringView: React.FC = () => {
           </div>
           <div className="p-3 bg-[#171717] rounded-xl border border-[#2a2a2a] text-center">
             <div className="text-lg font-bold text-emerald-400">{mirrorProgress.copiedFallbacks}</div>
-            <div className="text-[11px] text-[#898781]">MP3 фоллбэков в FLAC</div>
+            <div className="text-[11px] text-[#898781]">Перенесено MP3 в FLAC</div>
           </div>
           <div className="p-3 bg-[#171717] rounded-xl border border-[#2a2a2a] text-center">
             <div className="text-lg font-bold text-[#6da7ec]">{mirrorProgress.createdFolders}</div>
-            <div className="text-[11px] text-[#898781]">Папок создано</div>
+            <div className="text-[11px] text-[#898781]">Создано папок</div>
           </div>
         </div>
       </div>

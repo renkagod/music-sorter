@@ -26,10 +26,10 @@ export const DatabaseView: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold text-white flex items-center space-x-2">
             <Database className="w-5 h-5 text-[#D97757]" />
-            <span>Локальная база данных (SQLite)</span>
+            <span>База треков</span>
           </h1>
           <p className="text-xs text-[#898781] mt-0.5">
-            Учёт всей фонотеки из tracklist.md с отслеживанием наличия на диске.
+            Список треков из tracklist.md с отметками о наличии файлов на диске.
           </p>
         </div>
 
@@ -67,7 +67,7 @@ export const DatabaseView: React.FC = () => {
         <div className="p-4 bg-[#1c1c1c] rounded-2xl border border-[#333230] flex items-center justify-between">
           <div>
             <div className="text-xl font-bold text-emerald-400">{databaseStats.downloadedTracks}</div>
-            <div className="text-xs text-[#898781]">В наличии на диске [x]</div>
+            <div className="text-xs text-[#898781]">В наличии на диске</div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400">
             <CheckCircle className="w-5 h-5" />
@@ -77,7 +77,7 @@ export const DatabaseView: React.FC = () => {
         <div className="p-4 bg-[#1c1c1c] rounded-2xl border border-[#333230] flex items-center justify-between">
           <div>
             <div className="text-xl font-bold text-amber-400">{databaseStats.missingTracks}</div>
-            <div className="text-xs text-[#898781]">Отсутствуют [ ]</div>
+            <div className="text-xs text-[#898781]">Нет на диске</div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400">
             <AlertCircle className="w-5 h-5" />
@@ -105,8 +105,8 @@ export const DatabaseView: React.FC = () => {
             className="bg-[#151515] border border-[#333230] rounded-lg px-2.5 py-1.5 text-[#c3c2b7] focus:outline-none focus:border-[#D97757]"
           >
             <option value="-1">Все статусы</option>
-            <option value="1">Скачанные [x]</option>
-            <option value="0">Отсутствующие [ ]</option>
+            <option value="1">В наличии [x]</option>
+            <option value="0">Нет на диске [ ]</option>
           </select>
 
           <select
@@ -168,7 +168,7 @@ export const DatabaseView: React.FC = () => {
                     </span>
                   </td>
                   <td className="py-2 px-4 text-right font-mono text-[#898781]">
-                    {tr.bitrateKbps > 0 ? `${tr.bitrateKbps}k` : "—"}
+                    {tr.bitrateKbps > 0 ? `${tr.bitrateKbps}k` : "-"}
                   </td>
                 </tr>
               ))

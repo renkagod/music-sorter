@@ -62,7 +62,7 @@ export const DuplicateDeck: React.FC = () => {
         </div>
         <h2 className="text-xl font-semibold text-white mb-2">Дубликаты не найдены</h2>
         <p className="text-sm text-[#898781] max-w-md mb-6 leading-relaxed">
-          Папка TO SORT не содержит идентичных аудиофайлов или сканирование ещё не запускалось.
+          В папке разбора нет одинаковых аудиофайлов или поиск еще не запускался.
         </p>
         <button
           onClick={startDuplicateScan}
@@ -70,7 +70,7 @@ export const DuplicateDeck: React.FC = () => {
           className="flex items-center space-x-2 bg-[#D97757] hover:bg-[#e58a6d] text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors shadow-lg disabled:opacity-50"
         >
           <Sparkles className="w-4 h-4" />
-          <span>{stats.isDuplicateScanning ? "Идёт акустический поиск..." : "Запустить поиск дубликатов"}</span>
+          <span>{stats.isDuplicateScanning ? "Поиск дубликатов..." : "Найти дубликаты"}</span>
         </button>
       </div>
     );
@@ -93,7 +93,7 @@ export const DuplicateDeck: React.FC = () => {
             Пара {activePairIndex + 1} из {duplicatePairs.length}
           </span>
           <span className="text-xs bg-[#242424] text-[#c3c2b7] px-2 py-0.5 rounded border border-[#333230]">
-            Сходство: {(currentPair.similarity * 100).toFixed(1)}%
+            Совпадение: {(currentPair.similarity * 100).toFixed(1)}%
           </span>
           {currentPair.offset !== 0 && (
             <span className="text-xs text-[#898781]">
@@ -139,7 +139,7 @@ export const DuplicateDeck: React.FC = () => {
               }`}
             >
               <Radio className="w-4 h-4" />
-              <span>ДЕКА A (FLAC / Основной)</span>
+              <span>Трек A (FLAC)</span>
               <span className="kbd-badge">[Ctrl+A]</span>
             </button>
             <button
@@ -151,7 +151,7 @@ export const DuplicateDeck: React.FC = () => {
               }`}
             >
               <Radio className="w-4 h-4" />
-              <span>ДЕКА B (MP3 / Дубликат)</span>
+              <span>Трек B (MP3)</span>
               <span className="kbd-badge">[Ctrl+B]</span>
             </button>
           </div>
@@ -171,7 +171,7 @@ export const DuplicateDeck: React.FC = () => {
               <div className="flex items-center space-x-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#D97757]" />
                 <span className="text-xs font-bold uppercase tracking-wider text-white">
-                  Дека A
+                  Трек A
                 </span>
                 <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#262626] text-[#D97757] border border-[#3e3b38]">
                   {currentPair.extA.toUpperCase()}
@@ -194,7 +194,6 @@ export const DuplicateDeck: React.FC = () => {
               onClick={handleWaveformClick}
               className="h-20 bg-[#151515] rounded-xl border border-[#333230] p-2 flex items-center justify-between cursor-pointer relative overflow-hidden group"
             >
-              {/* Playhead line */}
               <div
                 className="absolute top-0 bottom-0 w-0.5 bg-white z-10 pointer-events-none"
                 style={{ left: `${currentPercent}%` }}
@@ -240,7 +239,7 @@ export const DuplicateDeck: React.FC = () => {
               <div className="flex items-center space-x-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#6da7ec]" />
                 <span className="text-xs font-bold uppercase tracking-wider text-white">
-                  Дека B
+                  Трек B
                 </span>
                 <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#262626] text-[#6da7ec] border border-[#2b3a4a]">
                   {currentPair.extB.toUpperCase()}
@@ -263,7 +262,6 @@ export const DuplicateDeck: React.FC = () => {
               onClick={handleWaveformClick}
               className="h-20 bg-[#151515] rounded-xl border border-[#333230] p-2 flex items-center justify-between cursor-pointer relative overflow-hidden group"
             >
-              {/* Playhead line */}
               <div
                 className="absolute top-0 bottom-0 w-0.5 bg-white z-10 pointer-events-none"
                 style={{ left: `${currentPercent}%` }}
@@ -319,7 +317,7 @@ export const DuplicateDeck: React.FC = () => {
               <span className="text-[#898781]"> / {formatTime(audioStatus.duration)}</span>
             </div>
 
-            <span className="kbd-badge">[Space] Play/Pause</span>
+            <span className="kbd-badge">[Пробел] Пауза / Пуск</span>
           </div>
 
           {/* Master Volume Slider */}
@@ -353,7 +351,7 @@ export const DuplicateDeck: React.FC = () => {
             className="flex items-center justify-center space-x-2 py-3.5 px-4 rounded-xl bg-[#1c1c1c] border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 font-semibold text-sm transition-all shadow-sm"
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>Оставить A, удалить B</span>
+            <span>Оставить A</span>
             <span className="kbd-badge text-emerald-400 border-emerald-500/40">[A]</span>
           </button>
 
@@ -362,7 +360,7 @@ export const DuplicateDeck: React.FC = () => {
             className="flex items-center justify-center space-x-2 py-3.5 px-4 rounded-xl bg-[#1c1c1c] border border-[#6da7ec]/40 text-[#6da7ec] hover:bg-[#6da7ec]/10 font-semibold text-sm transition-all shadow-sm"
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>Оставить B, удалить A</span>
+            <span>Оставить B</span>
             <span className="kbd-badge text-[#6da7ec] border-[#6da7ec]/40">[B]</span>
           </button>
 
@@ -371,7 +369,7 @@ export const DuplicateDeck: React.FC = () => {
             className="flex items-center justify-center space-x-2 py-3.5 px-4 rounded-xl bg-[#1c1c1c] border border-[#42403c] text-[#c3c2b7] hover:text-white hover:bg-[#252525] font-semibold text-sm transition-all"
           >
             <SkipForward className="w-4 h-4" />
-            <span>Пропустить (Оставить оба)</span>
+            <span>Пропустить</span>
             <span className="kbd-badge">[S]</span>
           </button>
         </div>

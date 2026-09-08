@@ -44,6 +44,8 @@ export const TagInspector: React.FC = () => {
   const [editFields, setEditFields] = useState({ title: "", artist: "", trackNo: "", lyrics: "" });
   const [manualQuery, setManualQuery] = useState("");
   const [manualSource, setManualSource] = useState("mb");
+  const [onlineCoverError, setOnlineCoverError] = useState<string | null>(null);
+  const [localCoverError, setLocalCoverError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchAlbums();
@@ -122,14 +124,14 @@ export const TagInspector: React.FC = () => {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Поиск по альбомам/артистам..."
+                placeholder="Поиск по альбомам и исполнителям..."
                 className="w-full bg-[#1c1c1c] border border-[#333230] rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-[#898781] focus:outline-none focus:border-[#D97757]"
               />
             </div>
             <button
               onClick={startTagScan}
               disabled={tagProgress.isScanning}
-              title="Сканировать папку TO SORT"
+              title="Сканировать папку разбора"
               className="p-2 rounded-lg bg-[#D97757] hover:bg-[#e58a6d] text-white disabled:opacity-50 transition-colors"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${tagProgress.isScanning ? "animate-spin" : ""}`} />
@@ -150,7 +152,7 @@ export const TagInspector: React.FC = () => {
                 />
               </div>
               <div className="flex justify-between text-[9px] text-[#898781]">
-                <span>ETA: {tagProgress.eta}</span>
+                <span>Осталось: {tagProgress.eta}</span>
                 <span>{tagProgress.speed.toFixed(1)} тр/сек</span>
               </div>
             </div>
@@ -160,10 +162,10 @@ export const TagInspector: React.FC = () => {
           <div className="flex items-center space-x-1 overflow-x-auto pb-1 text-[11px]">
             {[
               { id: "all", label: "Все" },
-              { id: "attention", label: "Внимание [!]" },
-              { id: "tierA", label: "Tier A" },
+              { id: "attention", label: "Внимание" },
+              { id: "tierA", label: "MusicBrainz" },
               { id: "discogs", label: "Discogs" },
-              { id: "niche", label: "Niche" },
+              { id: "niche", label: "Другие" },
             ].map((f) => (
               <button
                 key={f.id}
@@ -184,7 +186,7 @@ export const TagInspector: React.FC = () => {
         <div className="flex-1 overflow-y-auto divide-y divide-[#262626]">
           {filteredAlbums.length === 0 ? (
             <div className="p-6 text-center text-xs text-[#898781]">
-              Релизы не найдены. Нажмите кнопку сканирования справа от строки поиска.
+              Альбомы не найдены. Нажмите кнопку сканирования рядом с поиском.
             </div>
           ) : (
             filteredAlbums.map((alb) => {
@@ -291,9 +293,9 @@ export const TagInspector: React.FC = () => {
             {selectedAlbum.candidates && selectedAlbum.candidates.length > 0 && (
               <div className="p-3 bg-[#1c1c1c] rounded-xl border border-[#333230] space-y-2">
                 <div className="text-xs font-semibold text-[#898781] flex items-center justify-between">
-                  <span>Кандидаты метаданных консенсуса:</span>
+                  <span>Варианты тегов:</span>
                   <span className="text-[11px] text-[#D97757]">
-                    Уверенность: {(selectedAlbum.confidenceScore * 100).toFixed(0)}%
+                    Совпадение {(selectedAlbum.confidenceScore * 100).toFixed(0)}%
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -306,7 +308,7 @@ export const TagInspector: React.FC = () => {
                       <span className="font-semibold text-[#6da7ec]">
                         [{cand.source} {(cand.confidenceScore * 100).toFixed(0)}%]
                       </span>
-                      <span>{cand.artist} — {cand.title || cand.album}</span>
+                      <span>{cand.artist}: {cand.title || cand.album}</span>
                     </button>
                   ))}
                 </div>
@@ -330,7 +332,7 @@ export const TagInspector: React.FC = () => {
                 type="text"
                 value={manualQuery}
                 onChange={(e) => setManualQuery(e.target.value)}
-                placeholder="Вставьте ссылку или ID релиза..."
+                placeholder="Ссылка или ID релиза..."
                 className="flex-1 bg-[#1c1c1c] border border-[#333230] text-xs text-white rounded-lg px-3 py-1.5 focus:outline-none focus:border-[#D97757]"
               />
               <button
@@ -342,7 +344,7 @@ export const TagInspector: React.FC = () => {
                 }}
                 className="px-3 py-1.5 bg-[#252525] border border-[#42403c] hover:border-[#D97757] text-xs text-white rounded-lg transition-colors"
               >
-                Загрузить
+                Найти
               </button>
             </div>
           </div>
@@ -351,7 +353,7 @@ export const TagInspector: React.FC = () => {
           <div className="p-6 border-b border-[#333230] space-y-3">
             <h3 className="text-xs font-bold uppercase tracking-wider text-[#898781] flex items-center space-x-2">
               <ImageIcon className="w-4 h-4 text-[#D97757]" />
-              <span>Сравнение обложек релиза</span>
+              <span>Обложки альбома</span>
             </h3>
 
             <div className="grid grid-cols-2 gap-4">
@@ -365,22 +367,23 @@ export const TagInspector: React.FC = () => {
                 }`}
               >
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-white">Локальная обложка</span>
+                  <span className="text-xs font-semibold text-white">Из файла</span>
                   {selectedAlbum.selectedCoverChoice === 0 && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#D97757] text-white font-bold">
-                      ВЫБРАНА
+                      Выбрана
                     </span>
                   )}
                 </div>
                 <div className="w-full h-44 rounded-lg bg-[#151515] border border-[#333230] overflow-hidden flex items-center justify-center text-[#898781]">
-                  {selectedAlbum.hasLocalCover ? (
+                  {selectedAlbum.hasLocalCover && localCoverError !== selectedAlbum.albumKey ? (
                     <img
                       src={`http://127.0.0.1:8765/api/tags/cover?trackIndex=${selectedAlbum.referenceIndex}&type=local`}
                       alt="Local Cover"
                       className="w-full h-full object-contain"
+                      onError={() => setLocalCoverError(selectedAlbum.albumKey)}
                     />
                   ) : (
-                    <div className="text-xs text-[#898781]">Нет локального файла обложки</div>
+                    <div className="text-xs text-[#898781]">В файлах нет обложки</div>
                   )}
                 </div>
               </div>
@@ -396,23 +399,28 @@ export const TagInspector: React.FC = () => {
               >
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-semibold text-white">
-                    Онлайн-скан {selectedAlbum.onlineCoverSource && `(${selectedAlbum.onlineCoverSource})`}
+                    Из сети {selectedAlbum.onlineCoverSource && `(${selectedAlbum.onlineCoverSource})`}
                   </span>
                   {selectedAlbum.selectedCoverChoice === 1 && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#6da7ec] text-[#151515] font-bold">
-                      ВЫБРАНА
+                      Выбрана
                     </span>
                   )}
                 </div>
                 <div className="w-full h-44 rounded-lg bg-[#151515] border border-[#333230] overflow-hidden flex items-center justify-center text-[#898781]">
-                  {selectedAlbum.hasOnlineCover ? (
+                  {selectedAlbum.hasOnlineCover && onlineCoverError !== selectedAlbum.albumKey ? (
                     <img
                       src={`http://127.0.0.1:8765/api/tags/cover?trackIndex=${selectedAlbum.referenceIndex}&type=online`}
                       alt="Online Cover"
                       className="w-full h-full object-contain"
+                      onError={() => setOnlineCoverError(selectedAlbum.albumKey)}
                     />
                   ) : (
-                    <div className="text-xs text-[#898781]">Онлайн обложка не найдена</div>
+                    <div className="flex flex-col items-center justify-center p-3 text-center space-y-1 text-[#898781]">
+                      <ImageIcon className="w-7 h-7 text-[#444]" />
+                      <span className="text-xs">Обложка недоступна</span>
+                      <span className="text-[10px] text-[#666]">Проверьте соединение или VPN</span>
+                    </div>
                   )}
                 </div>
               </div>
@@ -422,9 +430,9 @@ export const TagInspector: React.FC = () => {
           {/* Interactive Tracklist */}
           <div className="p-6 flex-1 space-y-3">
             <h3 className="text-xs font-bold uppercase tracking-wider text-[#898781] flex items-center justify-between">
-              <span>Треклист ({selectedAlbum.tracks.length} треков)</span>
+              <span>Список треков ({selectedAlbum.tracks.length})</span>
               <span className="text-[11px] font-normal text-[#898781]">
-                Кликните на трек для инлайн-редактирования
+                Нажмите на трек для редактирования
               </span>
             </h3>
 
@@ -433,9 +441,9 @@ export const TagInspector: React.FC = () => {
                 <thead>
                   <tr className="border-b border-[#333230] bg-[#202020] text-[#898781]">
                     <th className="py-2.5 px-3 w-10 text-center">№</th>
-                    <th className="py-2.5 px-3">Название трека</th>
+                    <th className="py-2.5 px-3">Название</th>
                     <th className="py-2.5 px-3">Исполнитель</th>
-                    <th className="py-2.5 px-3 w-20 text-right">Длина</th>
+                    <th className="py-2.5 px-3 w-20 text-right">Длительность</th>
                     <th className="py-2.5 px-3 w-16 text-center">Текст</th>
                     <th className="py-2.5 px-3 w-28 text-right">Действия</th>
                   </tr>
@@ -525,7 +533,7 @@ export const TagInspector: React.FC = () => {
                                 <FileText className="w-3.5 h-3.5" />
                               </button>
                             ) : (
-                              <span className="text-[#555]">—</span>
+                              <span className="text-[#555]">-</span>
                             )}
                           </td>
 
@@ -637,7 +645,7 @@ export const TagInspector: React.FC = () => {
         </div>
       ) : (
         <div className="flex-1 flex items-center justify-center text-xs text-[#898781]">
-          Выберите альбом слева для инспекции тегов и обложек
+          Выберите альбом в списке слева для просмотра тегов и обложек
         </div>
       )}
     </div>

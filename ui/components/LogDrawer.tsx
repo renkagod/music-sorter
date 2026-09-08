@@ -33,8 +33,8 @@ export const LogDrawer: React.FC = () => {
       <div className="h-10 px-4 bg-[#1c1c1c] border-b border-[#333230] flex items-center justify-between">
         <div className="flex items-center space-x-2 text-xs font-semibold text-white">
           <Terminal className="w-3.5 h-3.5 text-[#D97757]" />
-          <span>Консоль логов C++ ядра (music-sorter-core)</span>
-          <span className="text-[10px] text-[#898781]">({logs.length} строк)</span>
+          <span>Журнал событий ядра</span>
+          <span className="text-[10px] text-[#898781]">({logs.length} записей)</span>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -62,7 +62,7 @@ export const LogDrawer: React.FC = () => {
       {/* Log Output Body */}
       <div className="flex-1 p-3 overflow-y-auto font-mono text-[11px] leading-relaxed text-[#c3c2b7] bg-[#121212] select-text">
         {logs.length === 0 ? (
-          <div className="text-[#898781] italic">Ожидание логов ядра...</div>
+          <div className="text-[#898781] italic">Ожидание записей журнала...</div>
         ) : (
           logs.map((line, idx) => {
             let color = "text-[#c3c2b7]";
