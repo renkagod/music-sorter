@@ -156,30 +156,13 @@ static void CleanupEmptyParentDirectories(fs::path curDir, const fs::path& stopD
     }
 }
 
-static void CleanupOrphanToSortFolders(const fs::path& toSortDir) {
+static void CleanupEmptyDirectories(const fs::path& rootDir) {
     std::error_code ec;
-    if (!fs::exists(toSortDir, ec) || !fs::is_directory(toSortDir, ec)) return;
+    if (!fs::exists(rootDir, ec) || !fs::is_directory(rootDir, ec)) return;
 
-    std::vector<fs::path> subDirs;
-    for (auto& p : fs::recursive_directory_iterator(toSortDir, fs::directory_options::skip_permission_denied, ec)) {
-        if (p.is_directory(ec)) {
-            subDirs.push_back(p.path());
-        }
-    }
-
-    std::sort(subDirs.begin(), subDirs.end(), [](const fs::path& a, const fs::path& b) {
-        return a.string().length() > b.string().length();
-    });
-
-    for (const auto& d : subDirs) {
-        if (!fs::exists(d, ec)) continue;
-        if (!HasAudioFiles(d)) {
-            for (auto& entry : fs::directory_iterator(d, ec)) {
-                if (entry.is_regular_file(ec)) {
-                    fs::remove(entry.path(), ec);
-                }
-            }
-            RemoveEmptySubdirectories(d);
+    for (const auto& entry : fs::directory_iterator(rootDir, ec)) {
+        if (entry.is_directory(ec)) {
+            RemoveEmptySubdirectories(entry.path());
         }
     }
 }
@@ -1726,7 +1709,7 @@ void AppWindow::ApproveTracks(const std::vector<size_t>& indices) {
             }
         }
 
-        CleanupOrphanToSortFolders(fs::path(g_ToSortDir));
+        CleanupEmptyDirectories(fs::path(g_ToSortDir));
 
         LOG_INFO("[BATCH APPROVAL DONE] Finished processing " + std::to_string(tasks.size()) + " track(s).");
     }).detach();
@@ -4251,8 +4234,6 @@ void AppWindow::HandleScanFinished() {
         }
     }
 
-    CleanupOrphanToSortFolders(fs::path(g_ToSortDir));
-
     if (!m_candidates.empty()) {
         m_currentCandidateIndex = 0;
         auto& pair = m_candidates[0];
@@ -4376,7 +4357,7 @@ void AppWindow::StartTagScan() {
         LOG_INFO("[LOCAL INITIALIZATION] Scanned " + std::to_string(files.size()) + " audio files in TO SORT/");
 
         if (files.empty()) {
-            CleanupOrphanToSortFolders(fs::path(g_ToSortDir));
+            CleanupEmptyDirectories(fs::path(g_ToSortDir));
             m_tagScanEndTime = std::chrono::steady_clock::now();
             m_isTagScanning = false;
             PostMessageW(m_hWnd, WM_TAG_SCAN_FINISHED, 0, 0);
