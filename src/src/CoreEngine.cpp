@@ -340,61 +340,229 @@ static bool ConvertFlacToMp3(const std::string& inputFlac, const std::string& ou
     return false;
 }
 
+static bool ReadFlacTags(const std::string& filePath, std::string& artist, std::string& album, std::string& title, std::string& trackNo, std::string& year) {
+    std::ifstream fIn(filePath, std::ios::binary);
+    if (!fIn.is_open()) return false;
+
+    char magic[4];
+    if (!fIn.read(magic, 4) || magic[0] != 'f' || magic[1] != 'L' || magic[2] != 'a' || magic[3] != 'C') {
+        return false;
+    }
+
+    bool isLast = false;
+    bool foundComments = false;
+
+    while (!isLast && fIn.good()) {
+        unsigned char h;
+        if (!fIn.read((char*)&h, 1)) break;
+        isLast = (h & 0x80) != 0;
+        unsigned char blockType = h & 0x7F;
+
+        unsigned char lenBytes[3];
+        if (!fIn.read((char*)lenBytes, 3)) break;
+        uint32_t blockLen = ((uint32_t)lenBytes[0] << 16) | ((uint32_t)lenBytes[1] << 8) | (uint32_t)lenBytes[2];
+
+        if (blockType == 4) { // VORBIS_COMMENT
+            std::vector<unsigned char> block(blockLen);
+            if (!fIn.read((char*)block.data(), blockLen)) break;
+
+            size_t p = 0;
+            if (p + 4 > block.size()) break;
+            uint32_t vendorLen = (uint32_t)block[p] | ((uint32_t)block[p+1] << 8) | ((uint32_t)block[p+2] << 16) | ((uint32_t)block[p+3] << 24);
+            p += 4 + vendorLen;
+            if (p + 4 > block.size()) break;
+
+            uint32_t commentCount = (uint32_t)block[p] | ((uint32_t)block[p+1] << 8) | ((uint32_t)block[p+2] << 16) | ((uint32_t)block[p+3] << 24);
+            p += 4;
+
+            for (uint32_t c = 0; c < commentCount && p + 4 <= block.size(); ++c) {
+                uint32_t cLen = (uint32_t)block[p] | ((uint32_t)block[p+1] << 8) | ((uint32_t)block[p+2] << 16) | ((uint32_t)block[p+3] << 24);
+                p += 4;
+                if (p + cLen > block.size()) break;
+                std::string entry((char*)block.data() + p, cLen);
+                p += cLen;
+
+                size_t eq = entry.find('=');
+                if (eq != std::string::npos) {
+                    std::string key = entry.substr(0, eq);
+                    std::string val = entry.substr(eq + 1);
+                    std::string uKey = key;
+                    for (auto& ch : uKey) ch = (char)::toupper((unsigned char)ch);
+
+                    if (uKey == "TITLE" && title.empty()) title = val;
+                    else if (uKey == "ARTIST" && artist.empty()) artist = val;
+                    else if (uKey == "ALBUM" && album.empty()) album = val;
+                    else if (uKey == "TRACKNUMBER" && trackNo.empty()) {
+                        size_t slash = val.find('/');
+                        trackNo = (slash != std::string::npos) ? val.substr(0, slash) : val;
+                        if (trackNo.length() == 1 && std::isdigit((unsigned char)trackNo[0])) trackNo = "0" + trackNo;
+                    }
+                    else if ((uKey == "DATE" || uKey == "YEAR") && year.empty()) year = val;
+                }
+            }
+            foundComments = true;
+            break;
+        } else {
+            fIn.seekg(blockLen, std::ios::cur);
+        }
+    }
+    return foundComments;
+}
+
+static bool ReadMp3Tags(const std::string& filePath, std::string& artist, std::string& album, std::string& title, std::string& trackNo, std::string& year) {
+    std::ifstream fIn(filePath, std::ios::binary);
+    if (!fIn.is_open()) return false;
+
+    char header[10];
+    if (fIn.read(header, 10) && header[0] == 'I' && header[1] == 'D' && header[2] == '3') {
+        uint32_t tagSize = ((uint32_t)(header[6] & 0x7F) << 21) |
+                           ((uint32_t)(header[7] & 0x7F) << 14) |
+                           ((uint32_t)(header[8] & 0x7F) << 7)  |
+                           ((uint32_t)(header[9] & 0x7F));
+        std::vector<unsigned char> tagBuf(tagSize);
+        if (fIn.read((char*)tagBuf.data(), tagSize)) {
+            size_t p = 0;
+            while (p + 10 <= tagBuf.size()) {
+                std::string frameId((char*)tagBuf.data() + p, 4);
+                if (frameId[0] < 'A' || frameId[0] > 'Z') break;
+                uint32_t frameSize = ((uint32_t)tagBuf[p+4] << 24) | ((uint32_t)tagBuf[p+5] << 16) | ((uint32_t)tagBuf[p+6] << 8) | (uint32_t)tagBuf[p+7];
+                p += 10;
+                if (p + frameSize > tagBuf.size() || frameSize == 0) break;
+
+                unsigned char enc = tagBuf[p];
+                std::string val;
+                if (enc == 0 || enc == 3) {
+                    if (frameSize > 1) val = std::string((char*)tagBuf.data() + p + 1, frameSize - 1);
+                } else if ((enc == 1 || enc == 2) && frameSize >= 3) {
+                    std::u16string u16;
+                    size_t startByte = p + 1;
+                    if (tagBuf[p+1] == 0xFF && tagBuf[p+2] == 0xFE) startByte = p + 3;
+                    else if (tagBuf[p+1] == 0xFE && tagBuf[p+2] == 0xFF) startByte = p + 3;
+                    for (size_t bi = startByte; bi + 1 < p + frameSize; bi += 2) {
+                        char16_t ch = (char16_t)((uint16_t)tagBuf[bi] | ((uint16_t)tagBuf[bi+1] << 8));
+                        if (ch == 0) break;
+                        u16.push_back(ch);
+                    }
+                    std::wstring w(u16.begin(), u16.end());
+                    val = WideToUtf8(w);
+                }
+
+                while (!val.empty() && (val.back() == '\0' || val.back() == ' ')) val.pop_back();
+
+                if (frameId == "TIT2" && title.empty()) title = val;
+                else if (frameId == "TPE1" && artist.empty()) artist = val;
+                else if (frameId == "TALB" && album.empty()) album = val;
+                else if (frameId == "TRCK" && trackNo.empty()) {
+                    size_t slash = val.find('/');
+                    trackNo = (slash != std::string::npos) ? val.substr(0, slash) : val;
+                    if (trackNo.length() == 1 && std::isdigit((unsigned char)trackNo[0])) trackNo = "0" + trackNo;
+                }
+                else if ((frameId == "TYER" || frameId == "TDRC") && year.empty()) year = val;
+
+                p += frameSize;
+            }
+        }
+    }
+    return !title.empty() || !artist.empty() || !album.empty();
+}
+
+static bool ReadAudioFileEmbeddedTags(const std::string& filePath, std::string& artist, std::string& album, std::string& title, std::string& trackNo, std::string& year) {
+    std::string ext = fs::path(filePath).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext == ".flac") {
+        return ReadFlacTags(filePath, artist, album, title, trackNo, year);
+    } else if (ext == ".mp3") {
+        return ReadMp3Tags(filePath, artist, album, title, trackNo, year);
+    }
+    return false;
+}
+
 static void ApplyTrackMatch(TagReviewItem& albItem, const std::vector<MBTrackEntry>& mbTracks) {
     if (mbTracks.empty()) return;
 
-    std::string rawName = albItem.originalFilename;
+    std::string currentTitle = albItem.titleBuf;
+    std::string currentTitleClean = NormalizeKey(currentTitle);
+
     int leadingTrackNo = 0;
     try {
-        size_t d = rawName.find_first_of("._ -");
-        if (d != std::string::npos && d > 0 && d <= 3) {
-            leadingTrackNo = std::stoi(rawName.substr(0, d));
+        if (strlen(albItem.trackNoBuf) > 0) {
+            leadingTrackNo = std::stoi(albItem.trackNoBuf);
         }
     } catch (...) {}
 
-    size_t dotPos = rawName.find_first_not_of("0123456789. -_");
-    if (dotPos != std::string::npos && dotPos > 0 && dotPos < 6) {
-        rawName = rawName.substr(dotPos);
+    if (leadingTrackNo <= 0) {
+        std::string rawName = albItem.originalFilename;
+        try {
+            size_t d = rawName.find_first_of("._ -");
+            if (d != std::string::npos && d > 0 && d <= 3) {
+                leadingTrackNo = std::stoi(rawName.substr(0, d));
+            }
+        } catch (...) {}
     }
-    size_t extPos = rawName.rfind('.');
-    if (extPos != std::string::npos) rawName = rawName.substr(0, extPos);
-
-    std::string rawClean = NormalizeKey(rawName);
 
     const MBTrackEntry* bestMatch = nullptr;
     int bestScore = -1;
+    bool hasTitleMatch = false;
+
+    // Check if current title is generic (e.g. "track 01", "01", "side a1")
+    bool isGenericTitle = currentTitleClean.empty() ||
+        currentTitleClean.rfind("track", 0) == 0 ||
+        currentTitleClean.rfind("audio", 0) == 0 ||
+        currentTitleClean.rfind("side", 0) == 0 ||
+        currentTitleClean.rfind("file", 0) == 0 ||
+        currentTitleClean.find_first_not_of("0123456789") == std::string::npos;
 
     for (const auto& t : mbTracks) {
         int score = 0;
         std::string tTitleClean = NormalizeKey(t.title);
         std::string tArtistClean = NormalizeKey(t.artist);
+        bool thisTitleMatches = false;
 
-        if (leadingTrackNo > 0 && leadingTrackNo == t.position) score += 50;
+        if (tTitleClean.length() >= 3 && currentTitleClean.length() >= 3) {
+            if (currentTitleClean == tTitleClean ||
+                currentTitleClean.find(tTitleClean) != std::string::npos ||
+                tTitleClean.find(currentTitleClean) != std::string::npos) {
+                score += 100;
+                thisTitleMatches = true;
+            }
+        } else if (!tTitleClean.empty() && currentTitleClean == tTitleClean) {
+            score += 100;
+            thisTitleMatches = true;
+        }
+
+        if (leadingTrackNo > 0 && leadingTrackNo == t.position) {
+            score += 40;
+        }
 
         if (albItem.duration > 0 && t.lengthMs > 0) {
             double tSec = (double)t.lengthMs / 1000.0;
-            if (std::abs(albItem.duration - tSec) <= 3.0) score += 40;
-        }
-
-        if (tTitleClean.length() >= 3) {
-            if (!tTitleClean.empty() && (rawClean.find(tTitleClean) != std::string::npos || (rawClean.length() >= 4 && tTitleClean.find(rawClean) != std::string::npos))) {
-                score += 60;
+            if (std::abs(albItem.duration - tSec) <= 3.0) {
+                score += 30;
             }
-        } else if (!tTitleClean.empty()) {
-            if (rawClean == tTitleClean || rawClean.ends_with(tTitleClean)) score += 60;
         }
 
         if (!tArtistClean.empty() && tArtistClean != "variousartists" && tArtistClean != "va") {
-            if (tArtistClean.length() >= 3 && rawClean.find(tArtistClean) != std::string::npos) score += 40;
+            if (tArtistClean.length() >= 3 && currentTitleClean.find(tArtistClean) != std::string::npos) score += 20;
         }
 
         if (score > bestScore) {
             bestScore = score;
             bestMatch = &t;
+            hasTitleMatch = thisTitleMatches;
         }
     }
 
     if (bestMatch && bestScore > 0) {
+        if (!isGenericTitle && !hasTitleMatch) {
+            double tSec = (double)bestMatch->lengthMs / 1000.0;
+            bool durationMatches = (albItem.duration > 0 && bestMatch->lengthMs > 0 && std::abs(albItem.duration - tSec) <= 3.0);
+            bool positionMatches = (leadingTrackNo > 0 && leadingTrackNo == bestMatch->position);
+
+            if (!durationMatches || !positionMatches) {
+                return;
+            }
+        }
+
         char trackStr[16];
         sprintf_s(trackStr, sizeof(trackStr), "%02d", bestMatch->position);
         strncpy_s(albItem.trackNoBuf, trackStr, sizeof(albItem.trackNoBuf) - 1);
@@ -674,18 +842,20 @@ void CoreEngine::StartTagScan() {
             memset(item.lyricsBuf, 0, sizeof(item.lyricsBuf));
 
             std::string fn = fs::path(files[i]).stem().string();
-            std::string trackNo = "01";
-            std::string title = fn;
-            std::string artistRaw = fs::path(files[i]).parent_path().parent_path().filename().string();
-            std::string albumRaw = fs::path(files[i]).parent_path().filename().string();
-            std::string yearStr = ExtractYearFromString(files[i]);
+            std::string tagArtist, tagAlbum, tagTitle, tagTrackNo, tagYear;
+            ReadAudioFileEmbeddedTags(files[i], tagArtist, tagAlbum, tagTitle, tagTrackNo, tagYear);
 
             ParsedFilenameInfo parsed = ParseFilenameHeuristic(files[i]);
 
-            if (parsed.hasTrackNumber && parsed.trackNumber > 0) {
+            std::string trackNo = !tagTrackNo.empty() ? tagTrackNo : "01";
+            if (tagTrackNo.empty() && parsed.hasTrackNumber && parsed.trackNumber > 0) {
                 trackNo = (parsed.trackNumber < 10) ? ("0" + std::to_string(parsed.trackNumber)) : std::to_string(parsed.trackNumber);
             }
-            if (!parsed.title.empty()) title = parsed.title;
+
+            std::string title = !tagTitle.empty() ? tagTitle : (!parsed.title.empty() ? parsed.title : fn);
+            std::string artistRaw = !tagArtist.empty() ? tagArtist : fs::path(files[i]).parent_path().parent_path().filename().string();
+            std::string albumRaw = !tagAlbum.empty() ? tagAlbum : fs::path(files[i]).parent_path().filename().string();
+            std::string yearStr = !tagYear.empty() ? ExtractYearFromString(tagYear) : ExtractYearFromString(files[i]);
 
             std::string artistClean = CleanMetadataString(artistRaw);
             std::regex trackPrefixRegex(R"(^\s*([A-Za-z]?\d{1,2}[.\-_]\s*|\d{1,2}\s+-\s+))");
@@ -705,7 +875,7 @@ void CoreEngine::StartTagScan() {
 
             std::string albumClean = CleanAlbumTitle(albumRaw);
             if (albumClean.empty()) albumClean = CleanMetadataString(albumRaw);
-            if (parsed.hasAlbum && !parsed.album.empty()) albumClean = parsed.album;
+            if (albumClean.empty() && parsed.hasAlbum && !parsed.album.empty()) albumClean = parsed.album;
 
             std::string albumCleanKey = NormalizeKey(albumClean);
             if (albumCleanKey == "tosort" || albumCleanKey == "music" || albumCleanKey == "media" || albumCleanKey == "singles" || albumCleanKey == "downloads") {
@@ -864,23 +1034,41 @@ void CoreEngine::StartTagScan() {
                         std::string acoustRes = AcoustIdHttpPost(postStream.str());
                         auto acoustResults = ParseAcoustIdResponse(acoustRes);
                         if (!acoustResults.empty()) {
-                            double bestScore = -1.0;
+                            std::string targetAlbumNorm = NormalizeKey(albumClean);
+                            std::string bestRgId;
+                            bool foundAlbumMatch = false;
+
                             for (const auto& ar : acoustResults) {
-                                if (ar.score > bestScore) {
-                                    bestScore = ar.score;
-                                    if (!ar.releaseGroupIds.empty()) {
-                                        releaseGroupMbId = ar.releaseGroupIds[0];
-                                        isMatched = true;
-                                        detectedTier = MatchTier::AcoustId;
+                                for (const auto& rg : ar.releaseGroups) {
+                                    std::string rgTitleNorm = NormalizeKey(rg.title);
+                                    bool isCompilation = (NormalizeKey(rg.type) == "compilation" || rgTitleNorm.find("bootleg") != std::string::npos);
+                                    if (!targetAlbumNorm.empty() && (rgTitleNorm == targetAlbumNorm || rgTitleNorm.find(targetAlbumNorm) != std::string::npos || targetAlbumNorm.find(rgTitleNorm) != std::string::npos)) {
+                                        bestRgId = rg.id;
+                                        foundAlbumMatch = true;
+                                        break;
+                                    } else if (bestRgId.empty() && !isCompilation) {
+                                        bestRgId = rg.id;
                                     }
                                 }
+                                if (foundAlbumMatch) break;
+                            }
+
+                            if (!bestRgId.empty() && (foundAlbumMatch || targetAlbumNorm.empty())) {
+                                releaseGroupMbId = bestRgId;
+                                isMatched = true;
+                                detectedTier = MatchTier::AcoustId;
                             }
                         }
                     }
 
                     // MusicBrainz release-group search if not matched yet
-                    if (releaseGroupMbId.empty() && !albumClean.empty() && !artistClean.empty()) {
-                        std::string searchUrl = "https://musicbrainz.org/ws/2/release-group/?query=releasegroup:" + UrlEncode(albumClean) + "%20AND%20artist:" + UrlEncode(artistClean) + "&fmt=json";
+                    if (releaseGroupMbId.empty() && !albumClean.empty()) {
+                        std::string searchArtist = (!artistClean.empty() && artistClean != "Unknown Artist" && artistClean != "GYBE") ? artistClean : "";
+                        std::string searchUrl = "https://musicbrainz.org/ws/2/release-group/?query=releasegroup:\"" + UrlEncode(albumClean) + "\"";
+                        if (!searchArtist.empty()) {
+                            searchUrl += "%20AND%20artist:\"" + UrlEncode(searchArtist) + "\"";
+                        }
+                        searchUrl += "&fmt=json";
                         std::string searchRes = HttpGetString(Utf8ToWide(searchUrl));
                         size_t p = 0;
                         JsonVal searchDoc = ParseJsonSimple(searchRes, p);
@@ -890,6 +1078,18 @@ void CoreEngine::StartTagScan() {
                             firstReleaseDate = rgs.get(0).get("first-release-date").strVal;
                             isMatched = true;
                             detectedTier = MatchTier::TierA;
+                        } else {
+                            std::string fbUrl = "https://musicbrainz.org/ws/2/release-group/?query=releasegroup:\"" + UrlEncode(albumClean) + "\"&fmt=json";
+                            std::string fbRes = HttpGetString(Utf8ToWide(fbUrl));
+                            size_t fbp = 0;
+                            JsonVal fbDoc = ParseJsonSimple(fbRes, fbp);
+                            const auto& fbRgs = fbDoc.get("release-groups");
+                            if (fbRgs.type == JsonVal::Array && !fbRgs.arrVal.empty()) {
+                                releaseGroupMbId = fbRgs.get(0).get("id").strVal;
+                                firstReleaseDate = fbRgs.get(0).get("first-release-date").strVal;
+                                isMatched = true;
+                                detectedTier = MatchTier::TierA;
+                            }
                         }
                     }
 
@@ -902,6 +1102,14 @@ void CoreEngine::StartTagScan() {
                         const auto& rels = relDoc.get("releases");
                         if (rels.type == JsonVal::Array && !rels.arrVal.empty()) {
                             std::string relId = rels.get(0).get("id").strVal;
+                            for (size_t ri = 0; ri < rels.arrVal.size(); ++ri) {
+                                std::string status = rels.get(ri).get("status").strVal;
+                                if (status == "Official") {
+                                    relId = rels.get(ri).get("id").strVal;
+                                    if (firstReleaseDate.empty()) firstReleaseDate = rels.get(ri).get("date").strVal;
+                                    break;
+                                }
+                            }
                             if (firstReleaseDate.empty()) firstReleaseDate = rels.get(0).get("date").strVal;
 
                             std::string detailUrl = "https://musicbrainz.org/ws/2/release/" + relId + "?inc=recordings+artist-credits&fmt=json";
@@ -916,9 +1124,7 @@ void CoreEngine::StartTagScan() {
                                     if (trks.type != JsonVal::Array) continue;
                                     for (size_t ti = 0; ti < trks.arrVal.size(); ++ti) {
                                         MBTrackEntry entry;
-                                        entry.position = (int)trks.get(ti).get("position").numVal;
-                                        if (entry.position <= 0) entry.position = trkNum;
-                                        trkNum++;
+                                        entry.position = trkNum++;
                                         entry.title = trks.get(ti).get("title").strVal;
                                         if (entry.title.empty()) entry.title = trks.get(ti).get("recording").get("title").strVal;
                                         entry.lengthMs = (int)trks.get(ti).get("length").numVal;
@@ -1249,20 +1455,34 @@ void CoreEngine::ExecuteTrackApprovalBatch(const std::vector<size_t>& indices) {
                 fs::path flacFile = flacDir / (baseTrackName + ".flac");
                 fs::path mp3File = mp3Dir / (baseTrackName + ".mp3");
 
+                if (fs::exists(flacFile) && src != flacFile) {
+                    int suffix = 2;
+                    while (fs::exists(flacDir / (baseTrackName + " (" + std::to_string(suffix) + ").flac"))) {
+                        suffix++;
+                    }
+                    flacFile = flacDir / (baseTrackName + " (" + std::to_string(suffix) + ").flac");
+                    mp3File = mp3Dir / (baseTrackName + " (" + std::to_string(suffix) + ").mp3");
+                }
+
                 WriteFlacTagsAndPicture(src.string(), t.newArtist, t.newAlbum, t.newTitle, t.newTrackNo, t.newYear, finalLyrics, t.chosenCover);
                 try {
                     std::error_code ec;
-                    if (fs::exists(flacFile)) fs::remove(flacFile, ec);
                     fs::rename(src, flacFile, ec);
                     ConvertFlacToMp3(flacFile.string(), mp3File.string());
                     WriteMp3TagsAndPicture(mp3File.string(), t.newArtist, t.newAlbum, t.newTitle, t.newTrackNo, t.newYear, finalLyrics, t.chosenCover);
                 } catch (...) {}
             } else if (ext == ".mp3") {
                 fs::path mp3File = mp3Dir / (baseTrackName + ".mp3");
+                if (fs::exists(mp3File) && src != mp3File) {
+                    int suffix = 2;
+                    while (fs::exists(mp3Dir / (baseTrackName + " (" + std::to_string(suffix) + ").mp3"))) {
+                        suffix++;
+                    }
+                    mp3File = mp3Dir / (baseTrackName + " (" + std::to_string(suffix) + ").mp3");
+                }
                 WriteMp3TagsAndPicture(src.string(), t.newArtist, t.newAlbum, t.newTitle, t.newTrackNo, t.newYear, finalLyrics, t.chosenCover);
                 try {
                     std::error_code ec;
-                    if (fs::exists(mp3File)) fs::remove(mp3File, ec);
                     fs::rename(src, mp3File, ec);
                 } catch (...) {}
             }

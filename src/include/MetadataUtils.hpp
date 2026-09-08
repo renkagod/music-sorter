@@ -960,7 +960,16 @@ inline std::string NormalizeKey(const std::string& text) {
 
         if (bLevel > 0) continue;
 
-        if (c <= 32 || c == '-' || c == '_' || c == '/' || c == '\\' || c == ',' || c == '.' || c == '~') continue;
+        if (c <= 32 || c == '-' || c == '_' || c == '/' || c == '\\' || c == ',' || c == '.' || c == '~' || c == '\'' || c == '\"' || c == '`' || c == '!') continue;
+
+        // Unicode curly quotes and dashes: ’ (0xE2 0x80 0x99), ‘ (0xE2 0x80 0x98), “ (0xE2 0x80 0x9C), ” (0xE2 0x80 0x9D), – (0xE2 0x80 0x93), — (0xE2 0x80 0x94)
+        if (c == 0xE2 && i + 2 < text.size() && (unsigned char)text[i + 1] == 0x80) {
+            unsigned char c3 = (unsigned char)text[i + 2];
+            if (c3 == 0x98 || c3 == 0x99 || c3 == 0x9C || c3 == 0x9D || c3 == 0x93 || c3 == 0x94) {
+                i += 2;
+                continue;
+            }
+        }
 
         if (c == 0xEF && i + 2 < text.size() && (unsigned char)text[i + 1] == 0xBD && (unsigned char)text[i + 2] == 0x9E) {
             i += 2;

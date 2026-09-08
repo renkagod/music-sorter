@@ -103,11 +103,18 @@ inline std::string PickBestLyrics(const std::string& romaji, const std::string& 
 }
 
 
+struct AcoustIdReleaseGroup {
+    std::string id;
+    std::string title;
+    std::string type;
+};
+
 struct AcoustIdResult {
     std::string recordingId;
     std::string title;
     std::vector<std::string> artists;
     std::vector<std::string> releaseGroupIds;
+    std::vector<AcoustIdReleaseGroup> releaseGroups;
     double score = 0.0;
 };
 
@@ -592,7 +599,12 @@ inline std::vector<AcoustIdResult> ParseAcoustIdResponse(const std::string& resJ
                 if (rgs.type == JsonVal::Array) {
                     for (size_t rg = 0; rg < rgs.arrVal.size(); ++rg) {
                         std::string rgId = rgs.get(rg).get("id").strVal;
-                        if (!rgId.empty()) item.releaseGroupIds.push_back(rgId);
+                        std::string rgTitle = rgs.get(rg).get("title").strVal;
+                        std::string rgType = rgs.get(rg).get("type").strVal;
+                        if (!rgId.empty()) {
+                            item.releaseGroupIds.push_back(rgId);
+                            item.releaseGroups.push_back({ rgId, rgTitle, rgType });
+                        }
                     }
                 }
                 out.push_back(item);
