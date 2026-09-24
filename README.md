@@ -62,9 +62,6 @@ The app has two parts that both need to be built: the C++ core (`music-sorter-co
 - [x] THBWiki API (`https://thwiki.cc/album.php`) — lightweight JSON album queries (`m=sa`, `m=ga`), tracklists, circle/staff info, original ZUN theme references (`ogmusic`), high-resolution cover art (up to 800px), and synced `.lrc` lyrics integration via `https://lyrics.thwiki.cc/`
 - [ ] RateYourMusic / Sonemic API (`https://rateyourmusic.com/data-access/register-interest/`) — upcoming official Sonemic API and datasets (pending API access)
 
-### Albums to download
-- [ ] Diabolic Phantasma - Daydream In the Dead of Night (DBPS-001)
-
 ## License
 
 [MIT](LICENSE) — Copyright (c) 2026 [renkagod](https://github.com/renkagod).
