@@ -1,6 +1,7 @@
 # music-sorter
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Donate](https://img.shields.io/badge/Donate-crypto-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/renkagod/.github/blob/main/DONATE.md)
 
 Desktop app for organizing a music library: it fingerprints tracks to find duplicates, fetches metadata and lyrics from multiple online databases, and lets you review and approve the results before they are written to your files. A headless C++ core does the analysis and serves a local REST API; a Tauri (Rust) shell hosts a React/TypeScript UI on top of it.
 
@@ -61,6 +62,10 @@ The app has two parts that both need to be built: the C++ core (`music-sorter-co
 - [x] TouhouDB / VocaDB / UtaiteDB language preference & Romaji fallback — Romaji track, album, and artist title support (`lang=Romaji`) with fallback chain: Romaji -> English -> Japanese, interactive `[RO] [EN] [JP]` language switcher buttons
 - [x] THBWiki API (`https://thwiki.cc/album.php`) — lightweight JSON album queries (`m=sa`, `m=ga`), tracklists, circle/staff info, original ZUN theme references (`ogmusic`), high-resolution cover art (up to 800px), and synced `.lrc` lyrics integration via `https://lyrics.thwiki.cc/`
 - [ ] RateYourMusic / Sonemic API (`https://rateyourmusic.com/data-access/register-interest/`) — upcoming official Sonemic API and datasets (pending API access)
+
+## Support
+
+If this project is useful to you, you can support it with crypto: [donation addresses](https://github.com/renkagod/.github/blob/main/DONATE.md).
 
 ## License
 
